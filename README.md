@@ -1,223 +1,194 @@
 # 🥗 Dietetyk AI (AI Dietician)
 
-Projekt zaawansowanej estetycznie aplikacji webowej, która analizuje Twoją dietę na bazie wprowadzanych posiłków (z wykorzystaniem **Gemini AI**), śledzi parametry zdrowotne z sensorów **Oura Ring** oraz **Withings** (inteligentna waga i skład ciała) oraz wizualizuje trendy na interaktywnych wykresach.
+An aesthetically designed web application that analyzes your diet based on meals you enter (using **Gemini AI**), tracks health metrics from **Oura Ring** and **Withings** (smart scale and body composition) sensors, and visualizes trends on interactive charts.
 
-Aplikacja wspiera pełne szyfrowanie HTTPS (SSL Let's Encrypt) i jest przystosowana do wdrożenia na serwerze VPS za pomocą Docker Compose.
-
----
-
-## 🚀 Główne Funkcje
-
-1. **Dziennik Posiłków AI**: Wprowadzasz posiłki naturalnym językiem (np. *"Rano zjadłem 2 kromki chleba razowego z awokado i jajkiem sadzonym"*). Gemini AI automatycznie rozbija to na składniki, wylicza kalorie, makroskładniki (białko, węglowodany, tłuszcz), ocenia posiłek i generuje wskazówki.
-2. **Bezpośrednia Integracja Oura Ring**: Pobieranie wskaźników regeneracji, takich jak wynik gotowości (Readiness), wynik snu (Sleep score), fazy snu (głęboki, REM), tętno spoczynkowe (RHR) oraz zmienność tętna (HRV).
-3. **Bezpośrednia Integracja Withings**: Automatyczne pobieranie wskaźników składu ciała: wagi (kg), procentowej zawartości tkanki tłuszczowej oraz masy mięśniowej (kg).
-4. **Wykresy Postępów (Custom SVG)**: Wbudowane, w pełni responsywne i wydajne wykresy SVG śledzące:
-   - **Spalanie Tłuszczu**: Trend wagi powiązany z procentową zawartością tłuszczu w organizmie (wykres dwuosiowy).
-   - **Przyrost Mięśni**: Trend czystej masy mięśniowej w czasie.
-5. **Codzienna Analiza Gemini AI**: Model analizuje Twoje posiłki, parametry snu z Oura i skład ciała z Withings, dostarczając spersonalizowanych rekomendacji.
-6. **Panel Admina**: Pozwala na dynamiczną konfigurację poświadczeń API dla Oura i Withings bezpośrednio z poziomu interfejsu (bez restartowania kontenerów).
-7. **Synchronizacja z Apple Health**: kroki, kalorie i minuty aktywności można też zaciągać z Apple Health za pomocą webhooka - konfiguracja w zakładce Ustawienia.
-8. **Synchronizacja z Google Fit**: analogicznie do Apple Health, aplikacja może też pobierać kroki i kalorie z Google Fit (synchronizacja godzinowa przez OAuth2, bez konieczności instalowania dodatkowej apki-pośrednika) - połączenie konta z poziomu zakładki Ustawienia.
-9. **Połączenie konta z Google**: istniejące konto (założone login/hasłem) można dodatkowo połączyć z kontem Google w zakładce Ustawienia, żeby logować się jednym kliknięciem bez utraty historii posiłków i ustawień.
+The application supports full HTTPS encryption (SSL Let's Encrypt) and is ready to be deployed on a VPS server using Docker Compose.
 
 ---
 
-## 🛠️ Architektura i Technologie
+## 🚀 Main Features
 
-- **Backend**: Node.js + Express
-- **Baza Danych**: SQLite (lokalny plik w katalogu `/data` zamontowanym jako wolumen)
-- **Frontend**: React (Vite) stylizowany w nowoczesnym ciemnym motywie z efektem glassmorphismu
-- **Konteneryzacja**: Docker + Docker Compose (Nginx z SSL reverse proxy + Node.js API + sqlite-web na porcie 8081)
-
----
-
-## 💻 Jak Uruchomić Lokalnie (Development)
-
-### Wymagania
-- Zainstalowany **Node.js** (wersja 18+) oraz **npm**
-
-### Szybki start
-1. Nadaj uprawnienia do wykonania skryptu startowego i uruchom go:
-   ```bash
-   chmod +x scripts/start.sh
-   ./scripts/start.sh
-   ```
-2. Skopiuj szablon środowiskowy i wklej swój klucz API z Google AI Studio w `backend/.env`:
-   ```env
-   GEMINI_API_KEY=TUTAJ_TWÓJ_KLUCZ_API
-   ```
-3. Uruchom serwer backendowy:
-   ```bash
-   cd backend
-   npm start
-   ```
-4. Aplikacja będzie dostępna pod adresem: `http://localhost:3000` (z automatycznym proxy dla frontendu).
+1.  **AI Meal Journal**: Input your meals in natural language (e.g., *"This morning I ate 2 slices of whole grain bread with avocado and a fried egg"*). Gemini AI automatically breaks it down into ingredients, calculates calories, macronutrients (protein, carbohydrates, fat), evaluates the meal, and generates tips.
+2.  **Direct Oura Ring Integration**: Retrieve recovery metrics such as Readiness score, Sleep score, sleep stages (deep, REM), resting heart rate (RHR), and heart rate variability (HRV).
+3.  **Direct Withings Integration**: Automatically retrieve body composition metrics: weight (kg), body fat percentage, and muscle mass (kg).
+4.  **Progress Charts (Custom SVG)**: Built-in, fully responsive, and highly performant SVG charts tracking:
+    *   **Fat Loss**: Weight trend plotted against body fat percentage (dual-axis chart).
+    *   **Muscle Gain**: Lean muscle mass trend over time.
+5.  **Daily Gemini AI Analysis**: The model analyzes your meals, sleep metrics from Oura, and body composition from Withings to provide personalized recommendations.
+6.  **Admin Panel**: Allows dynamic configuration of API credentials for Oura and Withings directly from the user interface (no container restart required).
+7.  **Apple Health Synchronization**: Steps, active energy (calories), and active minutes can be imported from Apple Health via a webhook—configure this in the Settings tab.
+8.  **Google Fit Synchronization**: Similar to Apple Health, the app can fetch steps and calories from Google Fit (hourly sync via OAuth2, without needing an intermediate app)—connect your account from the Settings tab.
+9.  **Google Account Linking**: Connect an existing password-based account with your Google account in the Settings tab to sign in with a single click without losing your meal history and settings.
 
 ---
 
-## ☁️ Wdrożenie na serwerze VPS (Docker Compose)
+## 🛠️ Architecture and Technologies
 
-Obrazy backendu i frontendu są budowane i publikowane automatycznie przez GitHub
-Actions (`.github/workflows/docker-publish.yml`) przy każdym pushu na `main` i
-wypychane do `ghcr.io`. Serwer produkcyjny **nie buduje już kodu lokalnie** —
-potrzebuje tylko `docker-compose.yml`, plików `.env` i katalogu `./data`, żeby
-ściągnąć i podnieść gotowe obrazy.
+*   **Backend**: Node.js + Express
+*   **Database**: SQLite (local file in the `/data` directory mounted as a volume)
+*   **Frontend**: React (Vite) styled in a modern dark theme with glassmorphism effects
+*   **Containerization**: Docker + Docker Compose (Nginx with SSL reverse proxy + Node.js API + sqlite-web on port 8081)
 
-> Ścieżka katalogu na serwerze to zawsze `/opt/dietetyk-ai` (małymi literami),
-> niezależnie od tego, że repozytorium na GitHubie nazywa się `Dietetyk-AI`.
-> Podawaj tę ścieżkę explicite jako argument `git clone` (jak poniżej) - nigdy
-> nie pozwalaj git'owi nazwać katalogu samodzielnie na podstawie nazwy repo,
-> bo wtedy powstanie wielkością liter niezgodny `Dietetyk-AI`. To samo
-> `/opt/dietetyk-ai` jest zaszyte w joby `deploy` w workflow CI/CD oraz w
-> `scripts/setup-deploy-user.sh`.
+---
 
-### Krok 0: Pierwsze uruchomienie - dedykowany użytkownik `deploy`
-Jeśli to pierwsza konfiguracja serwera (lub migrujesz ze starszego, mniej
-bezpiecznego ustawienia gdzie CI/CD logowało się jako `root`), uruchom na VPS
-jako root skrypt `scripts/setup-deploy-user.sh` z tego repozytorium - tworzy on
-nieprivilegiowanego użytkownika `deploy` (w grupie `docker`), przenosi
-aplikację do `/opt/dietetyk-ai` i ustawia uprawnienia katalogu `./data` pod
-nieprivilegiowanego użytkownika `node` wewnątrz kontenera backendu. Szczegóły
-i kolejne kroki ręczne (Secrets w GitHub, autoryzacja klucza SSH) są opisane
-w komentarzach na początku tego skryptu.
+## 💻 How to Run Locally (Development)
 
-### Krok 1: Klonowanie repozytorium na VPS
-Potrzebne tylko po to, by mieć `docker-compose.yml`, `docker/nginx.conf` i
-`backend/.env` - kod aplikacji jest już zapakowany w obrazach z `ghcr.io`.
+### Requirements
+*   **Node.js** (version 18+) and **npm** installed
+
+### Quick Start
+1.  Grant execution permissions to the startup script and run it:
+    ```bash
+    chmod +x scripts/start.sh
+    ./scripts/start.sh
+    ```
+2.  Copy the environment template and paste your Google AI Studio API key into `backend/.env`:
+    ```env
+    GEMINI_API_KEY=YOUR_API_KEY_HERE
+    ```
+3.  Start the backend server:
+    ```bash
+    cd backend
+    npm start
+    ```
+4.  The application will be available at: `http://localhost:3000` (with automated proxying for the frontend).
+
+---
+
+## ☁️ Deployment on a VPS Server (Docker Compose)
+
+The backend and frontend images are built and published automatically by GitHub Actions (`.github/workflows/docker-publish.yml`) on every push to `main` and pushed to `ghcr.io`. The production server **does not build code locally**—it only needs `docker-compose.yml`, environment configuration files (`.env`), and the `./data` directory to pull and start the pre-built images.
+
+> [!IMPORTANT]
+> The application directory path on the server is always `/opt/dietetyk-ai` (lowercase), regardless of the fact that the repository on GitHub is named `Dietetyk-AI`.
+> Specify this path explicitly as an argument when cloning with `git clone` (as shown below)—never let git name the directory automatically based on the repository name, as it will create a casing mismatch. The `/opt/dietetyk-ai` path is hardcoded in the CD deployment jobs and in `scripts/setup-deploy-user.sh`.
+
+### Step 0: First Run - Dedicated `deploy` User
+If this is the first server configuration (or you are migrating from an older, less secure setup where CI/CD logged in as `root`), run the script `scripts/setup-deploy-user.sh` as root on the VPS. It creates an unprivileged user `deploy` (in the `docker` group), moves the application to `/opt/dietetyk-ai`, and sets the permissions of the `./data` directory for the unprivileged `node` user inside the backend container. Details and subsequent manual steps (Secrets in GitHub, SSH key authorization) are described in the comments at the beginning of the script.
+
+### Step 1: Clone the Repository on the VPS
+This is only needed to obtain `docker-compose.yml`, `docker/nginx.conf`, and `backend/.env`—the application code is already packaged inside the images on `ghcr.io`.
 ```bash
-git clone https://github.com/mbeczynski/Dietetyk-AI.git /opt/dietetyk-ai
+git clone https://github.com/RenaCode/Dietetyk-AI.git /opt/dietetyk-ai
 cd /opt/dietetyk-ai
 ```
 
-### Krok 2: Przygotowanie Certyfikatów Let's Encrypt
-Zainstaluj `certbot` na maszynie hosta VPS i wygeneruj certyfikat dla swojej domeny:
+### Step 2: Prepare Let's Encrypt Certificates
+Install `certbot` on the host VPS and generate a certificate for your domain:
 ```bash
 apt-get update && apt-get install -y certbot
 certbot certonly --standalone -d dietetyk.renacode.com
 ```
 
-### Krok 3: Plik Konfiguracyjny `.env` na VPS
-Utwórz plik `/opt/dietetyk-ai/.env` i zdefiniuj ścieżki do wygenerowanych certyfikatów oraz klucz Gemini:
+### Step 3: Environment Configuration File `.env` on VPS
+Create `/opt/dietetyk-ai/.env` and define paths to the generated certificates:
 ```env
 SSL_CERT_PATH=/etc/letsencrypt/live/dietetyk.renacode.com/fullchain.pem
 SSL_KEY_PATH=/etc/letsencrypt/live/dietetyk.renacode.com/privkey.pem
 ```
-W katalogu `/opt/dietetyk-ai/backend/.env` utwórz konfigurację dla backendu:
+In the directory `/opt/dietetyk-ai/backend/.env`, create the configuration for the backend:
 ```env
 PORT=3000
-GEMINI_API_KEY=twój_klucz_api_gemini
+GEMINI_API_KEY=your_gemini_api_key
 GEMINI_MODEL=gemini-1.5-flash
 APP_PASSWORD=dietetyk-admin
 ```
-Katalog `./data` musi być zapisywalny dla uid 1000 (`chown -R 1000:1000 ./data`) -
-kontener backendu działa wewnątrz jako nieprivilegiowany użytkownik `node`, nie root.
+The `./data` directory must be writable by uid 1000 (`chown -R 1000:1000 ./data`)—the backend container runs internally as the unprivileged `node` user, not root.
 
-### Krok 4: Uruchomienie kontenerów
+### Step 4: Run the Containers
 ```bash
 docker compose pull
 docker compose up -d
 ```
-Po tym kroku każdy kolejny push na `main` automatycznie odświeży kontenery przez
-CI/CD (job `deploy` w `docker-publish.yml`) - ręczne `docker compose pull/up`
-jest potrzebne tylko przy pierwszym uruchomieniu.
-Aplikacja zostanie automatycznie uruchomiona na portach `80` i `443` (z automatycznym przekierowaniem na HTTPS).
-Opcjonalny panel przeglądania bazy SQLite (sqlite-web) jest dostępny **tylko lokalnie** na
-VPS pod adresem `http://127.0.0.1:8081` (świadomie niewystawiony publicznie - sqlite-web nie
-ma własnej autoryzacji). Dostęp zdalny wymaga tunelu SSH z Twojego komputera:
+After this step, every subsequent push to `main` will automatically refresh the containers via CI/CD (the `deploy` job in `docker-publish.yml`)—manual `docker compose pull/up` is only required for the first run.
+The application will run on ports `80` and `443` (with automatic redirection to HTTPS).
+The optional SQLite database web browser (sqlite-web) is only accessible **locally** on the VPS at `http://127.0.0.1:8081` (intentionally kept private as it does not have built-in authorization). Remote access requires an SSH tunnel from your computer:
 ```bash
-ssh -L 8081:localhost:8081 deploy@<IP_VPS>
+ssh -L 8081:localhost:8081 deploy@<VPS_IP>
 ```
-a następnie otwarcia `http://localhost:8081` lokalnie.
+and then opening `http://localhost:8081` locally.
 
-### Krok 5: Kopie zapasowe bazy danych
-Backend sam tworzy kopie zapasowe pliku SQLite (przy starcie i co 24h, rotacja -
-ostatnie 14 kopii) w katalogu `./data/backups` na VPS (patrz `backend/db.js`,
-funkcja `backupDatabase`). To chroni przed uszkodzeniem/błędną migracją bazy,
-ale **nie** przed awarią całego serwera/dysku - katalog `./data` to wciąż
-jeden, lokalny wolumen. Dla realnego bezpieczeństwa danych zdrowotnych
-użytkowników zalecane jest dodatkowo skopiowanie tego katalogu poza serwer,
-np. cronem na VPS:
+### Step 5: Database Backups
+The backend automatically creates backups of the SQLite database file (at startup and every 24 hours, keeping the last 14 backups) in the `./data/backups` directory on the VPS (see `backend/db.js`, `backupDatabase` function). This protects against database corruption/failed migrations but **not** against VPS/disk failure. For real security, it is recommended to copy this directory offsite, for example via a cron job on the VPS:
 ```bash
-# /etc/cron.d/dietetyk-offsite-backup (przykład - dopasuj miejsce docelowe)
+# /etc/cron.d/dietetyk-offsite-backup (example - adjust the destination)
 0 4 * * * root rsync -a /opt/dietetyk-ai/data/backups/ user@backup-host:/backups/dietetyk-ai/
 ```
 
 ---
 
-## 🔐 Logowanie do GUI i Dostęp Admina
+## 🔐 GUI Login and Admin Access
 
-Konta użytkowników i domyślne hasła logowania są zdefiniowane lokalnie (zapisane w bazie danych). Dostępne loginy oraz hasła znajdziesz w pliku `passwords.txt` znajdującym się w katalogu głównym projektu (ten plik jest ignorowany przez git za pomocą `.gitignore` i nie zostanie upubliczniony).
+User accounts and default credentials are defined locally (saved in the database). You can find the login details in the `passwords.txt` file located in the root of the project (this file is ignored by git using `.gitignore` and is not made public).
 
-Po zalogowaniu na konto administratora (`admin`), możesz przejść do zakładki **Ustawienia** lub do **Panelu Admina** (dostępnego w menu nawigacyjnym dla konta o roli `admin`), aby zarządzać konfiguracją całej aplikacji. Poświadczenia deweloperskie Oura Ring i Withings (potrzebne do integracji) są wprowadzane przez każdego użytkownika samodzielnie w zakładce **Ustawienia**.
-
----
-
-## 🔌 Konfiguracja Integracji Oura, Withings, Apple Health, Google Fit, Konta Google i Gemini AI (Instrukcja Krok po Kroku)
-
-Aby dane o Twoim śnie, aktywności oraz składzie ciała były pobierane automatycznie z zewnętrznych sensorów, a sztuczna inteligencja mogła analizować Twoją dietę na bazie Twojego prywatnego klucza API, wprowadź odpowiednie poświadczenia w zakładce **Ustawienia**.
-
-### 1. Integracja Oura Ring (Sen, HRV, Aktywność)
-1. Zaloguj się na swoje konto Oura na stronie [Oura Developer Portal](https://developer.ouraring.com/applications).
-2. Kliknij przycisk **"Create New Application"**.
-3. Wypełnij pola szczegółów aplikacji (np. Nazwa: `Dietetyk AI`, Opis: `Aplikacja do monitorowania diety i zdrowia`).
-4. W polu **"Redirect URIs"** dodaj poniższy adres zwrotny (zamień `dietetyk.renacode.com` na adres swojej domeny, jeśli wdrożyłeś ją pod inną):
-   `https://dietetyk.renacode.com/api/auth/oura/callback`
-5. Zapisz aplikację. Zostanie wygenerowany **Client ID** oraz **Client Secret**.
-6. Skopiuj je i wklej w zakładce **Ustawienia** w sekcji Oura Ring w aplikacji Dietetyk AI, a następnie kliknij **"Zapisz poświadczenia integracji"** i kliknij **"Połącz z Oura"**, aby autoryzować połączenie.
-
-### 2. Integracja Withings (Waga i Skład Ciała)
-1. Zaloguj się na swoje konto Withings na stronie [Withings Developer Portal](https://developer.withings.com/).
-2. Przejdź do panelu partnerskiego (**"Partner Dashboard"**).
-3. Utwórz nową aplikację deweloperską.
-4. Jako **"Callback URL"** (lub Redirect URI) podaj:
-   `https://dietetyk.renacode.com/api/auth/withings/callback`
-5. Wybierz zakresy danych (scopes) dotyczące wagi i składu ciała.
-6. Po utworzeniu aplikacji otrzymasz **Client ID** (identyfikator klienta) oraz **Client Secret** (klucz prywatny).
-7. Skopiuj te dane i wprowadź je w zakładce **Ustawienia** w sekcji Withings w aplikacji Dietetyk AI, kliknij **"Zapisz poświadczenia integracji"**, a następnie kliknij **"Połącz z Withings"**, aby autoryzować połączenie.
-
-### 3. Integracja Apple Health (kroki, kalorie, minuty aktywności)
-W przeciwieństwie do Oura i Withings, Apple Health nie udostępnia publicznego API w chmurze - dane wysyła telefon przez webhook, za pomocą darmowej apki **Health Auto Export** (pośrednik między HealthKit a naszym backendem).
-1. Zainstaluj apkę **Health Auto Export** z App Store na swoim iPhone.
-2. Zaloguj się do Dietetyk AI i przejdź do zakładki **Ustawienia**, sekcja **Apple Health**. Skopiuj wygenerowany tam URL webhooka (zawiera Twój prywatny token synchronizacji, np. `https://dietetyk.renacode.com/api/integrations/apple-health/<token>`) - przyciskiem "Kopiuj" lub ręcznie. Jeśli chcesz, możesz w tym miejscu wygenerować nowy, losowy token (np. po podejrzeniu wycieku starego URL).
-3. W apce Health Auto Export przejdź do zakładki **Automations** i utwórz nową automatyzację typu **REST API**.
-4. Wklej skopiowany URL jako adres docelowy, format danych ustaw na **JSON**.
-5. Wybierz metryki: **Steps**, **Active Energy**, **Basal Energy Burned**, **Apple Exercise Time**. Jeśli chcesz też uwzględniać treningi (np. bieganie, siłownię), dodaj drugą automatyzację typu **Treningi (Workouts)** wskazującą na ten sam URL.
-6. Włącz automatyczne wysyłanie w tle (np. co godzinę) - dane trafią od razu do `health_metrics` z `activity_source = 'apple'` i będą widoczne na Dashboardzie bez potrzeby otwierania apki Dietetyk AI.
-
-> Gdy zarówno Apple Health, jak i Oura są aktywne, dane z Apple Health są traktowane jako bardziej wiarygodne dla kroków/kalorii/minut aktywności (docierają od razu, podczas gdy Oura finalizuje dobowe podsumowanie zwykle następnego ranka) - Oura uzupełnia te wartości tylko wtedy, gdy Apple Health jeszcze nic nie przysłało dla danego dnia.
-
-### 4. Integracja Google Fit (kroki, kalorie)
-W przeciwieństwie do Apple Health (webhook) oraz Oura/Withings (poświadczenia per-użytkownik), Google Fit korzysta z OAuth2 i tych samych globalnych poświadczeń Google (Client ID/Secret), które administrator konfiguruje raz dla całej aplikacji w **Panelu Admina** (te same, co przy logowaniu Google) - dzięki temu zwykły użytkownik nie musi rejestrować własnej aplikacji deweloperskiej.
-1. Administrator musi mieć skonfigurowane w **Panelu Admina** `google_client_id`/`google_client_secret` z [Google Cloud Console](https://console.cloud.google.com/), z dozwolonym przekierowaniem (Authorized redirect URI) ustawionym na `https://dietetyk.renacode.com/api/auth/google-fit/callback` oraz włączonym Fitness API (zakres `https://www.googleapis.com/auth/fitness.activity.read`).
-2. Każdy użytkownik przechodzi do zakładki **Ustawienia**, sekcja **Google Fit**, i klika **"Połącz z Google Fit"**.
-3. Po wybraniu konta Google i zaakceptowaniu uprawnień, dane trafiają automatycznie do `health_metrics` (synchronizacja co godzinę, w oknie 5:00-22:00, oraz natychmiast po połączeniu).
-4. Połączenie można w każdej chwili odłączyć przyciskiem **"Odłącz integrację"** w tej samej sekcji.
-
-> Granice doby dla danych z Google Fit są liczone przez API Google w UTC (Google nie udostępnia parametru strefy czasowej dla agregacji), co może powodować niewielkie (1-2h) przesunięcie względem dni liczonych w czasie Europe/Warsaw używanym w resztą aplikacji (Oura, Withings, Apple Health) - akceptowalny kompromis.
->
-> Apple Health i Google Fit mają taki sam priorytet (oba mogą nadpisywać się wzajemnie, "kto ostatni zapisał") - tylko Apple Health ma pierwszeństwo przed Oura, zgodnie z opisem w punkcie 3.
-
-### 5. Połączenie istniejącego konta z Google
-Jeśli masz już konto założone loginem/hasłem (lub przez zaproszenie administratora) i chcesz dodatkowo móc logować się jednym kliknięciem przez Google, bez utraty historii posiłków i ustawień:
-1. Zaloguj się normalnie (login/hasło) i przejdź do zakładki **Ustawienia**, sekcja **Konto Google**.
-2. Kliknij **"Połącz z Google"** i wybierz konto Google, które chcesz powiązać.
-3. Od tego momentu możesz logować się zarówno hasłem, jak i przyciskiem "Zaloguj się przez Google" na ekranie logowania - oba sposoby prowadzą do tego samego konta.
-4. Połączenie można odłączyć przyciskiem **"Odłącz Google"** w tej samej sekcji (logowanie będzie wtedy możliwe tylko hasłem).
-
-> To jest osobny mechanizm od logowania przez Google "od zera" - jeśli dane konto Google jest już powiązane z innym użytkownikiem Dietetyk AI, próba połączenia zwróci błąd (jeden google_id może być przypisany tylko do jednego konta).
-
-### 6. Integracja z Gemini AI (Klucz API)
-1. Wejdź na stronę [Google AI Studio](https://aistudio.google.com/).
-2. Zaloguj się za pomocą swojego konta Google.
-3. Kliknij przycisk **"Get API Key"**.
-4. Kliknij **"Create API Key"** (możesz utworzyć klucz w nowym projekcie Google Cloud lub wybrać istniejący).
-5. Skopiuj nowo wygenerowany klucz API.
-6. Wklej go w zakładce **Ustawienia** w sekcji Gemini AI w aplikacji Dietetyk AI i kliknij **"Zapisz poświadczenia integracji"**. Gdy klucz jest ustawiony, analizy posiłków oraz wskazówki dietetyczne na Dashboardzie będą działały z Twoim własnym limitem zapytań.
+Once logged in as an administrator (`admin`), you can navigate to the **Settings** or **Admin Panel** (available in the navigation menu for accounts with the `admin` role) to manage the global configuration of the application. Developer credentials for Oura Ring and Withings (needed for integration) are configured by each user individually in their own **Settings** tab.
 
 ---
 
-## 🌍 Hosting i Współpraca (Contributions)
+## 🔌 Configuration of Integrations (Step-by-Step)
 
-- **Hosting**: Aplikacja produkcyjna jest hostowana pod adresem: [https://dietetyk.renacode.com](https://dietetyk.renacode.com).
-- **Współpraca (Pull Requests)**: Zachęcamy do tworzenia Pull Requestów (PR) z dowolnymi zmianami, ulepszeniami lub nowymi funkcjami, które chcesz wprowadzić.
-- **Gałąź Główna**: Główna gałąź repozytorium (`master` / `main`) jest chroniona (protected), co oznacza, że wszystkie zmiany muszą być wprowadzane za pomocą Pull Requestów i przechodzić weryfikację.
+To automatically import sleep, activity, and body composition data from external sensors, and to allow the AI to analyze your diet using your own API key, enter the appropriate credentials in the **Settings** tab.
+
+### 1. Oura Ring Integration (Sleep, HRV, Activity)
+1.  Log in to your Oura account on the [Oura Developer Portal](https://developer.ouraring.com/applications).
+2.  Click **"Create New Application"**.
+3.  Fill in the application details (e.g., Name: `Dietetyk AI`, Description: `AI Dietician Application`).
+4.  In the **"Redirect URIs"** field, add the following callback URL (replace `dietetyk.renacode.com` with your own domain if deployed elsewhere):
+    `https://dietetyk.renacode.com/api/auth/oura/callback`
+5.  Save the application. A **Client ID** and **Client Secret** will be generated.
+6.  Copy and paste them into the Oura Ring section in the **Settings** tab of the Dietetyk AI app, click **"Save credentials"**, and then click **"Connect Oura"** to authorize the integration.
+
+### 2. Withings Integration (Weight and Body Composition)
+1.  Log in to your Withings account on the [Withings Developer Portal](https://developer.withings.com/).
+2.  Navigate to the **Partner Dashboard**.
+3.  Create a new developer application.
+4.  For the **"Callback URL"** (Redirect URI), enter:
+    `https://dietetyk.renacode.com/api/auth/withings/callback`
+5.  Select the data scopes for weight and body composition.
+6.  Once created, you will receive a **Client ID** and **Client Secret**.
+7.  Copy these details and enter them in the Withings section in the **Settings** tab of the Dietetyk AI app, click **"Save credentials"**, and click **"Connect Withings"** to authorize the integration.
+
+### 3. Apple Health Integration (Steps, Calories, Active Minutes)
+Unlike Oura and Withings, Apple Health does not expose a public cloud API—data is sent from the phone via a webhook using the free **Health Auto Export** app (acting as a bridge between HealthKit and our backend).
+1.  Install the **Health Auto Export** app from the App Store on your iPhone.
+2.  Log in to Dietetyk AI, navigate to the **Settings** tab, and locate the **Apple Health** section. Copy the generated webhook URL (which contains your private sync token, e.g., `https://dietetyk.renacode.com/api/integrations/apple-health/<token>`). You can regenerate a new token if needed.
+3.  In the Health Auto Export app, navigate to **Automations** and create a new **REST API** automation.
+4.  Paste the copied URL as the destination address and set the format to **JSON**.
+5.  Select the metrics: **Steps**, **Active Energy**, **Basal Energy Burned**, and **Apple Exercise Time**. If you also want to synchronize workouts, create a second automation for **Workouts** pointing to the same URL.
+6.  Enable background delivery (e.g., hourly)—data will flow into `health_metrics` with `activity_source = 'apple'` and will show up on your Dashboard automatically.
+
+> [!NOTE]
+> When both Apple Health and Oura are active, Apple Health data is treated as the primary source for steps/calories/activity minutes (since it syncs immediately, while Oura usually finalizes its summary the next morning). Oura only fills in these metrics for days where Apple Health has not reported any data.
+
+### 4. Google Fit Integration (Steps, Calories)
+Unlike Apple Health (webhook) and Oura/Withings (per-user credentials), Google Fit uses OAuth2 and global Google credentials (Client ID/Secret) configured once by the administrator in the **Admin Panel** (the same keys used for Google Login). This means standard users do not need to register their own developer applications.
+1.  The administrator must configure `google_client_id` and `google_client_secret` in the **Admin Panel** from the [Google Cloud Console](https://console.cloud.google.com/), with the Authorized redirect URI set to `https://dietetyk.renacode.com/api/auth/google-fit/callback` and the Fitness API enabled with scope `https://www.googleapis.com/auth/fitness.activity.read`.
+2.  Each user navigates to the **Settings** tab, **Google Fit** section, and clicks **"Connect Google Fit"**.
+3.  After choosing a Google account and accepting the permissions, data is synchronized automatically (hourly, between 5:00 and 22:00, and immediately upon connection).
+4.  The integration can be disconnected at any time by clicking **"Disconnect Integration"**.
+
+> [!NOTE]
+> Google Fit timezone aggregation limits may cause a small (1-2h) shift relative to Europe/Warsaw time used by the rest of the application. Furthermore, Apple Health and Google Fit share the same priority (whoever writes last wins), while Apple Health always overrides Oura.
+
+### 5. Linking an Existing Account with Google
+If you already have an account created with a username/password and want to link it to a Google account for single-click login without losing history:
+1.  Log in normally (username/password) and go to the **Settings** tab, **Google Account** section.
+2.  Click **"Connect Google"** and choose the Google account you wish to link.
+3.  From now on, you can log in using either method—both lead to the same account.
+4.  You can unlink Google at any time by clicking **"Disconnect Google"** (login will then require your password).
+
+### 6. Gemini AI Integration (API Key)
+1.  Go to [Google AI Studio](https://aistudio.google.com/).
+2.  Log in with your Google account.
+3.  Click **"Get API Key"**.
+4.  Click **"Create API Key"** (choose a new or existing Google Cloud project).
+5.  Copy the generated key.
+6.  Paste it in the Gemini AI section in the **Settings** tab of the Dietetyk AI app and click **"Save credentials"**. Once configured, meal analyses and dietary advice will use your personal quota.
+
+---
+
+## 🌍 Hosting and Contributions
+
+*   **Hosting**: The production application is hosted at [https://dietetyk.renacode.com](https://dietetyk.renacode.com).
+*   **Contributions**: Pull Requests (PRs) with improvements, bug fixes, or new features are highly encouraged.
+*   **Main Branch**: The main branch of the repository (`main`) is protected by a GitHub Ruleset named `protect-main`, which means all changes must be submitted via Pull Requests and pass verification.

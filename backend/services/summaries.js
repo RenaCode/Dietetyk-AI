@@ -446,7 +446,60 @@ async function sendWeeklySummaryForUser(userId, customEmail = null) {
 
   const goalPaceAnalysis = buildGoalPaceAnalysis(targetWeightKg, currentWeight, weeklyWeightChange);
 
-  const advicePrompt = `
+  const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [userId]);
+  const language = langRow ? langRow.value : 'pl';
+
+  let advicePrompt = '';
+  if (language === 'en') {
+    advicePrompt = `
+You are a professional AI sports dietician working in the "Dietetyk AI" app.
+Analyze the weekly nutrition and training report for user ${user.first_name || user.username}, addressing them by name:
+Daily goals:
+- Calorie target: ${targetCalories} kcal
+- Macronutrients: P:${targetProtein}g, C:${targetCarbs}g, F:${targetFat}g
+- BMR: ${bmr} kcal
+
+Weekly stats (daily averages):
+- Average daily energy intake: ${stats.avgEatenCalories} kcal (Protein: ${stats.avgProtein}g, Carbs: ${stats.avgCarbs}g, Fat: ${stats.avgFat}g, Fiber: ${stats.avgFiber}g, Sugar: ${stats.avgSugar}g, Sodium: ${stats.avgSodium}mg)
+- Average physical activity (active calories): ${stats.avgActiveCalories} kcal
+- Average total daily burn: ${avgTotalBurned} kcal
+- Average daily net balance: ${avgNetCalories} kcal
+- Average daily steps: ${stats.avgSteps}
+- Average daily hydration: ${stats.avgWaterMl}ml (target: ${targetWaterMl}ml)
+- Supplements recorded this week: ${stats.supplementsLogged.length > 0 ? stats.supplementsLogged.join('; ') : 'none'}
+${goalPaceAnalysis ? `
+Body goal and pace discrepancy:
+- Described body goal: ${bodyGoalText || 'no description'}
+- Target weight: ${goalPaceAnalysis.targetWeightKg} kg, current weight: ${goalPaceAnalysis.currentWeight} kg (difference: ${Math.abs(goalPaceAnalysis.remainingKg)} kg ${goalPaceAnalysis.remainingKg > 0 ? 'to lose' : 'to gain'})
+- Weight change this week: ${goalPaceAnalysis.weeklyWeightChange > 0 ? '+' : ''}${goalPaceAnalysis.weeklyWeightChange} kg
+- Pace status: ${
+    goalPaceAnalysis.status === 'reached' ? 'target weight reached (within tolerance)'
+    : goalPaceAnalysis.status === 'wrong_direction' ? 'WARNING: weight this week changed in the OPPOSITE direction of the goal'
+    : goalPaceAnalysis.status === 'stalled' ? 'weight this week did not change (stalled relative to goal)'
+    : `pace aligned with goal, estimated weeks to goal at this pace: ~${goalPaceAnalysis.weeksToGoal} weeks`
+  }` : ''}
+
+Oura & Withings data (weekly averages):
+- Average sleep score: ${stats.avgSleepScore !== null ? stats.avgSleepScore + '/100' : 'none'}
+- Average readiness score: ${stats.avgReadinessScore !== null ? stats.avgReadinessScore + '/100' : 'none'}
+- Average weight: ${stats.avgWeight !== null ? stats.avgWeight + ' kg' : 'none'}
+- Average body fat percentage: ${stats.avgFatRatio !== null ? stats.avgFatRatio + '%' : 'none'}
+- Average muscle mass: ${stats.avgMuscleMass !== null ? stats.avgMuscleMass + ' kg' : 'none'}
+- Average blood pressure: ${stats.avgBpSystolic !== null ? `${stats.avgBpSystolic}/${stats.avgBpDiastolic} mmHg` : 'no data'}
+
+Write a professional, concise, and motivating weekly report in English, analyzing all the data provided above. Consider:
+1. Energy balance (adhering to targets).
+2. Macronutrient and micronutrient coverage (fiber, sugars, sodium) - with specific dietary modifications, e.g., when and how to add protein for muscle recovery, how to balance macros, or how to reduce sodium/sugar.
+3. Workout summary and cardio zones estimated from active calories, RHR, and HRV.
+4. Recovery, body composition changes, and blood pressure.
+5. Hydration and its effect.
+6. Supplements consistency.
+7. Goal-pace discrepancy.
+
+Format the response strictly in Markdown: short introductory sentence, header "## Analysis" (concise paragraphs summarizing the week), header "## Recommendations" with a bullet list (3 specific points for the upcoming week, each starting with "- "). Use **bolding** for key numbers and phrases. Address the user directly.
+`;
+  } else {
+    advicePrompt = `
 Jesteś profesjonalnym dietetykiem sportowym AI pracującym w aplikacji "Dietetyk AI".
 Przeanalizuj tygodniowy raport żywieniowo-treningowy użytkownika ${user.first_name || user.username}, zwracając się do niego po imieniu:
 Cele dobowe:
@@ -493,6 +546,7 @@ Napisz profesjonalny, zwięzły i motywujący tygodniowy raport w języku polski
 
 Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek "## Analiza" (zwięzłe akapity podsumowujące tydzień na bazie powyższych punktów), nagłówek "## Rekomendacje" z listą punktowaną (3 konkretne punkty na nadchodzący tydzień, każdy zaczynający się od "- "). Używaj **pogrubienia** dla kluczowych liczb i fraz. Pisz bezpośrednio do użytkownika.
 `;
+  }
 
   const aiSummary = await generateAiSummaryText({
     userId, user, prompt: advicePrompt,
@@ -583,12 +637,51 @@ async function sendDailySummaryForUser(userId, customEmail = null) {
   const totalBurned = health.total_calories_burned || (bmr + activeCalories);
   const netCalories = totalEaten.calories - totalBurned;
 
-  const advicePrompt = `
+  const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [userId]);
+  const language = langRow ? langRow.value : 'pl';
+
+  let advicePrompt = '';
+  if (language === 'en') {
+    advicePrompt = `
+You are a professional, friendly AI sports dietician working in the "Dietetyk AI" app.
+Analyze today's balance for user ${user.first_name || user.username} for date ${date}, addressing them by name:
+User Goals:
+- Calorie target: ${targetCalories} kcal
+- Protein target: ${targetProtein}g, Carbs target: ${targetCarbs}g, Fat target: ${targetFat}g
+- BMR: ${bmr} kcal
+
+Today's Balance:
+- Total eaten: ${totalEaten.calories} kcal (Protein: ${totalEaten.protein}g, Carbs: ${totalEaten.carbs}g, Fat: ${totalEaten.fat}g)
+- Active calories burned: ${activeCalories} kcal
+- Total calories burned (BMR + Active): ${totalBurned} kcal
+- Net balance (eaten - burned): ${netCalories} kcal
+- Steps today: ${health.steps || 0}
+- Water intake today: ${health.water_ml || 0}ml (target: ${targetWaterMl}ml)
+
+Oura Sleep/Readiness & Withings Body Composition:
+- Sleep Score: ${health.sleep_score !== null ? health.sleep_score + '/100' : 'no data'} (Duration: ${health.sleep_duration || 0}h, Deep: ${health.sleep_deep || 0}h, REM: ${health.sleep_rem || 0}h)
+- Heart & Temp parameters: Resting HR: ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms, Body temp deviation: ${health.temperature_deviation !== null ? health.temperature_deviation + ' °C' : 'none'}
+- Readiness Score: ${health.readiness_score !== null ? health.readiness_score + '/100' : 'no data'}
+- Body Composition: Weight: ${health.weight !== null ? health.weight + ' kg' : 'no data'}, Body fat percentage: ${health.fat_ratio !== null ? health.fat_ratio + '%' : 'no data'}, Muscle mass: ${health.muscle_mass !== null ? health.muscle_mass + ' kg' : 'no data'}
+- Blood Pressure: ${health.blood_pressure_systolic !== null && health.blood_pressure_systolic !== undefined ? health.blood_pressure_systolic + '/' + health.blood_pressure_diastolic + ' mmHg' : 'no data'}
+
+Today's meals list:
+${meals.map(m => `- ${m.raw_text} (${m.calories} kcal, P:${m.protein}g, C:${m.carbs}g, F:${m.fat}g)`).join('\n') || 'No meals logged'}
+
+Your analysis must consider all the data provided above. Consider:
+1. Exercise intensity and cardio zones after training based on active calories and heart parameters (RHR, HRV).
+2. Precise dietary changes based on today's meals and workouts.
+3. Oura readiness and Withings weight/muscle/fat trends.
+
+Format the response strictly in Markdown: one short introductory sentence, header "## Analysis" (2-3 sentences), header "## Recommendations" with a bullet list (2-3 points, each starting with "- "). Use **bolding** for key numbers and phrases. Write directly to the user in English.
+`;
+  } else {
+    advicePrompt = `
 Jesteś profesjonalnym, przyjaznym dietetykiem sportowym AI pracującym w aplikacji "Dietetyk AI".
 Przeanalizuj dzisiejszy bilans użytkownika ${user.first_name || user.username} dla dnia ${date}, zwracając się do niego po imieniu:
 Cele użytkownika:
 - Cel kaloryczny spożycia: ${targetCalories} kcal
-- Cel Białka: ${targetProtein}g, Węglowodanów: ${targetCarbs}g, Tłuszczu: ${targetFat}g
+- Cel Białka: ${targetProtein}g, Węglowodanych: ${targetCarbs}g, Tłuszczu: ${targetFat}g
 - BMR (Podstawowa Przemiana Materii): ${bmr} kcal
 
 Aktualny bilans dzisiejszy:
@@ -616,6 +709,7 @@ Twoja analiza ma uwzględniać wszystkie dane podane powyżej (dzisiejsze posił
 
 Sformatuj odpowiedź w strukturze Markdown: jedno krótkie zdanie wstępu, nagłówek "## Analiza" (2-3 zdania), nagłówek "## Rekomendacje" z listą punktowaną (2-3 punkty, każdy zaczynający się od "- "). Używaj **pogrubienia** dla kluczowych liczb i fraz. Pisz bezpośrednio do użytkownika w języku polskim. Bądź konkretny, motywujący i merytoryczny, bez lania wody.
 `;
+  }
 
   let aiAdvice = await generateAiSummaryText({
     userId, user, prompt: advicePrompt,
@@ -676,7 +770,47 @@ async function sendMonthlySummaryForUser(userId, customEmail = null) {
   const avgTotalBurned = bmr + stats.avgActiveCalories;
   const avgNetCalories = stats.avgEatenCalories - avgTotalBurned;
 
-  const advicePrompt = `
+  const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [userId]);
+  const language = langRow ? langRow.value : 'pl';
+
+  let advicePrompt = '';
+  if (language === 'en') {
+    advicePrompt = `
+You are a professional AI sports dietician working in the "Dietetyk AI" app.
+Analyze the monthly nutrition and training report for user ${user.first_name || user.username} (last 30 days), addressing them by name:
+Daily goals:
+- Calorie target: ${targetCalories} kcal
+- Macronutrients: P:${targetProtein}g, C:${targetCarbs}g, F:${targetFat}g
+- BMR: ${bmr} kcal
+
+Monthly stats (daily averages from last 30 days):
+- Average daily energy intake: ${stats.avgEatenCalories} kcal (Protein: ${stats.avgProtein}g, Carbs: ${stats.avgCarbs}g, Fat: ${stats.avgFat}g, Fiber: ${stats.avgFiber}g, Sugar: ${stats.avgSugar}g, Sodium: ${stats.avgSodium}mg)
+- Average physical activity (active calories): ${stats.avgActiveCalories} kcal
+- Average total daily burn: ${avgTotalBurned} kcal
+- Average daily net balance: ${avgNetCalories} kcal
+- Average daily steps: ${stats.avgSteps}
+- Workout days in the month: ${stats.workoutsCount}
+- Average daily hydration: ${stats.avgWaterMl}ml (target: ${targetWaterMl}ml)
+- Supplements recorded this month: ${stats.supplementsLogged.length > 0 ? stats.supplementsLogged.length + ' entries - ' + stats.supplementsLogged.slice(0, 10).join('; ') : 'none'}
+
+Oura & Withings data (monthly averages and change trend from start to end):
+- Average sleep score: ${stats.avgSleepScore !== null ? stats.avgSleepScore + '/100' : 'none'}
+- Average readiness score: ${stats.avgReadinessScore !== null ? stats.avgReadinessScore + '/100' : 'none'}
+- Average weight: ${stats.avgWeight !== null ? stats.avgWeight + ' kg' : 'none'} (change: ${stats.weightChange !== null ? (stats.weightChange > 0 ? '+' : '') + stats.weightChange + ' kg' : 'no data'})
+- Average body fat percentage: ${stats.avgFatRatio !== null ? stats.avgFatRatio + '%' : 'none'} (change: ${stats.fatRatioChange !== null ? (stats.fatRatioChange > 0 ? '+' : '') + stats.fatRatioChange + ' pp' : 'no data'})
+- Average muscle mass: ${stats.avgMuscleMass !== null ? stats.avgMuscleMass + ' kg' : 'none'} (change: ${stats.muscleMassChange !== null ? (stats.muscleMassChange > 0 ? '+' : '') + stats.muscleMassChange + ' kg' : 'no data'})
+- Average blood pressure: ${stats.avgBpSystolic !== null ? `${stats.avgBpSystolic}/${stats.avgBpDiastolic} mmHg` : 'no data'}
+
+Write a professional, concise, and motivating monthly report in English, analyzing all the data provided above. Consider:
+1. Overall monthly trend of energy balance (adhering to targets, consistency), including quality of diet (fiber, sugars, sodium).
+2. Long-term changes in body composition from Withings (muscle mass gain vs. fat loss over the month) and blood pressure trends.
+3. Consistency in workouts, recovery, and supplementation.
+4. Hydration status and its impact.
+
+Format the response strictly in Markdown: short introductory sentence, header "## Analysis" (concise paragraphs summarizing the month), header "## Recommendations" with a bullet list (3 specific, long-term points for the upcoming month, each starting with "- "). Use **bolding** for key numbers and phrases. Address the user directly.
+`;
+  } else {
+    advicePrompt = `
 Jesteś profesjonalnym dietetykiem sportowym AI pracującym w aplikacji "Dietetyk AI".
 Przeanalizuj miesięczny raport żywieniowo-treningowy użytkownika ${user.first_name || user.username} (ostatnie 30 dni), zwracając się do niego po imieniu:
 Cele dobowe:
@@ -710,6 +844,7 @@ Napisz profesjonalny, zwięzły i motywujący miesięczny raport w języku polsk
 
 Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek "## Analiza" (zwięzłe akapity podsumowujące miesiąc na bazie powyższych punktów), nagłówek "## Rekomendacje" z listą punktowaną (3 konkretne, długoterminowe punkty na nadchodzący miesiąc, każdy zaczynający się od "- "). Używaj **pogrubienia** dla kluczowych liczb i fraz. Pisz bezpośrednio do użytkownika.
 `;
+  }
 
   const aiSummary = await generateAiSummaryText({
     userId, user, prompt: advicePrompt,

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getTemperatureStatus } from '../utils/health';
 import { formatHoursMins } from '../utils/format';
+import { t } from '../utils/i18n';
 
 // Progress Circle Helper Component (SVG)
 const RenderProgressCircle = ({ size = 80, strokeWidth = 6, percentage = 0, color = "#7c3aed" }) => {
@@ -1988,11 +1989,23 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState([
-    { sender: 'ai', text: 'Cześć! Jestem Twoim inteligentnym asystentem w aplikacji Dietetyk AI. Przeanalizowałem Twoje dzisiejsze wyniki gotowości (Readiness), snu oraz treningów. W czym mogę Ci pomóc w kontekście diety lub obciążenia treningowego?' }
+    { sender: 'ai', text: t('Cześć! Jestem Twoim inteligentnym asystentem w aplikacji Dietetyk AI. Przeanalizowałem Twoje dzisiejsze wyniki gotowości (Readiness), snu oraz treningów. W czym mogę Ci pomóc w kontekście diety lub obciążenia treningowego?') }
   ]);
   const [isSendingChat, setIsSendingChat] = useState(false);
   
   const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    setChatMessages(prev => {
+      if (prev.length === 1 && prev[0].sender === 'ai') {
+        return [{
+          sender: 'ai',
+          text: t('Cześć! Jestem Twoim inteligentnym asystentem w aplikacji Dietetyk AI. Przeanalizowałem Twoje dzisiejsze wyniki gotowości (Readiness), snu oraz treningów. W czym mogę Ci pomóc w kontekście diety lub obciążenia treningowego?')
+        }];
+      }
+      return prev;
+    });
+  }, [language]);
 
   useEffect(() => {
     if (isChatOpen) {
@@ -5644,7 +5657,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                   color: 'rgba(255,255,255,0.4)'
                 }}>
                   <div className="loading-pulse"></div>
-                  <span>Dietetyk AI myśli...</span>
+                  <span>{t("Dietetyk AI myśli...")}</span>
                 </div>
               )}
               <div ref={messagesEndRef} />
@@ -5681,7 +5694,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                       cursor: 'pointer'
                     }}
                   >
-                    {suggestion}
+                    {t(suggestion)}
                   </button>
                 ))}
               </div>
@@ -5699,7 +5712,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             >
               <input
                 type="text"
-                placeholder="Zapytaj agenta np. o swój dzisiejszy sen..."
+                placeholder={t("Zapytaj agenta np. o swój dzisiejszy sen...")}
                 className="input-field"
                 style={{ flexGrow: 1, borderRadius: '12px', fontSize: '0.9rem' }}
                 value={chatInput}

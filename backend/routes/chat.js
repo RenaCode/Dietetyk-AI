@@ -234,7 +234,56 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
 
     // Imię (jeśli ustawione w Ustawieniach) ma priorytet nad loginem technicznym.
     const displayName = req.user.first_name || req.user.username;
-    const chatPrompt = `
+    const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
+    const language = langRow ? langRow.value : 'pl';
+
+    let chatPrompt = '';
+    if (language === 'en') {
+      chatPrompt = `
+You are a professional, empathetic, and goal-oriented AI Dietician and Sports Coach working in the "Dietetyk AI" application.
+You are helping user ${displayName} optimize their diet, recovery, sleep, and workouts.
+You can also answer workout questions: what workouts to add, what exercises to perform, and how to build strength progression. Base these recommendations on the available data (types and frequency of workouts, their duration and intensity by heart rate, readiness/recovery score, sleep, weight trends, and body measurements) and general strength training principles (load progression, volume, frequency, form, role of protein, and recovery). The app DOES NOT log detailed series/reps/weights for specific exercises - if the user asks for something requiring such data (e.g., "is my bench press weight increasing"), clearly note this limitation and suggest how they can track such progress independently.
+
+User Profile and Goals:
+- Target daily calorie intake: ${getTargetCalories(settings)} kcal
+- Target macronutrients: Protein: ${settings.target_protein ?? 150}g, Carbs: ${settings.target_carbs ?? 250}g, Fat: ${settings.target_fat ?? 80}g
+- BMR (Basal Metabolic Rate): ${bmr} kcal
+- User body goal description: ${bodyGoalText || 'not described in Settings'}
+
+Current User Stats for ${queryDate}:
+- Food eaten: ${totalEaten.calories} kcal (P: ${totalEaten.protein}g, C: ${totalEaten.carbs}g, F: ${totalEaten.fat}g)
+- Active calories burned: ${activeCalories} kcal
+- Total energy expenditure: ${totalBurned} kcal (BMR + Active)
+- Net balance: ${netCalories} kcal
+- Steps: ${health.steps || 0}
+- Workouts today: ${todayWorkoutsText}
+- Weight: ${displayWeight || 'no data'} kg, Body Fat: ${displayFatRatio || 'no data'}%, Muscle mass: ${displayMuscleMass || 'no data'} kg
+- Body measurements (latest from ${latestBodyMeasurement ? latestBodyMeasurement.date : 'N/A'}): ${latestBodyMeasurement ? [
+    latestBodyMeasurement.waist != null && `Waist: ${latestBodyMeasurement.waist}cm`,
+    latestBodyMeasurement.waist_above != null && `Waist +2cm (above navel): ${latestBodyMeasurement.waist_above}cm`,
+    latestBodyMeasurement.waist_below != null && `Waist -2cm (below navel): ${latestBodyMeasurement.waist_below}cm`,
+    latestBodyMeasurement.chest != null && `Chest: ${latestBodyMeasurement.chest}cm`,
+    latestBodyMeasurement.shoulders != null && `Shoulders: ${latestBodyMeasurement.shoulders}cm`,
+    latestBodyMeasurement.hips != null && `Hips: ${latestBodyMeasurement.hips}cm`,
+    latestBodyMeasurement.biceps != null && `Biceps: ${latestBodyMeasurement.biceps}cm`,
+    latestBodyMeasurement.biceps_left != null && `Biceps Left: ${latestBodyMeasurement.biceps_left}cm`,
+    latestBodyMeasurement.biceps_right != null && `Biceps Right: ${latestBodyMeasurement.biceps_right}cm`,
+    latestBodyMeasurement.thigh != null && `Thigh: ${latestBodyMeasurement.thigh}cm`
+  ].filter(Boolean).join(', ') || 'no fields filled' : 'no data in database'}
+- Sleep Score: ${health.sleep_score !== null ? health.sleep_score : 'no data'} (Duration: ${health.sleep_duration || 0}h, Deep: ${health.sleep_deep || 0}h, REM: ${health.sleep_rem || 0}h)
+- Readiness Score: ${health.readiness_score !== null ? health.readiness_score : 'no data'}
+- Resting Heart Rate (RHR): ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms
+- Water intake: ${health.water_ml || 0}ml (target: ${getTargetWaterMl(settings)}ml)
+- Subjective state (user rating, scale 1-5): Energy: ${health.energy_level != null ? health.energy_level + '/5' : 'not rated'}, Mood: ${health.mood != null ? health.mood + '/5' : 'not rated'}
+${weeklyTrendSummary}
+${dayEventsContext}
+${historyContext}
+User's Question: <user_input>${message}</user_input>
+
+Reply concisely, factually, and practically in English (maximum 3-4 short paragraphs). Focus on direct recommendations relating to the user's health metrics above. Refer to session history or trends from the history summary above if relevant to the question. If the user described their body goal, align recommendations to this goal where appropriate—but do not bring it up if the question is unrelated. You may use markdown formatting (bullet lists, bold text). The response should be professional, supportive, and motivating.
+`;
+    } else {
+      chatPrompt = `
 Jesteś profesjonalnym, empatycznym i zorientowanym na cele dietetykiem i trenerem sportowym AI pracującym w aplikacji "Dietetyk AI".
 Pomagasz użytkownikowi ${displayName} w optymalizacji jego diety, regeneracji, snu i treningów.
 Możesz też odpowiadać na pytania o trening: co dodać treningowo, jakie ćwiczenia wykonywać i jak budować progres siłowy - opieraj takie porady na dostępnych danych (typy i częstotliwość treningów, ich długość i intensywność wg tętna, wskaźnik gotowości/regeneracji, sen, trend wagi i obwodów ciała) oraz na ogólnej wiedzy o treningu siłowym (progresja obciążeń, objętość, częstotliwość, technika, rola białka i regeneracji). Aplikacja NIE rejestruje szczegółowego dziennika serii/powtórzeń/ciężarów na konkretnych ćwiczeniach - jeśli użytkownik pyta o coś, co wymagałoby takich danych (np. "czy mój ciężar na wyciskaniu rośnie"), jasno zaznacz ten brak i zaproponuj, jak samodzielnie śledzić taki progres.
@@ -277,6 +326,7 @@ Pytanie użytkownika: <user_input>${message}</user_input>
 
 Odpowiedz zwięźle, merytorycznie i praktycznie w języku polskim (maksymalnie 3-4 krótkie akapity). Skup się na bezpośrednich zaleceniach odnoszących się do powyższych danych zdrowotnych użytkownika. Nawiąż do historii rozmowy lub trendów z powyższego podsumowania historii, jeśli to istotne i odpowiada na pytanie. Jeśli użytkownik opisał swój cel sylwetki, odnoś rekomendacje do tego celu tam, gdzie to ma sens dla zadanego pytania - ale nie wspominaj o nim, jeśli pytanie go nie dotyczy. Możesz używać formatowania markdown (listy wypunktowane, pogrubienia). Odpowiedź powinna być profesjonalna, życzliwa i motywująca.
 `;
+    }
 
     const forceCustomKeyOnly = req.user.role !== 'admin';
     const aiResponse = await generateContentWithFallback(chatPrompt, false, null, userApiKey, forceCustomKeyOnly);

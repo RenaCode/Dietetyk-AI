@@ -493,12 +493,111 @@ router.get('/api/dashboard', async (req, res) => {
           }
         }
 
-        const advicePrompt = `
+        const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
+        const language = langRow ? langRow.value : 'pl';
+
+        let advicePrompt = '';
+        if (language === 'en') {
+          advicePrompt = `
+You are a professional, friendly AI sports dietician working in the "Dietetyk AI" app.
+Analyze today's balance for user ${displayName} on date ${date}:
+User Goals:
+- Target daily calorie intake: ${getTargetCalories(settings)} kcal
+- Target Protein: ${settings.target_protein}g, Carbs: ${settings.target_carbs}g, Fat: ${settings.target_fat}g
+- BMR (Basal Metabolic Rate): ${bmr} kcal
+- User body goal description: ${bodyGoalText || 'not described in Settings'}${bodyGoalImagePart ? '\n- The user also attached a reference photo of their body goal (see the attached image) - analyze it visually and relate recommendations to the body shape shown in the photo (e.g., muscle level, fat tissue, proportions), in the context of other data.' : ''}
+
+Today's Balance:
+- Total eaten: ${totalEaten.calories} kcal (Protein: ${totalEaten.protein}g, Carbs: ${totalEaten.carbs}g, Fat: ${totalEaten.fat}g, Fiber: ${totalEaten.fiber}g, Sugar: ${totalEaten.sugar}g, Sodium: ${totalEaten.sodium}mg)
+- Active calories burned: ${activeCalories} kcal
+- Total calories burned (BMR + Active): ${totalBurned} kcal
+- Net balance (eaten - burned): ${netCalories} kcal
+- Steps today: ${displaySteps || 0}
+- Activity today: ${displayActiveMinutes || 0} min active, Distance: ${displayDistanceMeters ? (Math.round(displayDistanceMeters / 100) / 10) + ' km' : '0 km'}, Sedentary time: ${displaySedentaryMinutes || 0} min, Light activity: ${displayLowActivityMinutes || 0} min
+- Water intake today: ${health.water_ml || 0}ml (target: ${getTargetWaterMl(settings)}ml)
+- Supplements taken today: ${health.supplements || 'none (user did not save any supplements today)'}
+- Subjective state (user rating, scale 1-5): Energy: ${health.energy_level != null ? health.energy_level + '/5' : 'not rated'}, Mood: ${health.mood != null ? health.mood + '/5' : 'not rated'}
+- Workouts registered today (Apple Health): ${workouts.length > 0 ? workouts.map(w => {
+    const base = `${w.type} (${w.duration_mins} min, ${w.calories} kcal)`;
+    if (w.avg_hr != null && w.zone_minutes.some(z => z != null)) {
+      const zonesStr = w.zone_minutes.map((z, i) => `Z${i + 1}: ${Math.round(z || 0)}min`).join(', ');
+      return `${base}, avg HR ${w.avg_hr} bpm (max ${w.max_hr} bpm) - heart rate zones: ${zonesStr}`;
+    }
+    return base;
+  }).join(', ') : 'no registered workouts'}
+- Calorie target streak: ${calorieStreakDays} days, Sleep target streak: ${sleepStreakDays} days
+
+Oura Sleep/Readiness & Withings Body Composition:
+- Sleep Score: ${displaySleepScore !== null ? displaySleepScore + '/100' : 'no data'} (Duration: ${displaySleepDuration || 0}h, Deep: ${displaySleepDeep || 0}h, REM: ${displaySleepRem || 0}h)
+- Heart & Temp parameters: Resting HR (RHR): ${displayRhr || '-'} bpm, HRV: ${displayHrv || '-'} ms, Wrist temperature deviation: ${displayTempDev !== null ? displayTempDev + ' °C' : 'N/A'}
+- Respiration & SpO2: Respiratory rate: ${displayRespiratoryRate !== null ? displayRespiratoryRate + '/min' : 'N/A'}, SpO2: ${displaySpo2 !== null ? displaySpo2 + '%' : 'N/A'}, Wrist temperature: ${displayWristTemperature !== null ? displayWristTemperature + ' °C' : 'N/A'}
+- Stress (Oura): High stress: ${displayStressHighMinutes !== null ? displayStressHighMinutes + ' min' : 'no data'}, Recovery: ${displayStressRecoveryMinutes !== null ? displayStressRecoveryMinutes + ' min' : 'no data'}, Stress summary: ${displayStressSummary || 'N/A'}
+- Readiness Score: ${displayReadinessScore !== null ? displayReadinessScore + '/100' : 'no data'}
+- Body Composition: Weight: ${displayWeight !== null ? displayWeight + ' kg' : 'no data'}, Body fat percentage: ${displayFatRatio !== null ? displayFatRatio + '%' : 'no data'}, Muscle mass: ${displayMuscleMass !== null ? displayMuscleMass + ' kg' : 'no data'}
+- Blood Pressure (Withings): ${displayBpSystolic !== null && displayBpDiastolic !== null ? `${displayBpSystolic}/${displayBpDiastolic} mmHg` : 'no data'}
+- Body measurements (latest from ${latestBodyMeasurement ? latestBodyMeasurement.date : 'N/A'}): ${latestBodyMeasurement ? [
+    latestBodyMeasurement.waist != null && `Waist: ${latestBodyMeasurement.waist}cm`,
+    latestBodyMeasurement.waist_above != null && `Waist +2cm: ${latestBodyMeasurement.waist_above}cm`,
+    latestBodyMeasurement.waist_below != null && `Waist -2cm: ${latestBodyMeasurement.waist_below}cm`,
+    latestBodyMeasurement.chest != null && `Chest: ${latestBodyMeasurement.chest}cm`,
+    latestBodyMeasurement.shoulders != null && `Shoulders: ${latestBodyMeasurement.shoulders}cm`,
+    latestBodyMeasurement.hips != null && `Hips: ${latestBodyMeasurement.hips}cm`,
+    latestBodyMeasurement.biceps != null && `Biceps: ${latestBodyMeasurement.biceps}cm`,
+    latestBodyMeasurement.biceps_left != null && `Biceps Left: ${latestBodyMeasurement.biceps_left}cm`,
+    latestBodyMeasurement.biceps_right != null && `Biceps Right: ${latestBodyMeasurement.biceps_right}cm`,
+    latestBodyMeasurement.thigh != null && `Thigh: ${latestBodyMeasurement.thigh}cm`
+  ].filter(Boolean).join(', ') || 'no fields filled' : 'no data in database'}
+
+Today's meals list:
+${meals.map(m => `- ${m.raw_text} (${m.calories} kcal, P:${m.protein}g, C:${m.carbs}g, F:${m.fat}g)`).join('\n') || 'No meals logged'}
+
+Yesterday's context (${yesterdayDate}):
+- Yesterday total eaten: ${yesterdayTotalEaten.calories} kcal (P: ${yesterdayTotalEaten.protein}g, C: ${yesterdayTotalEaten.carbs}g, F: ${yesterdayTotalEaten.fat}g)
+- Yesterday active calories: ${yesterdayHealth.active_calories || 0} kcal
+- Yesterday steps: ${yesterdayHealth.steps || 0}
+- Yesterday supplements: ${yesterdayHealth.supplements || 'none'}
+- Yesterday meals list:
+${yesterdayMealRows.map(m => `- ${m.raw_text} (${m.calories} kcal, P:${m.protein}g, C:${m.carbs}g, F:${m.fat}g)`).join('\n') || 'No meals logged yesterday'}
+
+Trends and database history:
+- Average nutrition (last 7 days): ${last7DaysNutrition.avg ? `${last7DaysNutrition.avg.calories} kcal (P: ${last7DaysNutrition.avg.protein}g, C: ${last7DaysNutrition.avg.carbs}g, F: ${last7DaysNutrition.avg.fat}g, Fiber: ${last7DaysNutrition.avg.fiber}g, Sugar: ${last7DaysNutrition.avg.sugar}g, Sodium: ${last7DaysNutrition.avg.sodium}mg) over ${last7DaysNutrition.days_logged} logged days` : 'no data'}
+- Average nutrition (last 30 days): ${last30DaysNutrition.avg ? `${last30DaysNutrition.avg.calories} kcal (P: ${last30DaysNutrition.avg.protein}g, C: ${last30DaysNutrition.avg.carbs}g, F: ${last30DaysNutrition.avg.fat}g, Fiber: ${last30DaysNutrition.avg.fiber}g, Sugar: ${last30DaysNutrition.avg.sugar}g, Sodium: ${last30DaysNutrition.avg.sodium}mg) over ${last30DaysNutrition.days_logged} logged days` : 'no data'}
+- Weight & body composition history:
+${weightHistory.map(w => `- ${w.date}: ${w.weight} kg (fat: ${w.fat_ratio || '-'}%, muscle: ${w.muscle_mass || '-'} kg)`).join('\n') || 'no data'}
+- Supplements history (latest):
+${supplementsHistory.map(s => `- ${s.date}: ${s.supplements}`).join('\n') || 'no data'}
+- Latest Oura sleep/readiness history:
+${sleepHistory.map(s => `- ${s.date}: Sleep ${s.sleep_score || '-'}, Readiness ${s.readiness_score || '-'}`).join('\n') || 'no data'}
+- Blood pressure history (Withings):
+${bpHistory.map(b => `- ${b.date}: ${b.blood_pressure_systolic}/${b.blood_pressure_diastolic} mmHg`).join('\n') || 'no data'}
+${dayEventsContext}
+
+Your analysis MUST consider ALL data above (today's meals & micronutrients, activity, workouts, supplements, yesterday's comparison, 7/30-day trends, weight/body composition/circumference history, blood pressure, sleep, readiness, stress, respiration). Make sure to address:
+1. Workout intensity and cardio zones: if "heart rate zones" are provided (Z1-Z5 based on Karvonen), base your evaluation on these real zones. Relate minutes in zones to the user's body goal.
+2. Precise dietary adjustments based on today's meals and workout, including fiber, simple sugars, and sodium quality.
+3. Comparison with yesterday and the 7/30-day trend.
+4. Insights from weight, body composition, and circumference trends.
+5. Supplement intake: analyze supplement history and comment on regularity, timing, and usefulness.
+6. Blood pressure: evaluate if values are within range, and advise consulting a doctor if values are elevated (do not diagnose).
+7. Recovery and stress (Oura): SpO2, respiratory rate, wrist temperature, stress minutes.
+8. Calorie/sleep streaks: highlight consistency or suggest how to return to track.
+9. Body goal: assess if current trend, diet, and training are leading towards it.
+10. Days with a Day Tag (if any): adjust recommendations and do not count deviations from these days as normal.
+
+Format the response STRICTLY in this Markdown structure:
+1. One short, personalized introductory sentence addressing the user by name (${displayName}).
+2. Header "## Analysis" followed by 2-3 concise sentences synthesizing today's data against historical trends.
+3. Header "## Recommendations" followed by a bullet list (3-5 points, each starting with "- ") detailing concrete, actionable recommendations.
+
+Use **bolding** for key numbers and phrases in the Analysis and Recommendations. Write in English, directly to the user, concisely and factually.
+`;
+        } else {
+          advicePrompt = `
 Jesteś profesjonalnym, przyjaznym dietetykiem sportowym AI pracującym w aplikacji "Dietetyk AI".
 Przeanalizuj dzisiejszy bilans użytkownika ${displayName} dla dnia ${date}:
 Cele użytkownika:
 - Cel kaloryczny spożycia: ${getTargetCalories(settings)} kcal
-- Cel Białka: ${settings.target_protein}g, Węglowodanów: ${settings.target_carbs}g, Tłuszczu: ${settings.target_fat}g
+- Cel Białka: ${settings.target_protein}g, Węglowodanych: ${settings.target_carbs}g, Tłuszczu: ${settings.target_fat}g
 - BMR (Podstawowa Przemiana Materii): ${bmr} kcal
 - Cel sylwetki opisany przez użytkownika: ${bodyGoalText || 'użytkownik nie opisał celu sylwetki w Ustawieniach'}${bodyGoalImagePart ? '\n- Użytkownik dołączył też zdjęcie referencyjne celu sylwetki (patrz załączony obraz) - przeanalizuj je wizualnie i odnieś rekomendacje do tego, jak wygląda sylwetka na zdjęciu (np. poziom umięśnienia, tkanki tłuszczowej, proporcje), w kontekście pozostałych danych.' : ''}
 
@@ -514,10 +613,6 @@ Aktualny bilans dzisiejszy:
 - Samopoczucie (ręczna ocena użytkownika, skala 1-5): Energia: ${health.energy_level != null ? health.energy_level + '/5' : 'nie oceniono'}, Nastrój: ${health.mood != null ? health.mood + '/5' : 'nie oceniono'}
 - Treningi zarejestrowane dzisiaj (Apple Health): ${workouts.length > 0 ? workouts.map(w => {
     const base = `${w.type} (${w.duration_mins} min, ${w.calories} kcal)`;
-    // Realne strefy kardio (Karvonen) zmierzone tętnem w trakcie treningu, gdy Health Auto
-    // Export wysłał heartRateData (przełącznik "Include Workout Metrics" włączony) - patrz
-    // routes/appleHealth.js. Jeśli niedostępne, AI ocenia intensywność tylko na bazie
-    // kalorii/RHR/HRV (patrz instrukcja niżej).
     if (w.avg_hr != null && w.zone_minutes.some(z => z != null)) {
       const zonesStr = w.zone_minutes.map((z, i) => `Z${i + 1}: ${Math.round(z || 0)}min`).join(', ');
       return `${base}, śr. tętno ${w.avg_hr} bpm (max ${w.max_hr} bpm) - realny rozkład stref kardio: ${zonesStr}`;
@@ -588,6 +683,7 @@ Sformatuj odpowiedź WYŁĄCZNIE w tej strukturze Markdown (frontend renderuje n
 3. Nagłówek "## Rekomendacje" a pod nim lista punktowana (3-5 punktów, każdy zaczynający się od "- ") z konkretnymi, wykonalnymi działaniami wynikającymi z analizy (dieta i mikroelementy, trening, regeneracja i stres, suplementy, ciśnienie - tylko te obszary, które mają pokrycie w danych).
 Używaj **pogrubienia** dla kluczowych liczb i fraz w Analizie i Rekomendacjach. Pisz w języku polskim, bezpośrednio do użytkownika, konkretnie i merytorycznie, bez lania wody.
 `;
+        }
 
         // Oznaczamy (user, data) jako "generowanie w toku" PRZED startem zapytania do
         // Gemini, żeby kolejne, prawie równoczesne żądanie GET /api/dashboard (patrz
@@ -3249,7 +3345,28 @@ async function buildExplanationContext(userId, today) {
 
 // Krótki, ukierunkowany prompt - w stylu Oura Advisor/Whoop Coach ("Twój sen spadł,
 // bo...") - łączy KONKRETNĄ metrykę z KONKRETNYM dniem, nie ogólnikową poradą.
-function buildExplanationPrompt(finding, context) {
+function buildExplanationPrompt(finding, context, language) {
+  let label = finding.label;
+  if (language === 'en') {
+    if (finding.metric === 'sleep_score') label = 'sleep quality';
+    else if (finding.metric === 'readiness_score') label = 'readiness/recovery';
+    else if (finding.metric === 'hrv') label = 'HRV';
+    else if (finding.metric === 'rhr') label = 'resting heart rate';
+    
+    return `You are a health analyst. Today's value for the metric "${label}" is significantly worse than the user's own 28-day baseline (deviation of ${finding.z.toFixed(1)} standard deviations, mean for the last 28 days: ${finding.mean}, today: ${finding.todayValue}).
+
+Available data from the last 24 hours (may or may not explain this deviation - ONLY use what actually points to the cause, do not guess):
+- Nutrition today: ${JSON.stringify(context.todayNutrition)}
+- Nutrition yesterday: ${JSON.stringify(context.yesterdayNutrition)}
+- Hour of last meal: ${context.lastMealHour !== null ? context.lastMealHour + ':00' : 'no data'}
+- Steps today: ${context.steps ?? 'no data'}, active calories: ${context.activeCalories ?? 'no data'}, sedentary minutes: ${context.sedentaryMinutes ?? 'no data'}
+- Water today: ${context.waterMl ?? 'no data'} ml
+- Workouts (today/yesterday): ${JSON.stringify(context.workouts)}
+- Supplements today: ${context.supplements || 'no data'}
+
+Write ONE to TWO concise sentences in English directly to the user, in the style "Your [metric] [dropped/increased] because [specific cause from data above]". If the data does not clearly point to a cause, write it openly (e.g., "Your [X] is lower than usual - today's data doesn't point to a clear cause, you might want to focus on recovery"). No headers, no lists, no generalities like "take care of your health".`;
+  }
+
   return `Jesteś analitykiem zdrowia. Dzisiejsza wartość metryki "${finding.label}" jest znacząco gorsza niż własny 28-dniowy wzorzec użytkownika (odchylenie ${finding.z.toFixed(1)} odchylenia standardowego, średnia z ostatnich 28 dni: ${finding.mean}, dziś: ${finding.todayValue}).
 
 Dostępne dane z ostatniej doby (mogą, ale nie muszą wyjaśniać to odchylenie - użyj TYLKO tego, co faktycznie wskazuje na przyczynę, nie zgaduj na siłę):
@@ -3327,13 +3444,15 @@ router.get('/api/dashboard/ai-explanation-insight', async (req, res) => {
       const userApiKey = apiKeyRow ? decrypt(apiKeyRow.value) : null;
       const forceCustomKeyOnly = req.user.role !== 'admin';
       const canUseAI = userApiKey || (!forceCustomKeyOnly && (genAI || process.env.GEMINI_API_KEY));
+      const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
+      const language = langRow ? langRow.value : 'pl';
 
       const explanationLockKey = `${req.user.id}:${today}`;
       if (canUseAI && !pendingExplanationGeneration.has(explanationLockKey)) {
         pendingExplanationGeneration.add(explanationLockKey);
 
         buildExplanationContext(req.user.id, today)
-          .then(context => generateContentWithFallback(buildExplanationPrompt(bestFinding, context), false, null, userApiKey, forceCustomKeyOnly))
+          .then(context => generateContentWithFallback(buildExplanationPrompt(bestFinding, context, language), false, null, userApiKey, forceCustomKeyOnly))
           .then(async (text) => {
             const trimmed = text.trim();
             const nowStr = new Date().toISOString();
@@ -4536,6 +4655,8 @@ router.get('/api/dashboard/training-plan-insight', async (req, res) => {
     const userApiKey = apiKeyRow ? decrypt(apiKeyRow.value) : null;
     const forceCustomKeyOnly = req.user.role !== 'admin';
     const canUseAI = userApiKey || (!forceCustomKeyOnly && (genAI || process.env.GEMINI_API_KEY));
+    const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
+    const language = langRow ? langRow.value : 'pl';
 
     if (!canUseAI) {
       return res.json({ hasEnoughData: false, reason: 'no_ai_key' });
@@ -4544,27 +4665,61 @@ router.get('/api/dashboard/training-plan-insight', async (req, res) => {
     // Budujemy opis treningów dla promptu
     const workoutSummaryLines = Object.entries(byType).map(([type, stats]) => {
       const avgMin = stats.count > 0 ? Math.round(stats.totalMinutes / stats.count) : 0;
+      if (language === 'en') {
+        return `- ${type}: ${stats.count}x, avg ${avgMin} min/session${stats.totalCalories > 0 ? `, total ~${stats.totalCalories} kcal` : ''}`;
+      }
       return `- ${type}: ${stats.count}x, śr. ${avgMin} min/sesja${stats.totalCalories > 0 ? `, łącznie ~${stats.totalCalories} kcal` : ''}`;
     });
     const totalWorkouts = workoutRows.length;
     const avgPerWeek = Math.round(totalWorkouts / TRAINING_PLAN_LOOKBACK_WEEKS * 10) / 10;
 
     const bodyLines = [];
-    if (latestBody?.weight) bodyLines.push(`Waga: ${latestBody.weight} kg`);
-    if (latestBody?.fat_ratio) bodyLines.push(`Tkanka tłuszczowa: ${Math.round(latestBody.fat_ratio * 10) / 10}%`);
-    if (latestBody?.muscle_mass) bodyLines.push(`Masa mięśniowa: ${Math.round(latestBody.muscle_mass * 10) / 10} kg`);
+    if (latestBody?.weight) bodyLines.push(language === 'en' ? `Weight: ${latestBody.weight} kg` : `Waga: ${latestBody.weight} kg`);
+    if (latestBody?.fat_ratio) bodyLines.push(language === 'en' ? `Body fat: ${Math.round(latestBody.fat_ratio * 10) / 10}%` : `Tkanka tłuszczowa: ${Math.round(latestBody.fat_ratio * 10) / 10}%`);
+    if (latestBody?.muscle_mass) bodyLines.push(language === 'en' ? `Muscle mass: ${Math.round(latestBody.muscle_mass * 10) / 10} kg` : `Masa mięśniowa: ${Math.round(latestBody.muscle_mass * 10) / 10} kg`);
 
     const goalLines = [];
-    if (userRow?.body_goal_text) goalLines.push(`Cel sylwetki: ${userRow.body_goal_text}`);
-    if (targetWeightKg) goalLines.push(`Cel wagowy: ${targetWeightKg} kg`);
-    if (targetBodyFatPct) goalLines.push(`Docelowy % tkanki tłuszczowej: ${targetBodyFatPct}%`);
+    if (userRow?.body_goal_text) goalLines.push(language === 'en' ? `Body goal: ${userRow.body_goal_text}` : `Cel sylwetki: ${userRow.body_goal_text}`);
+    if (targetWeightKg) goalLines.push(language === 'en' ? `Weight target: ${targetWeightKg} kg` : `Cel wagowy: ${targetWeightKg} kg`);
+    if (targetBodyFatPct) goalLines.push(language === 'en' ? `Target % body fat: ${targetBodyFatPct}%` : `Docelowy % tkanki tłuszczowej: ${targetBodyFatPct}%`);
 
     const recoveryLines = [];
-    if (avg7dReadiness != null) recoveryLines.push(`Gotowość Oura (7d śr.): ${avg7dReadiness} pkt`);
-    if (avg7dHrv != null) recoveryLines.push(`HRV (7d śr.): ${avg7dHrv} ms`);
-    if (avg7dRhr != null) recoveryLines.push(`Tętno spoczynkowe (7d śr.): ${avg7dRhr} bpm`);
+    if (avg7dReadiness != null) recoveryLines.push(language === 'en' ? `Oura Readiness (7d avg): ${avg7dReadiness} pts` : `Gotowość Oura (7d śr.): ${avg7dReadiness} pkt`);
+    if (avg7dHrv != null) recoveryLines.push(language === 'en' ? `HRV (7d avg): ${avg7dHrv} ms` : `HRV (7d śr.): ${avg7dHrv} ms`);
+    if (avg7dRhr != null) recoveryLines.push(language === 'en' ? `Resting HR (7d avg): ${avg7dRhr} bpm` : `Tętno spoczynkowe (7d śr.): ${avg7dRhr} bpm`);
 
-    const prompt = `Jesteś doświadczonym trenerem personalnym specjalizującym się w rekomozycji ciała i redukcji tkanki tłuszczowej. Przeanalizuj poniższe dane i oceń plan treningowy użytkownika.
+    let prompt = '';
+    if (language === 'en') {
+      prompt = `You are an experienced personal trainer specializing in body recomposition and fat loss. Analyze the following data and evaluate the user's training plan.
+
+=== GOAL ===
+${goalLines.length > 0 ? goalLines.join('\n') : 'No goal data'}
+
+=== BODY COMPOSITION ===
+${bodyLines.length > 0 ? bodyLines.join('\n') : 'No data'}
+
+=== WORKOUTS (last ${TRAINING_PLAN_LOOKBACK_WEEKS} weeks) ===
+Total: ${totalWorkouts} workouts (avg ${avgPerWeek}/week)
+${workoutSummaryLines.length > 0 ? workoutSummaryLines.join('\n') : '- No workouts in this period'}
+
+=== RECOVERY SIGNALS ===
+${recoveryLines.length > 0 ? recoveryLines.join('\n') : 'No recovery data'}
+
+Respond EXCLUSIVELY in JSON format (no markdown, no explanation outside JSON):
+{
+  "assessment": "Short assessment of the current plan (1-2 sentences in English)",
+  "missing": ["Element1 that is missing", "Element2"],
+  "suggestions": [
+    {"title": "Suggestion Title", "description": "Specific description of what to do and why (in English)"},
+    {"title": "Title", "description": "Description"}
+  ],
+  "overallRating": 7
+}
+
+overallRating is an integer from 1 to 10 (1=very bad plan, 10=ideal). DO NOT use strings like "good" - only a number.
+Be specific and practical. Max 3 suggestions. Respond only in English.`;
+    } else {
+      prompt = `Jesteś doświadczonym trenerem personalnym specjalizującym się w rekomozycji ciała i redukcji tkanki tłuszczowej. Przeanalizuj poniższe dane i oceń plan treningowy użytkownika.
 
 === CEL ===
 ${goalLines.length > 0 ? goalLines.join('\n') : 'Brak danych o celu'}
@@ -4592,6 +4747,7 @@ Odpowiedz WYŁĄCZNIE w formacie JSON (bez markdown, bez objaśnień poza JSON):
 
 overallRating to liczba całkowita od 1 do 10 (1=bardzo zły plan, 10=idealny). NIE używaj stringów jak "good" - tylko liczba.
 Bądź konkretny i praktyczny. Maks. 3 sugestie. Odpowiadaj tylko po polsku.`;
+    }
 
     let insightJson = null;
     try {

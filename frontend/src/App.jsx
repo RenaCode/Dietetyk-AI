@@ -5,6 +5,7 @@ import ActivityTracker from './components/ActivityTracker';
 import Settings from './components/Settings';
 import AdminPanel from './components/AdminPanel';
 import Trends from './components/Trends';
+import { t, setLanguage, getLanguage } from './utils/i18n';
 
 // Pomocnicza funkcja pobierająca dzisiejszą datę w formacie YYYY-MM-DD
 function getLocalDateString() {
@@ -28,6 +29,7 @@ function AppFooter() {
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState('dashboard');
+  const [appLang, setAppLang] = useState(getLanguage());
   const [selectedDate, setSelectedDate] = useState(getLocalDateString());
   const [sessionToken, setSessionToken] = useState(localStorage.getItem('diet_session_token') || '');
   // UWAGA: poprzednio domyślnie 'admin' - podpowiadało nazwę konta administratora
@@ -386,6 +388,10 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setUserProfile(data);
+        if (data.language) {
+          setAppLang(data.language);
+          setLanguage(data.language);
+        }
       } else if (res.status === 401) {
         // Wcześniej brak obsługi 401 w tym miejscu (w przeciwieństwie do
         // fetchSyncToken/fetchDashboardData) - sesja wygasała "po cichu":
@@ -399,6 +405,26 @@ export default function App() {
     } catch (err) {
       console.error('Błąd pobierania profilu:', err);
       setErrorMessage('Błąd połączenia z serwerem podczas pobierania profilu.');
+    }
+  };
+
+  const handleLanguageChange = async (newLang) => {
+    setAppLang(newLang);
+    setLanguage(newLang);
+    if (sessionToken) {
+      try {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${sessionToken}`
+          },
+          body: JSON.stringify({ language: newLang })
+        });
+        fetchUserProfile();
+      } catch (err) {
+        console.error(err);
+      }
     }
   };
 
@@ -893,11 +919,37 @@ export default function App() {
   if (!sessionToken) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', minHeight: '90vh', padding: '16px', position: 'relative', zIndex: 10 }}>
+        <div style={{ position: 'absolute', top: '16px', right: '16px', display: 'flex', gap: '8px', zIndex: 20 }}>
+          <button 
+            onClick={() => handleLanguageChange('pl')} 
+            style={{ 
+              background: appLang === 'pl' ? 'var(--accent-glow)' : 'transparent', 
+              border: '1px solid var(--border-glass)', 
+              color: 'var(--text-main)', 
+              padding: '6px 12px', 
+              borderRadius: '6px', 
+              cursor: 'pointer',
+              fontWeight: appLang === 'pl' ? 'bold' : 'normal'
+            }}
+          >🇵🇱 PL</button>
+          <button 
+            onClick={() => handleLanguageChange('en')} 
+            style={{ 
+              background: appLang === 'en' ? 'var(--accent-glow)' : 'transparent', 
+              border: '1px solid var(--border-glass)', 
+              color: 'var(--text-main)', 
+              padding: '6px 12px', 
+              borderRadius: '6px', 
+              cursor: 'pointer',
+              fontWeight: appLang === 'en' ? 'bold' : 'normal'
+            }}
+          >🇬🇧 EN</button>
+        </div>
         <div className="glass-card" style={{ width: '100%', maxWidth: '400px', textAlign: 'center', marginBottom: '20px' }}>
           <span style={{ fontSize: '3rem' }}>🥗</span>
           <h2 style={{ fontFamily: 'var(--font-display)', fontSize: '2rem', marginBottom: '10px' }}>Dietetyk AI</h2>
           <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '24px' }}>
-            Twój osobisty asystent żywieniowy.
+            {t("Twój osobisty asystent żywieniowy.")}
           </p>
 
           {loginError && (
@@ -909,7 +961,7 @@ export default function App() {
           {isPublicRegister ? (
             <form onSubmit={handlePublicRegister} style={{ display: 'flex', flexDirection: 'column', gap: '16px', textAlign: 'left' }}>
               <div className="input-group">
-                <label className="input-label">Nazwa użytkownika (login)</label>
+                <label className="input-label">{t("Nazwa użytkownika")}</label>
                 <input
                   type="text"
                   className="input-field"
@@ -1186,38 +1238,38 @@ export default function App() {
             className={`nav-tab ${currentTab === 'dashboard' ? 'active' : ''}`}
             onClick={() => setCurrentTab('dashboard')}
           >
-            Dashboard
+            {t("Dashboard")}
           </button>
           <button
             className={`nav-tab ${currentTab === 'meals' ? 'active' : ''}`}
             onClick={() => setCurrentTab('meals')}
           >
-            Dziennik Posiłków
+            {t("Kalkulator Posiłków")}
           </button>
           <button
             className={`nav-tab ${currentTab === 'trends' ? 'active' : ''}`}
             onClick={() => setCurrentTab('trends')}
           >
-            Trendy
+            {t("Trendy")}
           </button>
           <button
             className={`nav-tab ${currentTab === 'activity' ? 'active' : ''}`}
             onClick={() => setCurrentTab('activity')}
           >
-            Aktywność
+            {t("Aktywność")}
           </button>
           <button
             className={`nav-tab ${currentTab === 'setup' ? 'active' : ''}`}
             onClick={() => setCurrentTab('setup')}
           >
-            Ustawienia
+            {t("Ustawienia")}
           </button>
           {userProfile.role === 'admin' && (
             <button
               className={`nav-tab ${currentTab === 'admin' ? 'active' : ''}`}
               onClick={() => setCurrentTab('admin')}
             >
-              Panel Admina
+              {t("Panel Admina")}
             </button>
           )}
           <button
@@ -1225,7 +1277,7 @@ export default function App() {
             onClick={handleLogout}
             style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.15)' }}
           >
-            Wyloguj
+            {t("Wyloguj")}
           </button>
         </nav>
       </header>
@@ -1262,7 +1314,7 @@ export default function App() {
       <main>
         {currentTab === 'dashboard' && (
           <div className="premium-tab-content">
-            <Dashboard summary={dashboardData.summary} aiAdvice={dashboardData.aiAdvice} sessionToken={sessionToken} selectedDate={selectedDate} onNavigate={setCurrentTab} onRefresh={fetchDashboardData} onLogout={handleLogout} userProfile={userProfile} />
+            <Dashboard summary={dashboardData.summary} aiAdvice={dashboardData.aiAdvice} sessionToken={sessionToken} selectedDate={selectedDate} onNavigate={setCurrentTab} onRefresh={fetchDashboardData} onLogout={handleLogout} userProfile={userProfile} language={appLang} />
           </div>
         )}
 
@@ -1275,25 +1327,26 @@ export default function App() {
               isAnalyzing={isAnalyzing}
               frequentMeals={frequentMeals}
               onRepeatMeal={handleRepeatMeal}
+              language={appLang}
             />
           </div>
         )}
 
         {currentTab === 'activity' && (
           <div className="premium-tab-content">
-            <ActivityTracker summary={dashboardData.summary} userProfile={userProfile} sessionToken={sessionToken} onGoalsUpdate={fetchDashboardData} onLogout={handleLogout} />
+            <ActivityTracker summary={dashboardData.summary} userProfile={userProfile} sessionToken={sessionToken} onGoalsUpdate={fetchDashboardData} onLogout={handleLogout} language={appLang} />
           </div>
         )}
 
         {currentTab === 'trends' && (
           <div className="premium-tab-content">
-            <Trends selectedDate={selectedDate} sessionToken={sessionToken} onLogout={handleLogout} />
+            <Trends selectedDate={selectedDate} sessionToken={sessionToken} onLogout={handleLogout} language={appLang} />
           </div>
         )}
 
         {currentTab === 'setup' && (
           <div className="premium-tab-content">
-            <Settings syncToken={syncToken} sessionToken={sessionToken} userProfile={userProfile} onProfileUpdate={() => { fetchUserProfile(); fetchSyncToken(); fetchDashboardData(); }} onLogout={handleLogout} />
+            <Settings syncToken={syncToken} sessionToken={sessionToken} userProfile={userProfile} onProfileUpdate={() => { fetchUserProfile(); fetchSyncToken(); fetchDashboardData(); }} onLogout={handleLogout} onLanguageChange={handleLanguageChange} />
           </div>
         )}
 

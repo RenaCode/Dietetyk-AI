@@ -129,6 +129,7 @@ router.get('/api/user/profile', async (req, res) => {
     const monthlyEnabledRow = await db.get(`SELECT value FROM settings WHERE user_id = ? AND key = 'monthly_summary_enabled'`, [req.user.id]);
     const monthlyDayRow = await db.get(`SELECT value FROM settings WHERE user_id = ? AND key = 'monthly_summary_day'`, [req.user.id]);
     const monthlyTimeRow = await db.get(`SELECT value FROM settings WHERE user_id = ? AND key = 'monthly_summary_time'`, [req.user.id]);
+    const langRow = await db.get(`SELECT value FROM settings WHERE user_id = ? AND key = 'language'`, [req.user.id]);
 
     const hasOuraRow = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'oura'`, [req.user.id]);
     const hasWithingsRow = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'withings'`, [req.user.id]);
@@ -156,6 +157,7 @@ router.get('/api/user/profile', async (req, res) => {
       monthly_summary_enabled: monthlyEnabledRow ? monthlyEnabledRow.value === '1' : false,
       monthly_summary_day: monthlyDayRow ? Number(monthlyDayRow.value) : 1,
       monthly_summary_time: monthlyTimeRow ? monthlyTimeRow.value : '09:00',
+      language: langRow ? langRow.value : 'pl',
       has_oura: !!hasOuraRow,
       has_withings: !!hasWithingsRow,
       has_google: !!user.google_id,

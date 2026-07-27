@@ -119,9 +119,55 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
       }
     }
 
+    const apiKeyRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'gemini_api_key'", [req.user.id]);
+    const userApiKey = apiKeyRow ? decrypt(apiKeyRow.value) : null;
+    const forceCustomKeyOnly = req.user.role !== 'admin';
+    const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
+    const language = langRow ? langRow.value : 'pl';
+
     let prompt = '';
     if (imagePart) {
-      prompt = `
+      if (language === 'en') {
+        prompt = `
+Analyze the attached photo for nutritional value.
+${safeRawText ? `The user provided additional context/description: <user_input>${safeRawText}</user_input>` : 'The user did not provide a text description, identify the dishes in the photo yourself.'}
+
+IMPORTANT - the photo may show a SINGLE meal (e.g., a photo of a plate) OR a screenshot from a calorie tracking app showing a breakdown of the entire day into several separate meals (e.g., sections "Breakfast", "Lunch", "Dinner", each with its own items and calories/macro sum).
+- If you see a clear division into several sections/meals on the photo, return in the "meals" array ONE object for EACH detected section, each with its own separate nutritional values - DO NOT sum them into one entry. Use the meal label visible in the photo as "name" (e.g., "Breakfast", "Lunch", "Dinner").
+- If there is only one meal/dish on the photo, without a division into sections, return the "meals" array with ONE element, and use a short name of the recognized dish as "name" (e.g., "Oatmeal with banana and nuts").
+
+Return the response in JSON format. The response must be strictly valid JSON, without any additional markdown formatting or text before/after.
+
+JSON Structure:
+{
+  "meals": [
+    {
+      "name": "meal name/label detected in the photo (see instructions above)",
+      "calories": (integer - kcal for THIS meal),
+      "protein": (number - grams of protein),
+      "carbs": (number - grams of carbohydrates),
+      "fat": (number - grams of fat),
+      "fiber": (number - grams of fiber, estimated based on ingredients),
+      "sugar": (number - grams of simple sugars, estimated based on ingredients),
+      "sodium": (number - milligrams of sodium, estimated based on ingredients),
+      "food_items": [
+        {
+          "name": "name of identified ingredient (e.g., fried egg, boiled potatoes, chicken breast)",
+          "portion": "portion size estimated from the photo (e.g., 2 pieces, 150g, 1 cup)",
+          "calories": (number - kcal),
+          "protein": (number - g),
+          "carbs": (number - g),
+          "fat": (number - g)
+        }
+      ],
+      "dietician_comment": "A short, professional dietician comment in English (max 3 sentences) regarding THIS meal. Evaluate balance, pros, cons, and suggestions for improvement.",
+      "health_rating": (integer from 1 to 10, where 1 is very unhealthy and 10 is super healthy and balanced)
+    }
+  ]
+}
+`;
+      } else {
+        prompt = `
 Przeanalizuj dołączone zdjęcie pod kątem wartości odżywczych.
 ${safeRawText ? `Użytkownik podał dodatkowy kontekst/opis: <user_input>${safeRawText}</user_input>` : 'Użytkownik nie podał opisu tekstowego, zidentyfikuj dania na zdjęciu samodzielnie.'}
 
@@ -167,8 +213,40 @@ Struktura JSON:
   ]
 }
 `;
+      }
     } else {
-      prompt = `
+      if (language === 'en') {
+        prompt = `
+You are analyzing the user's meal for nutritional value.
+The user wrote: <user_input>${safeRawText}</user_input>
+
+Return the response in JSON format containing estimated nutritional values of the meal. The response must be strictly valid JSON, without any additional markdown formatting or text before/after.
+
+JSON Structure:
+{
+  "calories": (integer - kcal for the entire meal),
+  "protein": (number - grams of protein),
+  "carbs": (number - grams of carbohydrates),
+  "fat": (number - grams of fat),
+  "fiber": (number - grams of fiber, estimated based on ingredients),
+  "sugar": (number - grams of simple sugars, estimated based on ingredients),
+  "sodium": (number - milligrams of sodium, estimated based on ingredients),
+  "food_items": [
+    {
+      "name": "ingredient name (e.g., egg, wheat bread)",
+      "portion": "portion size specified by the user or default estimated (e.g., 2 pieces, 100g)",
+      "calories": (number - kcal),
+      "protein": (number - g),
+      "carbs": (number - g),
+      "fat": (number - g)
+    }
+  ],
+  "dietician_comment": "A short, professional dietician comment in English (max 3 sentences). Evaluate balance, pros, cons, and suggestions for improvement.",
+  "health_rating": (integer from 1 to 10, where 1 is very unhealthy e.g. fast food, and 10 is super healthy and balanced)
+}
+`;
+      } else {
+        prompt = `
 Analizujesz posiłek użytkownika pod kątem wartości odżywczych. 
 Użytkownik napisał: <user_input>${safeRawText}</user_input>
 
@@ -197,11 +275,9 @@ Struktura JSON:
   "health_rating": (liczba całkowita od 1 do 10, gdzie 1 to bardzo niezdrowe np. fast food, a 10 to super zdrowe i zbilansowane)
 }
 `;
+      }
     }
 
-    const apiKeyRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'gemini_api_key'", [req.user.id]);
-    const userApiKey = apiKeyRow ? decrypt(apiKeyRow.value) : null;
-    const forceCustomKeyOnly = req.user.role !== 'admin';
     const responseText = await generateContentWithFallback(prompt, true, imagePart, userApiKey, forceCustomKeyOnly);
     let analysis;
     try {

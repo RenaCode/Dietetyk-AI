@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { t } from '../utils/i18n';
 
-export default function Settings({ syncToken, sessionToken, userProfile = { username: '', avatar_base64: '' }, onProfileUpdate, onLogout }) {
+export default function Settings({ syncToken, sessionToken, userProfile = { username: '', avatar_base64: '' }, onProfileUpdate, onLogout, onLanguageChange }) {
   const [settings, setSettings] = useState({
     target_calories: 2500,
     target_protein: 150,
@@ -96,6 +97,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   const [monthlySummaryEnabled, setMonthlySummaryEnabled] = useState(userProfile.monthly_summary_enabled || false);
   const [monthlySummaryDay, setMonthlySummaryDay] = useState(userProfile.monthly_summary_day || 1);
   const [monthlySummaryTime, setMonthlySummaryTime] = useState(userProfile.monthly_summary_time || '09:00');
+  const [languageInput, setLanguageInput] = useState(userProfile.language || 'pl');
 
   // Stan zarządzania 2FA
   const [isSettingUp2fa, setIsSettingUp2fa] = useState(false);
@@ -138,6 +140,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
     if (userProfile.monthly_summary_time !== undefined) {
       setMonthlySummaryTime(userProfile.monthly_summary_time);
+    }
+    if (userProfile.language !== undefined) {
+      setLanguageInput(userProfile.language);
     }
   }, [userProfile]);
 
@@ -1258,6 +1263,24 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 placeholder="np. jan.kowalski@example.com"
                 required
               />
+            </div>
+
+            <div className="input-group">
+              <label className="input-label">{t("Język")}</label>
+              <select
+                className="input-field"
+                value={languageInput}
+                onChange={(e) => {
+                  const newLang = e.target.value;
+                  setLanguageInput(newLang);
+                  if (onLanguageChange) {
+                    onLanguageChange(newLang);
+                  }
+                }}
+              >
+                <option value="pl">Polski / Polish</option>
+                <option value="en">Angielski / English</option>
+              </select>
             </div>
 
             {/* Połączenie konta z Google - niezależne od logowania Google (które łączy

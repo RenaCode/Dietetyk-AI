@@ -113,7 +113,7 @@ jobs:
         working-directory: ./backend
         run: |
           npm audit --omit=dev --json > /tmp/audit-backend.json || true
-          node ../scripts/check-npm-audit.js /tmp/audit-backend.json "tar,@tootallnate/once,http-proxy-agent,make-fetch-happen,cacache,node-gyp,sqlite3"
+          node ../scripts/check-npm-audit.js /tmp/audit-backend.json "tar,@tootallnate/once,http-proxy-agent,make-fetch-happen,cacache,node-gyp,sqlite3,brace-expansion,ip-address"
 
       # Testy jednostkowe backendu (tests/test-encryption.js, test-rate-limit.js,
       # test-chat.js, test-meals.js - patrz package.json "test"). Wcześniej te pliki

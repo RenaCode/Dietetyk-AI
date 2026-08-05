@@ -86,7 +86,17 @@ function verifyOAuthState(state) {
   if (parts.length === 4) {
     const [userId, service, salt, hmac] = parts;
     const expectedHmac = crypto.createHmac('sha256', OAUTH_STATE_SECRET).update(`${userId}:${service}:${salt}`).digest('hex');
-    if (hmac === expectedHmac) {
+    // Bug fix: porównanie HMAC-ów przez `===` porównuje string bajt po bajcie i
+    // przerywa na pierwszej różnicy, co teoretycznie ujawnia przez czas odpowiedzi,
+    // ile początkowych znaków zgadza się z oczekiwanym HMAC-em (timing attack) -
+    // ten sam typ ryzyka, przed którym reszta pliku świadomie chroni (patrz komentarz
+    // o CSPRNG w generateOAuthState). crypto.timingSafeEqual porównuje w stałym
+    // czasie; wymaga buforów o równej długości, więc najpierw porównujemy długość
+    // (sama długość HMAC-a SHA-256 w hex jest stała i nie jest sekretem).
+    const hmacBuf = Buffer.from(hmac, 'utf8');
+    const expectedBuf = Buffer.from(expectedHmac, 'utf8');
+    const hmacValid = hmacBuf.length === expectedBuf.length && crypto.timingSafeEqual(hmacBuf, expectedBuf);
+    if (hmacValid) {
       return { userId: parseInt(userId, 10), service };
     }
   }

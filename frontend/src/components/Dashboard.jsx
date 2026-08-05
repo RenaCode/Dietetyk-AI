@@ -194,7 +194,7 @@ const getLast7Days = (endDateStr) => {
   return days;
 };
 
-export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDate, onNavigate, onRefresh, onLogout, userProfile = {} }) {
+export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDate, onNavigate, onRefresh, onLogout, userProfile = {}, language = 'pl' }) {
   const [historyData, setHistoryData] = useState([]);
   // Centralny sygnał wygaśnięcia sesji dla ~40 insight useEffectów — zamiast
   // wywoływać onLogout() bezpośrednio (co wymagałoby dodania go do dep-array każdego
@@ -1810,6 +1810,17 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   // "Czas czuwania" jest dlatego ukrywana w renderze, żeby nie pokazywać fałszywego 0m.
   const sleepAwakeMins = 0;
   const sleepLightHours = Math.max(sleepDurationHours - sleepDeepHours - sleepRemHours - (sleepAwakeMins / 60), 0);
+  // Rozbicie godz/min do karty "Czas snu" - ten sam wzorzec zaokrąglania co w
+  // formatHoursMins (utils/format.js), ale zwracający osobne liczby zamiast
+  // gotowego stringa (DailyGoalCard przyjmuje val1/val2 osobno). Bug fix: bez
+  // przeniesienia "min === 60" do kolejnej godziny, wartości blisko pełnej
+  // godziny (np. 7.995h) pokazywały się jako "7 godz 60 min" zamiast "8 godz 0 min".
+  const sleepDurationDisplay = (() => {
+    let hours = Math.floor(sleepDurationHours);
+    let mins = Math.round((sleepDurationHours - hours) * 60);
+    if (mins === 60) { hours += 1; mins = 0; }
+    return { hours, mins };
+  })();
 
   // rhr/hrv: 0 byłoby fizjologicznie nierealną wartością, więc tu (w odróżnieniu od
   // np. steps) używamy ?? null, żeby odróżnić "brak danych" od realnego pomiaru.
@@ -2320,9 +2331,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             />
             <DailyGoalCard
               title="Czas snu"
-              val1={String(Math.floor(sleepDurationHours))}
+              val1={String(sleepDurationDisplay.hours)}
               unit1="godz"
-              val2={String(Math.round((sleepDurationHours - Math.floor(sleepDurationHours)) * 60))}
+              val2={String(sleepDurationDisplay.mins)}
               unit2="min"
               percentage={goalProgressPct(sleepDurationHours, summary?.target_sleep_duration ?? 7.2)}
               barType="gradient"

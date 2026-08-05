@@ -135,7 +135,6 @@ const TRANSLATIONS = {
   "Kalorie i Makroskładniki": "Calories & Macronutrients",
   "Wskaźniki Zdrowotne": "Health Indicators",
   "Waga i tkanka tłuszczowa": "Weight and Body Fat",
-  "Masa mięśniowa": "Muscle Mass",
   "Kaloryczność i bilans netto": "Calorie Intake & Net Balance",
   "Rozkład makroskładników (średnia 7-dniowa)": "Macronutrient Distribution (7-day average)",
   "Tętno spoczynkowe i HRV": "Resting Heart Rate and HRV",

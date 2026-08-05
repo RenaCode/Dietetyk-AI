@@ -9,7 +9,14 @@ export function formatHoursMins(hoursDecimal) {
   if (hoursDecimal === null || hoursDecimal === undefined || isNaN(hoursDecimal)) {
     return '--';
   }
-  const hours = Math.floor(hoursDecimal);
-  const mins = Math.round((hoursDecimal - hours) * 60);
+  let hours = Math.floor(hoursDecimal);
+  let mins = Math.round((hoursDecimal - hours) * 60);
+  // Bug fix: dla wartości blisko pełnej godziny (np. 7.995) Math.round() potrafił
+  // dać 60 minut zamiast przeniesienia do kolejnej godziny - wyświetlało się
+  // "7h 60m" zamiast "8h 0m".
+  if (mins === 60) {
+    hours += 1;
+    mins = 0;
+  }
   return `${hours}h ${mins}m`;
 }

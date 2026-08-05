@@ -4,6 +4,7 @@ const { getLocalDateString } = require('../utils/dates');
 const { sendMailgunEmail } = require('./mailgun');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
 const { decrypt } = require('../utils/encryption');
+const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 
 // ===== Wspólne funkcje pomocnicze (wydzielone z duplikacji w 3 funkcjach poniżej) =====
 
@@ -640,6 +641,14 @@ async function sendDailySummaryForUser(userId, customEmail = null) {
   const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [userId]);
   const language = langRow ? langRow.value : 'pl';
 
+  // Aktualna pogoda i pora dnia (Zadanie: algorytm ma znać i uwzględniać w
+  // analizie bieżącą pogodę/czas - patrz utils/weatherContext.js), pobierana
+  // automatycznie z Open-Meteo, bez żadnego wpisywania przez użytkownika.
+  // Lokalizacja: własna użytkownika (Ustawienia -> Lokalizacja), jeśli
+  // ustawiona, inaczej domyślna lokalizacja wdrożenia.
+  const userLocation = await getUserLocationOverride(userId);
+  const weatherTimeContext = await getWeatherAndTimeContext(language, userLocation?.lat, userLocation?.lon);
+
   let advicePrompt = '';
   if (language === 'en') {
     advicePrompt = `
@@ -657,6 +666,9 @@ Today's Balance:
 - Net balance (eaten - burned): ${netCalories} kcal
 - Steps today: ${health.steps || 0}
 - Water intake today: ${health.water_ml || 0}ml (target: ${targetWaterMl}ml)
+
+Current time and weather (context, not a user-logged metric):
+${weatherTimeContext}
 
 Oura Sleep/Readiness & Withings Body Composition:
 - Sleep Score: ${health.sleep_score !== null ? health.sleep_score + '/100' : 'no data'} (Duration: ${health.sleep_duration || 0}h, Deep: ${health.sleep_deep || 0}h, REM: ${health.sleep_rem || 0}h)
@@ -691,6 +703,9 @@ Aktualny bilans dzisiejszy:
 - Bilans netto (zjedzone - spalone): ${netCalories} kcal
 - Wykonane kroki dzisiaj: ${health.steps || 0}
 - Wypita woda dzisiaj: ${health.water_ml || 0}ml (cel: ${targetWaterMl}ml)
+
+Aktualny czas i pogoda (kontekst, nie metryka zapisana przez użytkownika):
+${weatherTimeContext}
 
 Dane gotowości, snu (Oura) i składu ciała (Withings):
 - Wynik Snu: ${health.sleep_score !== null ? health.sleep_score + '/100' : 'Brak danych'} (Czas trwania: ${health.sleep_duration || 0}h, Głęboki: ${health.sleep_deep || 0}h, REM: ${health.sleep_rem || 0}h)

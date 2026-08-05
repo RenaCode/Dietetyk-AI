@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
-const { getLocalDateString } = require('../utils/dates');
+const { getLocalDateString, getWarsawWallClock } = require('../utils/dates');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
 const { getCalorieBaseline, detectMealAnomalies } = require('../utils/mealAnomaly');
 const { DEFAULT_TARGET_WATER_ML, getTargetCalories, getBmr, getTargetWaterMl } = require('../utils/defaultSettings');
@@ -10,6 +10,7 @@ const { genAI, generateContentWithFallback } = require('../config');
 const { buildGoalPaceAnalysis } = require('../services/summaries');
 const { getDayEventsInRange, formatDayEventsForPrompt } = require('../utils/dayEvents');
 const { decrypt } = require('../utils/encryption');
+const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 
 // Blokada równoległego generowania porady AI dla tej samej (user, data) - bez tego
 // kilka odświeżeń dashboardu w krótkim czasie (np. otwarcie kilku zakładek albo
@@ -127,7 +128,15 @@ router.get('/api/dashboard', async (req, res) => {
     // jeśli użytkownik nie podał roku urodzenia w profilu, zwracamy null, a front
     // sam wraca do fallbacku 190.
     const userRow = await db.get('SELECT birth_year FROM users WHERE id = ?', [req.user.id]);
-    const currentYear = new Date().getFullYear();
+    // Bug fix: rok liczony przez getWarsawWallClock (nie goły `new Date()`, który
+    // bierze strefę procesu Node) - na hostingu w UTC, w oknie ok. 22:00-23:59
+    // czasu Europe/Warsaw pierwszego dnia stycznia... a właściwie odwrotnie: w
+    // oknie 00:00-01:59 1 stycznia czasu warszawskiego (czyli jeszcze 31 grudnia
+    // w UTC), `new Date().getFullYear()` zwracał POPRZEDNI rok, więc HRmax
+    // (Karvonen) był liczony o rok "za młodo" dla użytkownika przez ok. 2h w
+    // Sylwestra - ten sam wzorzec błędu, co przy getLocalDateString (patrz
+    // komentarz w utils/dates.js).
+    const currentYear = getWarsawWallClock().getUTCFullYear();
     const userMaxHr = userRow && userRow.birth_year ? (220 - (currentYear - userRow.birth_year)) : null;
 
     // Posiłki z dzisiaj
@@ -496,6 +505,16 @@ router.get('/api/dashboard', async (req, res) => {
         const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
         const language = langRow ? langRow.value : 'pl';
 
+        // Aktualna pogoda i pora dnia (Zadanie: algorytm ma znać i uwzględniać w
+        // analizie bieżącą pogodę/czas - patrz utils/weatherContext.js). Ta porada
+        // jest cache'owana do 4h (patrz hasValidCache powyżej), więc "aktualność"
+        // pogody jest w tej samej rozdzielczości co reszta porady - to spójne z
+        // resztą tej funkcji, nie żywy odczyt przy każdym GET /api/dashboard.
+        // Lokalizacja: własna użytkownika (Ustawienia -> Lokalizacja), jeśli
+        // ustawiona, inaczej domyślna lokalizacja wdrożenia.
+        const userLocation = await getUserLocationOverride(req.user.id);
+        const weatherTimeContext = await getWeatherAndTimeContext(language, userLocation?.lat, userLocation?.lon);
+
         let advicePrompt = '';
         if (language === 'en') {
           advicePrompt = `
@@ -526,6 +545,9 @@ Today's Balance:
     return base;
   }).join(', ') : 'no registered workouts'}
 - Calorie target streak: ${calorieStreakDays} days, Sleep target streak: ${sleepStreakDays} days
+
+Current time and weather (context, not a user-logged metric):
+${weatherTimeContext}
 
 Oura Sleep/Readiness & Withings Body Composition:
 - Sleep Score: ${displaySleepScore !== null ? displaySleepScore + '/100' : 'no data'} (Duration: ${displaySleepDuration || 0}h, Deep: ${displaySleepDeep || 0}h, REM: ${displaySleepRem || 0}h)
@@ -620,6 +642,9 @@ Aktualny bilans dzisiejszy:
     return base;
   }).join(', ') : 'brak zarejestrowanych treningów'}
 - Passa (streak) trafiania w cel kaloryczny: ${calorieStreakDays} dni, Passa snu wg celu: ${sleepStreakDays} dni
+
+Aktualny czas i pogoda (kontekst, nie metryka zapisana przez użytkownika):
+${weatherTimeContext}
 
 Dane gotowości, snu (Oura) i składu ciała (Withings):
 - Wynik Snu: ${displaySleepScore !== null ? displaySleepScore + '/100' : 'Brak danych'} (Czas trwania: ${displaySleepDuration || 0}h, Głęboki: ${displaySleepDeep || 0}h, REM: ${displaySleepRem || 0}h)

@@ -17,7 +17,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     withings_client_id: '',
     withings_client_secret: '',
     withings_redirect_uri: '',
-    gemini_api_key: ''
+    gemini_api_key: '',
+    weather_lat: '',
+    weather_lon: '',
+    weather_location_label: ''
   });
 
   const [isSaving, setIsSaving] = useState(false);
@@ -47,6 +50,18 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   const [isPasswordOpen, setIsPasswordOpen] = useState(false);
   const [is2faOpen, setIs2faOpen] = useState(false);
   const [isDietGoalsOpen, setIsDietGoalsOpen] = useState(false);
+
+  // Lokalizacja użytkownika dla kontekstu pogody wstrzykiwanego do promptów AI
+  // (patrz backend/utils/weatherContext.js) - domyślnie serwer używa stałej
+  // lokalizacji (Trzebnica), ale użytkownik może ją nadpisać wyszukując swoją
+  // miejscowość. Wynik wyszukiwania (weather_lat/weather_lon/weather_location_label)
+  // trafia do zwykłego stanu `settings` i jest zapisywany razem z resztą
+  // ustawień przez istniejący handleSave/POST /api/settings - bez osobnego
+  // zapisu, żeby nie dublować logiki.
+  const [locationQuery, setLocationQuery] = useState('');
+  const [locationResults, setLocationResults] = useState([]);
+  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
+  const [locationMessage, setLocationMessage] = useState({ type: '', text: '' });
 
   // Stan eksportu danych i usuwania konta (RODO/GDPR)
   const [isExportingData, setIsExportingData] = useState(false);
@@ -327,6 +342,63 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     } finally {
       setIsSaving(false);
     }
+  };
+
+  // Wyszukiwanie miejscowości (Open-Meteo Geocoding, patrz GET /api/settings/geocode-location
+  // w backend/routes/account.js) - NIE zapisuje nic samo z siebie, tylko pokazuje
+  // listę kandydatów do wyboru (jedna nazwa typu "Malin" bywa niejednoznaczna -
+  // istnieje wiele miejscowości o tej samej nazwie na świecie).
+  const handleSearchLocation = async (e) => {
+    if (e) e.preventDefault();
+    const query = locationQuery.trim();
+    if (!query) return;
+    setIsSearchingLocation(true);
+    setLocationMessage({ type: '', text: '' });
+    setLocationResults([]);
+    try {
+      const res = await fetch(`/api/settings/geocode-location?q=${encodeURIComponent(query)}`, {
+        headers: { 'Authorization': `Bearer ${sessionToken}` }
+      });
+      if (res.status === 401) { if (onLogout) onLogout(); return; }
+      const data = await res.json();
+      if (!res.ok) {
+        setLocationMessage({ type: 'error', text: data.error || 'Błąd wyszukiwania lokalizacji.' });
+        return;
+      }
+      if (!data.results || data.results.length === 0) {
+        setLocationMessage({ type: 'error', text: 'Nie znaleziono takiej miejscowości. Spróbuj wpisać nazwę większego, pobliskiego miasta.' });
+        return;
+      }
+      setLocationResults(data.results);
+    } catch (err) {
+      setLocationMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+    } finally {
+      setIsSearchingLocation(false);
+    }
+  };
+
+  const handleSelectLocation = (result) => {
+    const label = [result.name, result.admin1, result.country].filter(Boolean).join(', ');
+    setSettings(prev => ({
+      ...prev,
+      weather_lat: result.latitude,
+      weather_lon: result.longitude,
+      weather_location_label: label
+    }));
+    setLocationResults([]);
+    setLocationQuery('');
+    setLocationMessage({ type: 'success', text: `Wybrano: ${label}. Kliknij "Zapisz ustawienia", żeby zapisać.` });
+  };
+
+  const handleClearLocation = () => {
+    setSettings(prev => ({
+      ...prev,
+      weather_lat: '',
+      weather_lon: '',
+      weather_location_label: ''
+    }));
+    setLocationResults([]);
+    setLocationMessage({ type: 'success', text: 'Przywrócono domyślną lokalizację. Kliknij "Zapisz ustawienia", żeby zapisać.' });
   };
 
   const handleAvatarUpload = (e) => {
@@ -2018,6 +2090,94 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         )}
 
         <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* Lokalizacja dla kontekstu pogody w poradach AI (czat i codzienna porada na
+              Dashboardzie - patrz backend/utils/weatherContext.js) - domyślnie serwer
+              używa stałej lokalizacji, tu użytkownik może ją nadpisać swoją miejscowością. */}
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '16px',
+            background: 'rgba(255, 255, 255, 0.02)',
+            border: '1px solid var(--border-glass)',
+            borderRadius: '12px',
+            gap: '12px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <span style={{ fontSize: '2rem' }}>📍</span>
+              <div>
+                <strong style={{ display: 'block', color: '#fff' }}>Lokalizacja (pogoda w poradach AI)</strong>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
+                  {settings.weather_location_label
+                    ? `Aktualnie: ${settings.weather_location_label}`
+                    : 'Aktualnie: domyślna lokalizacja serwera'}
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                value={locationQuery}
+                onChange={(e) => setLocationQuery(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSearchLocation(); } }}
+                placeholder="np. Trzebnica, Wrocław, Warszawa..."
+                style={{ flex: '1 1 200px' }}
+              />
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleSearchLocation}
+                disabled={isSearchingLocation || !locationQuery.trim()}
+                style={{ padding: '8px 16px' }}
+              >
+                {isSearchingLocation ? 'Szukam...' : '🔍 Szukaj'}
+              </button>
+              {settings.weather_location_label && (
+                <button
+                  type="button"
+                  className="btn-danger"
+                  onClick={handleClearLocation}
+                  style={{ padding: '8px 16px' }}
+                >
+                  Przywróć domyślną
+                </button>
+              )}
+            </div>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+              Bardzo małe miejscowości (np. pojedyncze wsie) mogą nie być w bazie wyszukiwania -
+              w takim wypadku wyszukaj najbliższe większe miasto (pogoda w promieniu kilku km jest praktycznie taka sama).
+            </span>
+
+            {locationMessage.text && (
+              <div style={{ fontSize: '0.85rem', color: locationMessage.type === 'error' ? 'var(--danger-light)' : 'var(--success-light)' }}>
+                {locationMessage.text}
+              </div>
+            )}
+
+            {locationResults.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {locationResults.map((r, idx) => (
+                  <button
+                    key={`${r.latitude},${r.longitude},${idx}`}
+                    type="button"
+                    onClick={() => handleSelectLocation(r)}
+                    style={{
+                      textAlign: 'left',
+                      padding: '8px 12px',
+                      background: 'rgba(255, 255, 255, 0.04)',
+                      border: '1px solid var(--border-glass)',
+                      borderRadius: '8px',
+                      color: '#fff',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {[r.name, r.admin1, r.country].filter(Boolean).join(', ')}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Google Fit - źródło danych o krokach/kaloriach/aktywności, analogicznie do
               Oura/Withings, ale bez własnych Client ID/Secret (korzysta z globalnej
               konfiguracji Google ustawionej przez admina - tej samej, co logowanie Google). */}

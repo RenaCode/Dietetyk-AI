@@ -12,6 +12,7 @@ const { getAppConfig } = require('../services/oauthHelpers');
 const { summaryEmailLimiter } = require('../middleware/rateLimit');
 const { USER_SECRET_SETTING_KEYS, maskSecretValue, isMaskedSecretWrite } = require('../utils/secretKeys');
 const { encrypt } = require('../utils/encryption');
+const { geocodeLocation } = require('../utils/weatherContext');
 
 // Prosta walidacja formatu e-maila (nie pełny RFC 5322 - to wystarcza, żeby
 // odrzucić oczywiście niepoprawne wartości zapisywane bezpośrednio do bazy /
@@ -41,6 +42,11 @@ const MAX_BODY_GOAL_PHOTO_LENGTH = 4 * 1024 * 1024;
 // endpoint POST /api/user/profile zapisywał `avatar` bez ŻADNEJ walidacji rozmiaru -
 // jedyną ochroną był globalny express.json({limit:'20mb'}) w server.js.
 const MAX_AVATAR_BASE64_LENGTH = 3 * 1024 * 1024;
+// Limit długości zapytania o lokalizację (Ustawienia -> Lokalizacja pogody) -
+// zapytanie trafia do zewnętrznego Open-Meteo Geocoding, więc ogranicz rozmiar
+// zamiast przepuszczać dowolnie długi string dalej (patrz GET
+// /api/settings/geocode-location poniżej).
+const MAX_LOCATION_QUERY_LENGTH = 100;
 
 router.get('/api/settings', async (req, res) => {
   try {
@@ -111,6 +117,31 @@ router.post('/api/settings', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Błąd zapisu ustawień.' });
+  }
+});
+
+// Wyszukiwanie miejscowości dla pola "Lokalizacja" w Ustawieniach (kontekst
+// pogody wstrzykiwany do promptów AI - patrz utils/weatherContext.js). Zwraca
+// listę kandydatów do wyboru na froncie (Open-Meteo Geocoding, bez klucza API) -
+// nazwy miejscowości bywają niejednoznaczne, więc NIE wybieramy automatycznie
+// pierwszego wyniku. Sam wybór lokalizacji (POST) idzie przez istniejący,
+// generyczny endpoint POST /api/settings (weather_lat/weather_lon/
+// weather_location_label to zwykłe klucze w tabeli settings) - ten endpoint
+// tylko wyszukuje, nic nie zapisuje.
+router.get('/api/settings/geocode-location', async (req, res) => {
+  const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+  if (!query) {
+    return res.status(400).json({ error: 'Podaj nazwę miejscowości.' });
+  }
+  if (query.length > MAX_LOCATION_QUERY_LENGTH) {
+    return res.status(400).json({ error: `Zapytanie jest zbyt długie (maks. ${MAX_LOCATION_QUERY_LENGTH} znaków).` });
+  }
+  try {
+    const results = await geocodeLocation(query);
+    res.json({ results });
+  } catch (err) {
+    console.error('[GEOCODING ERROR]', err);
+    res.status(502).json({ error: 'Błąd wyszukiwania lokalizacji (usługa geokodowania jest chwilowo niedostępna).' });
   }
 });
 

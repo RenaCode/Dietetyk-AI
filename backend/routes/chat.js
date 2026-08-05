@@ -9,6 +9,7 @@ const { generateContentWithFallback } = require('../config');
 const { getTargetCalories, getBmr, getTargetWaterMl } = require('../utils/defaultSettings');
 const { getDayEventsInRange, formatDayEventsForPrompt } = require('../utils/dayEvents');
 const { decrypt } = require('../utils/encryption');
+const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 const {
   MAX_CHAT_MESSAGE_LENGTH,
   CHAT_DEFAULT_LOOKBACK_DAYS,
@@ -237,6 +238,14 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
     const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
     const language = langRow ? langRow.value : 'pl';
 
+    // Aktualna pogoda i pora dnia (Zadanie: algorytm ma znać i uwzględniać w
+    // analizie bieżącą pogodę/czas - patrz utils/weatherContext.js). Nigdy nie
+    // rzuca wyjątku, więc nie wymaga dodatkowego try/catch tutaj. Lokalizacja:
+    // własna użytkownika (Ustawienia -> Lokalizacja), jeśli ustawiona, inaczej
+    // domyślna lokalizacja wdrożenia (patrz stałe w weatherContext.js).
+    const userLocation = await getUserLocationOverride(req.user.id);
+    const weatherTimeContext = await getWeatherAndTimeContext(language, userLocation?.lat, userLocation?.lon);
+
     let chatPrompt = '';
     if (language === 'en') {
       chatPrompt = `
@@ -275,6 +284,9 @@ Current User Stats for ${queryDate}:
 - Resting Heart Rate (RHR): ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms
 - Water intake: ${health.water_ml || 0}ml (target: ${getTargetWaterMl(settings)}ml)
 - Subjective state (user rating, scale 1-5): Energy: ${health.energy_level != null ? health.energy_level + '/5' : 'not rated'}, Mood: ${health.mood != null ? health.mood + '/5' : 'not rated'}
+
+Current time and weather (context, not a user-provided metric):
+${weatherTimeContext}
 ${weeklyTrendSummary}
 ${dayEventsContext}
 ${historyContext}
@@ -319,6 +331,9 @@ Aktualne statystyki użytkownika na dzień ${queryDate}:
 - Tętno spoczynkowe: ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms
 - Wypita woda: ${health.water_ml || 0}ml (cel: ${getTargetWaterMl(settings)}ml)
 - Samopoczucie (ręczna ocena użytkownika, skala 1-5): Energia: ${health.energy_level != null ? health.energy_level + '/5' : 'nie oceniono'}, Nastrój: ${health.mood != null ? health.mood + '/5' : 'nie oceniono'}
+
+Aktualny czas i pogoda (kontekst, nie metryka wpisana przez użytkownika):
+${weatherTimeContext}
 ${weeklyTrendSummary}
 ${dayEventsContext}
 ${historyContext}

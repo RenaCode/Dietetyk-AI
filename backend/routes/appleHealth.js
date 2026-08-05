@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { parseHealthAutoExportDate, dateObjToLocalDateString } = require('../utils/dates');
+const { parseHealthAutoExportDate, dateObjToLocalDateString, getWarsawWallClock } = require('../utils/dates');
 
 // Webhook odbierający dane z apki "Health Auto Export" (iOS) - bridge między Apple Health
 // a naszym backendem (HealthKit nie ma publicznego API w chmurze, więc potrzebny jest
@@ -277,7 +277,13 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
 
     // HRmax (220 - wiek) na bazie roku urodzenia - ten sam wzór co w routes/dashboard.js,
     // potrzebny tutaj do policzenia stref Karvonena per trening (patrz computeWorkoutHrZones).
-    const userMaxHr = user.birth_year ? (220 - (new Date().getFullYear() - user.birth_year)) : null;
+    // Bug fix: rok liczony przez getWarsawWallClock (nie goły `new Date()`, strefa procesu
+    // Node) - ten sam wzorzec błędu naprawiony w routes/dashboard.js (patrz komentarz tam):
+    // na hostingu w UTC, w oknie 00:00-01:59 czasu warszawskiego 1 stycznia, `new
+    // Date().getFullYear()` zwracał jeszcze poprzedni rok, więc strefy kardio (Karvonen)
+    // treningów zapisanych w tym krótkim oknie były liczone z HRmax o rok "za młodym".
+    const currentYear = getWarsawWallClock().getUTCFullYear();
+    const userMaxHr = user.birth_year ? (220 - (currentYear - user.birth_year)) : null;
 
     // RHR (tętno spoczynkowe) per dzień treningu - cache w ramach jednego żądania
     // webhooka, żeby nie odpytywać bazy wielokrotnie dla treningów z tego samego dnia.

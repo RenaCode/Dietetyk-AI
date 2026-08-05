@@ -1,6 +1,6 @@
 services:
   dietetyk-backend:
-    image: ghcr.io/mbeczynski/dietetyk-ai-backend:latest
+    image: ghcr.io/renacode/dietetyk-ai-backend:latest
     container_name: dietetyk-backend
     restart: unless-stopped
     volumes:
@@ -23,7 +23,7 @@ services:
         max-file: "3"
 
   dietetyk-frontend:
-    image: ghcr.io/mbeczynski/dietetyk-ai-frontend:latest
+    image: ghcr.io/renacode/dietetyk-ai-frontend:latest
     container_name: dietetyk-frontend
     restart: unless-stopped
     ports:

@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# Zatrzymaj skrypt w przypadku błędu
+# Stop the script on the first error
 set -e
 
 echo "=== Dietetyk AI: Rozpoczęcie procesu budowania i uruchomienia ==="
 
-# Ścieżka bazowa projektu (po przeniesieniu do folderu scripts/ idziemy o jeden katalog wyżej)
+# Project base path (this script lives in scripts/, so go one directory up)
 PROJECT_ROOT="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
 
 echo "1. Budowanie Frontendu React..."
@@ -24,7 +24,7 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 
-# Tworzenie pliku .env jeśli nie istnieje
+# Create the .env file if it does not exist
 if [ ! -f ".env" ]; then
     echo "Tworzenie pliku .env z konfiguracją domyślną..."
     cp .env.example .env

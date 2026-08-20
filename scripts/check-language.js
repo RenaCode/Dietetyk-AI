@@ -105,6 +105,14 @@ function classify(line, inBlockComment, opts) {
   // assembled (a fallback label interpolated into a Gemini prompt, for example). Those stay
   // Polish by the same rule as the prompt bodies themselves.
   if (line.includes('`')) return 'content';
+  // `${...}` interpolation can only appear inside a template literal, so a Polish line
+  // carrying one is prompt text being assembled across several lines.
+  if (line.includes('${')) return 'content';
+  // A line of bare prose carrying no JS syntax at all cannot be code: in a .js file it can
+  // only be the body of a multi-line template literal, i.e. prompt text. Backtick-parity
+  // tracking alone missed these, because the opening backtick sits many lines above and any
+  // stray backtick in a comment skews the count.
+  if (!/[=;(){}[\]]|=>|\bconst\b|\blet\b|\bfunction\b/.test(trimmed)) return 'content';
   if (LOG_CALL.test(line)) return 'log';
   if (API_ERROR.test(line)) return 'content';
 
@@ -152,7 +160,11 @@ function auditFile(file) {
   return { file: rel, hits, violations, flagged, total: lines.length };
 }
 
-const files = ROOTS.flatMap(r => walk(path.join(REPO_ROOT, r)));
+// This file is skipped: it necessarily contains Polish - the detector's own character class
+// and the examples in the comments explaining why the detector needs to exist. Scanning it
+// would report permanent "violations" whose only fix would be breaking the detector.
+const SELF = path.join(REPO_ROOT, 'scripts', 'check-language.js');
+const files = ROOTS.flatMap(r => walk(path.join(REPO_ROOT, r))).filter(f => f !== SELF);
 const results = files.map(auditFile).filter(r => r.violations + r.hits.content > 0);
 
 const args = process.argv.slice(2);

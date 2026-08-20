@@ -3,19 +3,19 @@ const logger = require('../services/logger');
 const { sendWeeklyAdminReport } = require('../services/adminReport');
 
 async function runTest() {
-  console.log('Rozpoczynam test modułu logów i raportu administratora...');
+  console.log('Starting the log module and admin report test...');
   
   try {
-    // 1. Uruchom migrację tabel
+    // 1. Run the table migrations
     await db.initDb();
 
-    // 2. Dodaj kilka testowych logów o różnych poziomach
-    console.log('Dodawanie testowych logów...');
+    // 2. Add a few test log entries at different levels
+    console.log('Adding test log entries...');
     
-    await logger.info('System wystartował pomyślnie.', 'SYSTEM');
-    await logger.warn('Dostęp do integracji Withings bliski wygaśnięcia.', 'INTEGRATIONS', null, '127.0.0.1', 1);
+    await logger.info('System started successfully.', 'SYSTEM');
+    await logger.warn('Withings integration access is close to expiring.', 'INTEGRATIONS', null, '127.0.0.1', 1);
     
-    // Dodanie błędów (ERROR)
+    // Add errors (ERROR)
     await logger.error(
       'Błąd odpytywania Gemini API - 404 Model Not Found', 
       'GEMINI_AI', 
@@ -31,7 +31,7 @@ async function runTest() {
       1
     );
     
-    // Dodanie powtarzającego się błędu w celu weryfikacji grupowania (Top 10)
+    // Add a repeated error to verify grouping (top 10)
     for (let i = 0; i < 3; i++) {
       await logger.error(
         'Błąd połączenia z bazą SQLite (SQLITE_BUSY)',
@@ -41,7 +41,7 @@ async function runTest() {
       );
     }
 
-    // Dodanie zdarzeń bezpieczeństwa (SECURITY)
+    // Add security events (SECURITY)
     await logger.security(
       'Nieudana próba logowania na konto: admin (użytkownik nie istnieje)',
       'AUTH_LOGIN_FAILURE',
@@ -61,19 +61,19 @@ async function runTest() {
       '45.67.234.12'
     );
 
-    console.log('Logi zostały dodane do bazy danych.');
+    console.log('Log entries written to the database.');
 
-    // Wyświetl dodane logi z bazy
+    // Display the log entries just added
     const logs = await db.all('SELECT * FROM app_logs ORDER BY timestamp DESC LIMIT 5');
-    console.log('\nOstatnie 5 logów w bazie:', logs);
+    console.log('\nThe 5 most recent log entries:', logs);
 
-    // 3. Uruchom generowanie i wysyłkę raportu
-    console.log('\nGenerowanie i wysyłanie raportu e-mail...');
+    // 3. Generate and send the report
+    console.log('\nGenerating and sending the email report...');
     await sendWeeklyAdminReport();
 
-    console.log('\nTest zakończony sukcesem!');
+    console.log('\nTest completed successfully.');
   } catch (err) {
-    console.error('Błąd podczas uruchamiania testu:', err);
+    console.error('The test run failed:', err);
   }
 }
 

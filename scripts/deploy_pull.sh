@@ -1,16 +1,15 @@
 #!/bin/bash
 # scripts/deploy_pull.sh
 #
-# Nowy, "profesjonalny" deployment: kod jest budowany i publikowany jako obrazy
-# Docker przez GitHub Actions (.github/workflows/docker-publish.yml) przy każdym
-# pushu na main. Serwer NIE buduje już niczego z kodu - tylko ściąga gotowe
+# The current deployment model: the code is built and published as Docker images by GitHub
+# Actions (.github/workflows/docker-publish.yml) on every push to main. The server no longer
+# builds anything from source - it only pulls ready-made
 # obrazy z ghcr.io i podnosi kontenery.
 #
-# Wymaga jednorazowego zalogowania do ghcr.io (patrz sekcja "JEDNORAZOWA
-# KONFIGURACJA" w komentarzu poniżej) zanim pierwszy raz uruchomisz ten skrypt,
-# jeśli pakiety w ghcr.io są prywatne.
+# Requires a one-off login to ghcr.io (see the "ONE-OFF SETUP" section in the comment below)
+# before you run this script for the first time, if the ghcr.io packages are private.
 #
-# Użycie (na serwerze, w katalogu z docker-compose.yml):
+# Usage (on the server, in the directory holding docker-compose.yml):
 #   chmod +x scripts/deploy_pull.sh
 #   ./scripts/deploy_pull.sh
 

@@ -1,6 +1,6 @@
-// Testy sanityzacji odpowiedzi AI i walidacji zdjęcia posiłku (utils/mealSanitize.js,
-// używane przez routes/meals.js POST /api/meals - analiza posiłku/zdjęcia przez Gemini).
-// Czysto jednostkowe - bez bazy danych/sieci/Gemini, można uruchomić: node tests/test-meals.js
+// Tests for AI response sanitisation and meal photo validation (utils/mealSanitize.js, used
+// by routes/meals.js POST /api/meals - meal and photo analysis through Gemini).
+// Pure unit tests - no database, network or Gemini; run with: node tests/test-meals.js
 
 function assert(condition, message) {
   if (!condition) {
@@ -58,10 +58,10 @@ try {
   testSanitizeNullableNumber();
   testAllowedMimeTypes();
   testMaxImageSize();
-  console.log('\n🎉 TESTY ANALIZY POSIŁKÓW ZAKOŃCZONE SUKCESEM!\n');
+  console.log('\n🎉 MEAL ANALYSIS TESTS PASSED\n');
   process.exit(0);
 } catch (err) {
   console.error('\n' + err.message);
-  console.error('❌ TESTY ANALIZY POSIŁKÓW NIEUDANE');
+  console.error('❌ MEAL ANALYSIS TESTS FAILED');
   process.exit(1);
 }

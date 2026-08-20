@@ -29,7 +29,7 @@ app.use(cors(allowedOrigin ? { origin: allowedOrigin } : {}));
 // Raised from the 100 kb default: the Apple Health webhook (Health Auto Export, see
 // routes/appleHealth.js) sends large JSON payloads when exporting Workouts with "Route
 // Data" (GPS) enabled over a longer period. Those exceeded the default limit and failed
-// with a 413 surfaced as "Nieprawidłowe żądanie" by the central error handler below.
+// with a 413, surfaced as a generic bad-request message by the central error handler below.
 app.use(express.json({ limit: '20mb' }));
 
 // Morgan's default 'dev' format logs the full request URL INCLUDING the query string.

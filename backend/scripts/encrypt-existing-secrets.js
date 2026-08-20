@@ -1,26 +1,25 @@
 #!/usr/bin/env node
 
 // Jednorazowy, idempotentny skrypt migracyjny: szyfruje sekrety zapisane w bazie
-// PRZED wdrożeniem utils/encryption.js (Runda 18 - naprawa z audytu). Bez tego
-// skryptu istniejące tokeny OAuth (oauth_tokens) i klucze API (settings.gemini_api_key,
+// BEFORE utils/encryption.js was introduced (round 18 audit fix). Without this script the
+// existing OAuth tokens (oauth_tokens) and API keys (settings.gemini_api_key,
 // settings.oura_client_secret, settings.withings_client_secret, app_config.mailgun_api_key,
-// app_config.google_client_secret) zostałyby zaszyfrowane dopiero przy NASTĘPNYM zapisie
-// (odświeżenie tokenu OAuth, ponowne zapisanie ustawień) - co dla rzadko odświeżanych
-// wartości (np. klucz Gemini ustawiony raz i nigdy nieedytowany) mogłoby oznaczać
-// tygodnie/miesiące zwłoki.
+// app_config.google_client_secret) would only be encrypted on their NEXT write - an OAuth
+// token refresh, or settings being saved again - which for rarely refreshed values (a Gemini
+// key set once and never edited) could mean weeks or months of delay.
 //
-// Bezpieczne do wielokrotnego uruchomienia: pomija wartości, które są już zaszyfrowane
-// (rozpoznawalne po prefiksie enc:v1: - patrz utils/encryption.js) lub puste.
-// Nigdy nie loguje żadnej odszyfrowanej/jawnej wartości sekretu.
+// Safe to run repeatedly: it skips values that are already encrypted (recognisable by the
+// enc:v1: prefix - see utils/encryption.js) or empty.
+// It never logs any decrypted or plaintext secret value.
 //
-// Użycie:
+// Usage:
 //   cd backend && node scripts/encrypt-existing-secrets.js
-//   (na produkcji: uruchomić WEWNĄTRZ kontenera backendu, żeby DATABASE_DIR
-//   wskazywało na właściwy plik .db, np. `docker compose exec dietetyk-backend
+//   (in production: run INSIDE the backend container so DATABASE_DIR points at the correct
+//   .db file, e.g. `docker compose exec dietetyk-backend
 //   node scripts/encrypt-existing-secrets.js`)
 
-// Ładujemy .env jawnie (jak config.js) - ten skrypt uruchamiany jest samodzielnie
-// (node scripts/...), nie przez server.js, więc nic wcześniej nie załadowało dotenv.
+// We load .env explicitly (as config.js does) - this script runs standalone (node
+// scripts/...) rather than through server.js, so nothing has loaded dotenv beforehand.
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
 const db = require('../db');
@@ -77,14 +76,14 @@ async function migrateOauthTokens() {
 
 async function run() {
   await db.initDb();
-  console.log('Rozpoczynam jednorazowe szyfrowanie istniejących sekretów w bazie...\n');
+  console.log('Starting the one-off encryption of existing secrets in the database...\n');
   await migrateSettings();
   await migrateAppConfig();
   await migrateOauthTokens();
-  console.log('\n✅ Gotowe. Bezpiecznie uruchomić ponownie - już zaszyfrowane wartości zostaną pominięte.');
+  console.log('\n✅ Done. Safe to run again - already encrypted values will be skipped.');
 }
 
 run().then(() => process.exit(0)).catch(err => {
-  console.error('❌ Migracja nie powiodła się:', err);
+  console.error('❌ The migration failed:', err);
   process.exit(1);
 });

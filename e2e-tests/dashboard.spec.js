@@ -1,7 +1,7 @@
 const { test, expect } = require('@playwright/test');
 
 test.describe('Dashboard i Funkcjonalność UI', () => {
-  // Zaloguj się przed każdym testem w tym bloku
+  // Sign in before each test in this block
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await page.fill('input[placeholder="Wpisz login lub e-mail..."]', 'admin');
@@ -11,11 +11,11 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
   });
 
   test('Weryfikacja układu i braku rozjechania w premium dashboard', async ({ page }) => {
-    // Sprawdzenie obecności głównych kolumn i baneru
+    // Check that the main columns and the banner are present
     const banner = page.locator('.dietetyk-ai-banner');
     await expect(banner).toBeVisible();
 
-    // Sprawdzenie statusu synchronizacji - upewnienie się, że gridColumn: 'span 2' jest obecny w stylu
+    // Check the sync status - making sure gridColumn: 'span 2' is present in the style
     const syncStatus = page.locator('[data-testid="status-sync-bar"]');
     await expect(syncStatus).toBeVisible();
 
@@ -28,21 +28,21 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
   });
 
   test('Obsługa licznika nawodnienia (Dodawanie i Reset wody)', async ({ page }) => {
-    // Automatycznie akceptuj okna dialogowe (np. confirm przy resecie wody)
+    // Auto-accept dialogs (the confirm when resetting water, for instance)
     page.on('dialog', async dialog => {
       await dialog.accept();
     });
 
-    // 1. Zlokalizuj kartę nawodnienia
+    // 1. Locate the hydration card
     const waterCard = page.locator('.premium-card:has-text("💧 Nawodnienie")');
     await expect(waterCard).toBeVisible();
 
-    // Opcjonalnie zresetuj na start, by mieć stabilny stan początkowy
+    // Optionally reset first, for a stable starting state
     const resetButton = waterCard.locator('button:has-text("Reset")');
     await resetButton.click();
-    await page.waitForTimeout(500); // krótka pauza na aktualizację stanu bazy
+    await page.waitForTimeout(500); // brief pause for the database state to update
 
-    // 2. Sprawdź początkową wartość
+    // 2. Check the initial value
     await expect(waterCard).toContainText('0 /');
 
     // 3. Kliknij "+250 ml"
@@ -68,14 +68,14 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     const tabs = ['Kalkulator Posiłków', 'Trendy', 'Aktywność', 'Ustawienia'];
 
     for (const tabName of tabs) {
-      // Kliknij zakładkę
+      // Click the tab
       await page.click(`.nav-tab:has-text("${tabName}")`);
       
-      // Sprawdź czy zakładka jest aktywna
+      // Check the tab is active
       const activeTab = page.locator('.nav-tab.active');
       await expect(activeTab).toContainText(tabName);
 
-      // Dodatkowe sprawdzenia renderowania komponentów dla danej zakładki
+      // Additional render checks for that tab's components
       if (tabName === 'Kalkulator Posiłków') {
         await expect(page.locator('.logger-card')).toBeVisible();
       } else if (tabName === 'Trendy') {
@@ -89,7 +89,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
   });
 
   test('Obsługa treningów Apple Health (Dynamiczne rozciąganie, filtrowanie i ikona bokserska)', async ({ page, request }) => {
-    // 1. Połącz się z bazą danych, aby wyciągnąć sync_token użytkownika admin
+    // 1. Connect to the database to read the admin user's sync_token
     const sqlite3 = require('../backend/node_modules/sqlite3').verbose();
     const path = require('path');
     const dbPath = path.join(__dirname, '../backend/dietetyk.db');
@@ -108,7 +108,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     expect(syncToken).not.toBeNull();
     db.close();
 
-    // 2. Dodaj dwa treningi (Boks i Bieg) na dzisiejszy dzień przez webhook Apple Health
+    // 2. Add two workouts (boxing and running) for today through the Apple Health webhook
     const today = new Date();
     const y = today.getFullYear();
     const m = String(today.getMonth() + 1).padStart(2, '0');
@@ -126,7 +126,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     const startStrBox = `${dateStr} 10:00:00 +0200`;
     const startStrRun = `${dateStr} 15:30:00 +0200`;
 
-    // Wyślij żądanie POST pod webhook synchronizacji Apple Health
+    // POST to the Apple Health sync webhook
     const response = await request.post(`/api/integrations/apple-health/${syncToken}`, {
       data: {
         data: {
@@ -162,15 +162,15 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     const responseJson = await response.json();
     expect(responseJson.status).toBe('ok');
 
-    // 3. Przeładuj stronę i upewnij się, że jesteśmy zalogowani
+    // 3. Reload the page and confirm we are still signed in
     await page.goto('/');
     await expect(page.locator('.logo-text')).toContainText('Dietetyk AI');
 
-    // Znajdź sekcję "Trening"
+    // Find the workout section
     const trainingCard = page.locator('.premium-card:has-text("Trening ⓘ")');
     await expect(trainingCard).toBeVisible();
 
-    // Sprawdź czy oba treningi są wyświetlone
+    // Check that both workouts are displayed
     const workoutsList = trainingCard.locator('.premium-workout-card');
     await expect(workoutsList).toHaveCount(2);
 
@@ -188,10 +188,10 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     await expect(runCard).toContainText('30 min');
     await expect(runCard).toContainText('400 kcal');
 
-    // 4. Zweryfikuj filtrowanie daty: przełącz na wczorajszą datę i upewnij się, że te treningi NIE są tam wyświetlane.
+    // 4. Verify date filtering: switch to yesterday and confirm those workouts are NOT shown there.
     const dateInput = page.locator('.date-input');
     await dateInput.fill(yesterdayDateStr);
-    await page.waitForTimeout(500); // krótka pauza na aktualizację stanu bazy
+    await page.waitForTimeout(500); // brief pause for the database state to update
 
     const yesterdayBox = trainingCard.locator('.premium-workout-card:has-text("Box")');
     await expect(yesterdayBox).not.toBeVisible();
@@ -199,7 +199,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     const yesterdayRun = trainingCard.locator('.premium-workout-card:has-text("Running")');
     await expect(yesterdayRun).not.toBeVisible();
 
-    // Przywróć dzisiejszą datę
+    // Restore today's date
     await dateInput.fill(dateStr);
     await page.waitForTimeout(500);
   });
@@ -209,13 +209,13 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     await page.goto('/');
     await initialResponsePromise;
 
-    // App.jsx odpala przy montowaniu RÓWNOLEGLE kilka zapytań (fetchDashboardData,
-    // fetchSyncToken, fetchUserProfile - patrz App.jsx ~linia 168). Sam /api/dashboard
-    // (initialResponsePromise powyżej) mógł już wrócić, podczas gdy pozostałe wciąż
-    // trwają - jeśli jedno z nich odświeży stan/props Dashboardu PO tym, jak zaczniemy
-    // wpisywać suplementy, pole może zostać zresetowane (Dashboard.jsx ~linia 242,
-    // useEffect zależny od summary?.supplements/summary?.date). Czekamy więc na
-    // uspokojenie sieci PRZED interakcją, żeby nie łapać się w to okno.
+    // On mount App.jsx fires several requests IN PARALLEL (fetchDashboardData,
+    // fetchSyncToken, fetchUserProfile - see App.jsx around line 168). /api/dashboard
+    // itself (initialResponsePromise above) may already have returned while the others are
+    // still in flight - and if one of them refreshes the Dashboard's state or props AFTER
+    // we start typing supplements, the field can be reset (Dashboard.jsx around line 242,
+    // a useEffect depending on summary?.supplements / summary?.date). So we wait for the
+    // network to go idle BEFORE interacting, to avoid landing in that window.
     await page.waitForLoadState('networkidle');
 
     const supplementsCard = page.locator('.premium-card:has-text("Suplementy")');
@@ -228,11 +228,11 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     const testSups = 'Kreatyna, Multiwitamina 7Nutrition';
     await textarea.fill(testSups);
     try {
-      await expect(textarea).toHaveValue(testSups, { timeout: 3000 }); // Upewnij się, że wartość została wpisana przed zapisem (uniknięcie race condition w React)
+      await expect(textarea).toHaveValue(testSups, { timeout: 3000 }); // make sure the value was entered before saving
     } catch {
-      // Jednorazowy retry - na wolniejszym CI runnerze wciąż może się zdarzyć spóźniony
-      // re-render zerujący pole tuż po fill() (patrz komentarz o networkidle powyżej).
-      // Jeśli PO retry pole nadal jest puste, test i tak poprawnie się wywali niżej.
+      // A single retry - on a slower CI runner a late re-render can still clear the field
+      // right after fill() (see the networkidle comment above). If the field is still empty
+      // AFTER the retry, the test will correctly fail below anyway.
       await textarea.fill(testSups);
       await expect(textarea).toHaveValue(testSups, { timeout: 5000 });
     }
@@ -244,20 +244,20 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     // Weryfikacja komunikatu o sukcesie w UI
     await expect(supplementsCard).toContainText('Zapisano suplementy!');
 
-    // Weryfikacja historii (powinna się zaktualizować od razu i pokazać ikony oraz aktywność)
+    // Verify the history (it should update immediately and show the icons and the activity)
     await expect(supplementsCard).toContainText('Historia suplementacji');
     await expect(supplementsCard).toContainText('Aktywność:');
 
-    // Sprawdź, czy ikony suplementów są widoczne w historii (⚡ i 🧬 dla naszych testowych supli)
+    // Check that the supplement icons are visible in the history (⚡ and 🧬 for our test supli)
     await expect(supplementsCard.locator('span:text("⚡")').first()).toBeVisible();
     await expect(supplementsCard.locator('span:text("🧬")').first()).toBeVisible();
 
-    // Odśwież stronę i upewnij się, że wartość się zachowała w bazie i wczytała z powrotem
+    // Reload the page and confirm the value persisted in the database and loaded back
     const reloadResponsePromise = page.waitForResponse(response => response.url().includes('/api/dashboard') && response.status() === 200);
     await page.reload();
     await reloadResponsePromise;
-    // Jak wyżej - poczekaj na uspokojenie sieci (fetchSyncToken/fetchUserProfile
-    // odpalone przy tym samym montowaniu), zanim odczytamy wartość pola.
+    // As above - wait for the network to go idle (fetchSyncToken/fetchUserProfile fired on
+    // the same mount) before reading the field's value.
     await page.waitForLoadState('networkidle');
     await expect(supplementsCard).toBeVisible();
     await expect(supplementsCard.locator('textarea')).toHaveValue(testSups, { timeout: 10000 });
@@ -266,11 +266,11 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
   test('Weryfikacja lokalizacji kafelka Waga i Skład Ciała w drugiej kolumnie', async ({ page }) => {
     await page.goto('/');
 
-    // Pierwsza kolumna nie powinna zawierać tekstu "Waga i Skład Ciała"
+    // The first column should not contain the body composition heading
     const col1 = page.locator('.dashboard-column').first();
     await expect(col1).not.toContainText('Waga i Skład Ciała');
 
-    // Druga kolumna powinna zawierać tekst "Waga i Skład Ciała"
+    // The second column should contain the body composition heading
     const col2 = page.locator('.dashboard-column').nth(1);
     await expect(col2).toContainText('Waga i Skład Ciała');
   });

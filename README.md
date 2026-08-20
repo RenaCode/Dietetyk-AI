@@ -236,7 +236,9 @@ kubectl describe pod <pod> -n <namespace> | grep -A5 Events   # shows the real p
 User accounts and default credentials are defined locally (saved in the database). On first run, the backend generates a random admin password and prints it once to the container log (see `[DB INIT]` in `db.js`) — you will be asked to change it on first login.
 
 > [!WARNING]
-> Do **not** keep credentials in a plaintext file inside the project directory. Older revisions of this README pointed to a `passwords.txt` in the project root; that file is git-ignored and was never committed, but a plaintext file still ends up in every directory backup, every `rsync`, and any editor/IDE indexing the workspace — and in this project it held the VPS root password and the Oura/Withings client secrets alongside app logins. Move those secrets into a password manager and delete the file. Integration secrets belong in the **Settings** tab (encrypted at rest, see `utils/encryption.js`), not on disk.
+> Do **not** keep credentials in a plaintext file inside the project directory. Older revisions of this README pointed to a `passwords.txt` in the project root — it held the VPS root password and the Oura/Withings client secrets alongside app logins. That file has been deleted; the credentials belong in a password manager.
+>
+> Being git-ignored was never enough protection: a plaintext file still lands in every directory backup, every `rsync`, every editor/IDE workspace index, and any `tar` of the project. Integration secrets belong in the **Settings** tab, where they are encrypted at rest (see `utils/encryption.js`); server credentials belong in a password manager and nowhere else.
 
 Once logged in as an administrator (`admin`), you can navigate to the **Settings** or **Admin Panel** (available in the navigation menu for accounts with the `admin` role) to manage the global configuration of the application. Developer credentials for Oura Ring and Withings (needed for integration) are configured by each user individually in their own **Settings** tab.
 

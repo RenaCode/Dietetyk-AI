@@ -177,15 +177,33 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
             {/* aria-labelledby wiąże textarea z nagłówkiem sekcji (id="meal-logger-heading")
                 zamiast dublować widoczny tekst w dodatkowym, wizualnie zbędnym <label> -
                 wcześniej pole nie miało żadnej programowej etykiety dla czytników ekranu. */}
+            {/* Podpowiedź zmienia się po dodaniu zdjęcia. Wcześniej brzmiała
+                "...lub zostaw puste, jeśli wgrywasz tylko zdjęcie", co sugerowało, że
+                przy zdjęciu opis jest zbędny - a to właśnie wtedy jest najbardziej
+                przydatny: AI szacuje gramaturę i sposób obróbki ze zdjęcia, a opis
+                pozwala to poprawić i dopisać rzeczy spoza kadru. */}
             <textarea
               className="meal-input"
               aria-labelledby="meal-logger-heading"
+              aria-describedby={imageSrc ? 'meal-photo-hint' : undefined}
               value={mealText}
               onChange={(e) => setMealText(e.target.value)}
-              placeholder="Opisz swój posiłek (np. 'Kurczak z ryżem i warzywami') lub zostaw puste, jeśli wgrywasz tylko zdjęcie..."
+              placeholder={imageSrc
+                ? "Uzupełnij lub popraw zdjęcie (np. '200 g kurczaka, nie 150', 'smażone na maśle', 'do tego szklanka soku', 'chleba nie zjadłem')..."
+                : "Opisz swój posiłek (np. 'Kurczak z ryżem i warzywami') albo dodaj zdjęcie..."}
                 disabled={isAnalyzing || isSubmitting}
             />
           </div>
+
+          {imageSrc && (
+            <p
+              id="meal-photo-hint"
+              style={{ fontSize: '0.8rem', color: 'var(--text-dim)', margin: '-6px 0 0', lineHeight: 1.5 }}
+            >
+              💡 Opis <strong>uzupełnia zdjęcie</strong>, nie tworzy drugiego posiłku. Gdy opis
+              przeczy zdjęciu, AI liczy według opisu i zaznacza to w komentarzu dietetyka.
+            </p>
+          )}
 
           {/* Upload Zdjęcia */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>

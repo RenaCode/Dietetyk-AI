@@ -8,7 +8,7 @@
     "dev": "nodemon server.js",
     "lint": "eslint .",
     "format": "prettier --write .",
-    "test": "node tests/test-encryption.js && node tests/test-rate-limit.js && node tests/test-chat.js && node tests/test-meals.js"
+    "test": "node tests/test-encryption.js && node tests/test-rate-limit.js && node tests/test-chat.js && node tests/test-meals.js && node tests/test-meal-prompts.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",

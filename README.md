@@ -9,6 +9,8 @@ The application supports full HTTPS encryption (SSL Let's Encrypt) and is ready 
 ## 🚀 Main Features
 
 1.  **AI Meal Journal**: Input your meals in natural language (e.g., *"This morning I ate 2 slices of whole grain bread with avocado and a fried egg"*). Gemini AI automatically breaks it down into ingredients, calculates calories, macronutrients (protein, carbohydrates, fat), evaluates the meal, and generates tips.
+
+    **Photo + description work together.** When you attach a photo *and* type something, the text is treated as a correction and completion of the photo — never as a second meal. Your description is the authoritative source and the photo is supporting evidence, so you can fix a portion the model misjudged (*"that was 200 g of chicken, not 150"*), correct an ingredient or the cooking method (*"turkey, not chicken"*, *"fried in butter"*), add what is out of frame (*"plus a glass of juice"*), or exclude something visible you did not eat (*"I skipped the bread"*). Where the two disagree the description wins, and the dietician comment says so — e.g. *"photo suggests about 150 g, using 200 g per your description"* — so the number is always traceable. Prompt construction lives in `utils/mealPrompts.js` and is covered by `tests/test-meal-prompts.js`.
 2.  **Direct Oura Ring Integration**: Retrieve recovery metrics such as Readiness score, Sleep score, sleep stages (deep, REM), resting heart rate (RHR), and heart rate variability (HRV).
 3.  **Direct Withings Integration**: Automatically retrieve body composition metrics: weight (kg), body fat percentage, and muscle mass (kg).
 4.  **Progress Charts (Custom SVG)**: Built-in, fully responsive, and highly performant SVG charts tracking:

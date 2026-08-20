@@ -94,11 +94,50 @@ function getWarsawWallClock(date = new Date()) {
   ));
 }
 
+// Zwraca timestamp (ms) północy czasu Europe/Warsaw dla dnia oddalonego o
+// `deltaDays` od podanej daty. Potrzebne wszędzie, gdzie zewnętrzne API dzieli
+// dane na kubełki dobowe wyrównane do PUNKTU STARTU okna (Google Fit
+// dataset:aggregate + bucketByTime) - podanie "teraz minus N dni" dałoby doby
+// liczone od bieżącej godziny, a nie doby kalendarzowe, i przypisałoby aktywność
+// do złego dnia.
+//
+// Uwzględnia zmianę czasu: doba może mieć 23 lub 25 godzin, więc nie da się tego
+// policzyć odejmowaniem stałej liczby milisekund. Dlatego bierzemy datę
+// kalendarzową w Warszawie, przesuwamy ją o deltaDays w kalendarzu, a potem
+// szukamy realnego momentu UTC, który w Warszawie wypada o 00:00 tego dnia.
+function getWarsawDayStartMillis(date = new Date(), deltaDays = 0) {
+  const [year, month, day] = dateObjToLocalDateString(date).split('-').map(Number);
+
+  // Przesunięcie w kalendarzu (nie w milisekundach) - Date.UTC normalizuje
+  // przekroczenie granic miesiąca/roku.
+  const shifted = new Date(Date.UTC(year, month - 1, day + deltaDays));
+  const targetDateStr = shifted.toISOString().slice(0, 10);
+
+  // Północ warszawska to ten moment UTC, który po sformatowaniu w Europe/Warsaw
+  // daje szukaną datę i godzinę 00. Offset Polski to +1 lub +2 godziny, więc
+  // kandydat "północ UTC minus offset" mieści się w wąskim przedziale - sprawdzamy
+  // oba warianty i wybieramy ten, który faktycznie wypada o 00:00 w Warszawie.
+  const utcMidnight = Date.UTC(
+    shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()
+  );
+  for (const offsetHours of [1, 2]) {
+    const candidate = utcMidnight - offsetHours * 3600 * 1000;
+    const wall = getWarsawWallClock(new Date(candidate));
+    if (wall.toISOString().slice(0, 10) === targetDateStr && wall.getUTCHours() === 0) {
+      return candidate;
+    }
+  }
+  // Nie powinno się zdarzyć dla Europe/Warsaw, ale gdyby reguły strefy się zmieniły,
+  // lepiej oddać północ UTC niż rzucić wyjątkiem w trakcie synchronizacji.
+  return utcMidnight;
+}
+
 module.exports = {
   getLocalDateString,
   formatDateString,
   timestampToDateString,
   parseHealthAutoExportDate,
   dateObjToLocalDateString,
-  getWarsawWallClock
+  getWarsawWallClock,
+  getWarsawDayStartMillis
 };

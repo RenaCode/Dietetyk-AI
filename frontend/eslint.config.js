@@ -9,6 +9,22 @@ import reactHooks from 'eslint-plugin-react-hooks';
 export default [
   js.configs.recommended,
   {
+    // Skrypty narzędziowe (scripts/) działają w Node, nie w przeglądarce - mają
+    // process/console/__dirname, a nie window/document. Bez tego bloku ESLint
+    // zgłaszał je jako 32 błędy "'console' is not defined".
+    files: ['scripts/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        __dirname: 'readonly',
+        URL: 'readonly'
+      }
+    }
+  },
+  {
     files: ['src/**/*.{js,jsx}'],
     plugins: { react, 'react-hooks': reactHooks },
     languageOptions: {

@@ -21,6 +21,53 @@ The application supports full HTTPS encryption (SSL Let's Encrypt) and is ready 
 7.  **Apple Health Synchronization**: Steps, active energy (calories), and active minutes can be imported from Apple Health via a webhook—configure this in the Settings tab.
 8.  **Google Fit Synchronization**: Similar to Apple Health, the app can fetch steps and calories from Google Fit (hourly sync via OAuth2, without needing an intermediate app)—connect your account from the Settings tab.
 9.  **Google Account Linking**: Connect an existing password-based account with your Google account in the Settings tab to sign in with a single click without losing your meal history and settings.
+10. **Energy Battery**: A single 0–100 number at the top of the dashboard answering "how much fuel do I have today". It charges overnight from sleep quality, duration and readiness, drains through the day from actual training load (relative to your own 30-day median, not a population norm) and from time awake, takes a hit from accumulated **sleep debt** over the last 14 nights, and adjusts for stress vs. recovery minutes. Every card shows its own breakdown, so the number is checkable rather than magic. See `/api/dashboard/energy-battery`.
+
+> [!NOTE]
+> Energy Battery and Wellness Score answer different questions and are deliberately kept separate. Wellness Score rates how *good* the day was (sleep, readiness, calorie adherence, hydration) — a judgement about behaviour. The battery says how much resource is *left right now*. A day with a perfect diet after three short nights scores well and shows a low battery; that is the intended behaviour.
+
+---
+
+## 🧭 Notes for Developers
+
+### Insights are fetched in one batch
+
+The dashboard renders ~49 independent insight cards. Each used to have its own `useEffect` and its own `fetch`, so opening the screen fired ~50 HTTP round-trips and as many separate SQLite query bursts.
+
+`GET /api/dashboard/insights?ids=a,b,c&date=YYYY-MM-DD` now runs them in one request (6 at a time server-side) and returns a per-item status:
+
+```json
+{ "date": "2026-08-20", "results": { "sleep-insight": { "status": "ok", "data": { … } } } }
+```
+
+Each item is isolated — an error, a timeout (15 s cap, relevant for AI-backed insights) or an unknown id yields a status for that card only and never breaks the rest of the response. On the client this is `useInsights()` (`frontend/src/utils/useInsights.js`).
+
+**The registry is automatic.** `routes/dashboard.js` wraps `router.get` and indexes every `/api/dashboard/<id>` route as it is registered, so a new insight joins the batch without touching a second list. `tests/test-energy-battery.js` asserts that the count of routes in the file matches the count in the registry, so an insight added in a different style fails the test instead of silently disappearing from the dashboard.
+
+Two insights stay overridable after the batch because they refresh independently: `ai-explanation-insight` (backend generates in the background, client polls) and `training-plan-insight` (manual "Odśwież" button). Both keep an override keyed by date so switching days never shows the previous day's result.
+
+### Activity data source priority
+
+Three sources write activity metrics to `health_metrics`: the Apple Health webhook/HealthKit, Google Fit, and Oura. The hierarchy lives in **one** place, `utils/activitySources.js`:
+
+```
+apple (3)  >  google_fit (2)  >  oura (1)
+```
+
+Phone and watch sources report continuously; Oura only finalises a day the next morning, so on conflict the phone data is closer to the truth. A lower-priority source can still fill columns the higher one left empty, and a day written as all-zeros never locks out a later real value.
+
+Previously each upsert only guarded against overwriting `'apple'`, leaving Google Fit and Oura to overwrite each other — the same day showed different step counts depending on which sync ran last that hour. `tests/test-activity-sources.js` pins this down by writing the same data in both orders and asserting the result is identical.
+
+### Dates are always Europe/Warsaw
+
+Google Fit's `dataset:aggregate` aligns its daily buckets to the **start of the requested window**, not to UTC or any timezone. The window therefore starts at Warsaw midnight (`getWarsawDayStartMillis`), and because `durationMillis` is a fixed 24 h, buckets are labelled by their **midpoint** so the week containing a DST change still maps to seven distinct, consecutive days. `tests/test-dates.js` covers both DST transitions and the year boundary.
+
+### Translation coverage
+
+`npm run check-i18n` (in `frontend/`) cross-checks every `t('…')` literal against the dictionary in `utils/i18n.js` and reports three things: missing translations, texts hardcoded in JSX despite having a translation, and stale dictionary entries.
+
+> [!WARNING]
+> As of this writing the check reports **6% coverage**: only 13 strings actually go through `t()`, 61 have a translation but are hardcoded in JSX, and 127 dictionary entries match no string in the code. Switching the language to English therefore changes almost nothing on screen. `t()` now warns in the console (dev builds only) whenever a translation is missing, so the failure is at least visible — but wiring the remaining strings through `t()` is still outstanding work.
 
 ---
 
@@ -92,9 +139,14 @@ In the directory `/opt/dietetyk-ai/backend/.env`, create the configuration for t
 ```env
 PORT=3000
 GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-1.5-flash
-APP_PASSWORD=dietetyk-admin
+GEMINI_MODEL=gemini-2.5-flash
+APP_PASSWORD=<a long random string, not a guessable phrase>
 ```
+
+> [!NOTE]
+> `GEMINI_MODEL` is optional — omit it and the backend uses `gemini-2.5-flash`. Earlier revisions of this README recommended `gemini-1.5-flash`, which returns 404 in the current SDK; `config.js` silently substitutes the working model and logs a warning at startup, so existing `.env` files keep working, but update the value to clear the warning.
+>
+> `APP_PASSWORD` is the key material for encrypting integration secrets at rest (`utils/encryption.js`) — **not** a login password. Changing it makes previously stored Oura/Withings/Gemini credentials undecryptable and they must be re-entered in Settings.
 The `./data` directory must be writable by uid 1000 (`chown -R 1000:1000 ./data`)—the backend container runs internally as the unprivileged `node` user, not root.
 
 ### Step 4: Run the Containers
@@ -111,17 +163,80 @@ ssh -L 8081:localhost:8081 deploy@<VPS_IP>
 and then opening `http://localhost:8081` locally.
 
 ### Step 5: Database Backups
-The backend automatically creates backups of the SQLite database file (at startup and every 24 hours, keeping the last 14 backups) in the `./data/backups` directory on the VPS (see `backend/db.js`, `backupDatabase` function). This protects against database corruption/failed migrations but **not** against VPS/disk failure. For real security, it is recommended to copy this directory offsite, for example via a cron job on the VPS:
+The backend automatically creates backups of the SQLite database (at startup and every 24 hours, keeping the last 14) in `./data/backups` on the VPS — see `backupDatabase` in `backend/db.js`.
+
+**Every backup is verified before it counts.** Right after `VACUUM INTO` writes the copy, the backend reopens it read-only and runs `PRAGMA quick_check` plus a row-count sanity check. A copy that fails is deleted immediately and rotation is skipped, so a run of bad backups can never evict the last good ones. Without this, rotation would eventually leave you with 14 unreadable files and you'd only find out during a restore.
+
+### Offsite copies (required for real protection)
+
+Local backups sit on the same disk as the database, so they protect against corruption and bad migrations but **not** against host/disk failure. Point the backup script at a remote destination:
+
 ```bash
-# /etc/cron.d/dietetyk-offsite-backup (example - adjust the destination)
-0 4 * * * root rsync -a /opt/dietetyk-ai/data/backups/ user@backup-host:/backups/dietetyk-ai/
+# /etc/cron.d/dietetyk-backup
+0 3 * * * root OFFSITE_DEST=user@backup-host:/backups/dietetyk-ai/ /opt/dietetyk-ai/scripts/vps_backup_db.sh >> /var/log/db_backup.log 2>&1
+```
+
+`scripts/vps_backup_db.sh` makes a consistent copy (`VACUUM INTO` — never a plain `cp` of a live database, which can produce a torn, unrestorable file), verifies it, ships it offsite, and only then rotates old copies. If `OFFSITE_DEST` is unset it still works, but prints a warning that copies exist in one place only.
+
+### Testing that a backup actually restores
+
+```bash
+scripts/verify_backup.sh                      # checks the newest backup
+scripts/verify_backup.sh /path/to/copy.db     # checks a specific file
+```
+
+Exit code 0 means the file opens, passes an integrity check, and its core tables (`users`, `meals`, `health_metrics`, `settings`) are readable and non-empty. Worth running from cron as an independent watchdog — a backup nobody has ever opened is not a backup:
+
+```bash
+0 6 * * * root /opt/dietetyk-ai/scripts/verify_backup.sh || mail -s "Dietetyk AI: BACKUP USZKODZONY" you@example.com
+```
+
+---
+
+## ☸️ Kubernetes (Helm chart)
+
+The chart in `charts/dietetyk` deploys the backend, frontend and the sqlite-web browser. CI keeps the image tags in `values.yaml` pointing at the latest built `sha-<commit>`.
+
+### Registry credentials — required
+
+The `ghcr.io/renacode/*` packages are **private**. A private GHCR package issues no anonymous pull token, so without credentials the kubelet gets HTTP 401 and both pods sit in **`ImagePullBackOff`**.
+
+This is easy to misdiagnose as a wrong or missing image tag — the symptom looks identical. To tell them apart, check whether the registry answers at all:
+
+```bash
+curl -s "https://ghcr.io/token?scope=repository:renacode/dietetyk-ai-backend:pull&service=ghcr.io"
+```
+
+`{"errors":[{"code":"UNAUTHORIZED"...}]}` means the package is private (credentials problem). A response containing a `token` means the package is public and the problem is the tag instead.
+
+Docker Compose on the VPS does not hit this, because a one-off `docker login ghcr.io` leaves credentials in `~/.docker/config.json`. Kubernetes has no equivalent ambient login — every namespace needs its own pull secret:
+
+```bash
+kubectl create secret docker-registry ghcr-pull \
+  --docker-server=ghcr.io \
+  --docker-username=<github-username> \
+  --docker-password=<PAT with read:packages scope> \
+  --namespace=<release namespace>
+```
+
+The secret name is referenced by `imagePullSecrets` in `values.yaml`. If you would rather not manage a secret, make both packages public at `https://github.com/users/renacode/packages` and set `imagePullSecrets: null` — the images hold application code but no secrets, so this is a deliberate trade-off rather than a workaround.
+
+### Verifying a deploy
+
+```bash
+helm upgrade --install dietetyk charts/dietetyk -n <namespace>
+kubectl get pods -n <namespace> -w
+kubectl describe pod <pod> -n <namespace> | grep -A5 Events   # shows the real pull error
 ```
 
 ---
 
 ## 🔐 GUI Login and Admin Access
 
-User accounts and default credentials are defined locally (saved in the database). You can find the login details in the `passwords.txt` file located in the root of the project (this file is ignored by git using `.gitignore` and is not made public).
+User accounts and default credentials are defined locally (saved in the database). On first run, the backend generates a random admin password and prints it once to the container log (see `[DB INIT]` in `db.js`) — you will be asked to change it on first login.
+
+> [!WARNING]
+> Do **not** keep credentials in a plaintext file inside the project directory. Older revisions of this README pointed to a `passwords.txt` in the project root; that file is git-ignored and was never committed, but a plaintext file still ends up in every directory backup, every `rsync`, and any editor/IDE indexing the workspace — and in this project it held the VPS root password and the Oura/Withings client secrets alongside app logins. Move those secrets into a password manager and delete the file. Integration secrets belong in the **Settings** tab (encrypted at rest, see `utils/encryption.js`), not on disk.
 
 Once logged in as an administrator (`admin`), you can navigate to the **Settings** or **Admin Panel** (available in the navigation menu for accounts with the `admin` role) to manage the global configuration of the application. Developer credentials for Oura Ring and Withings (needed for integration) are configured by each user individually in their own **Settings** tab.
 

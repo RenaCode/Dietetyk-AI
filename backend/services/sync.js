@@ -1,8 +1,24 @@
 const db = require('../db');
-const { formatDateString, timestampToDateString } = require('../utils/dates');
+const { formatDateString, timestampToDateString, getWarsawDayStartMillis } = require('../utils/dates');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
+const {
+  getActivitySourceRank,
+  preserveHigherPriority,
+  preserveSourceLabel
+} = require('../utils/activitySources');
 
 const { getOrRefreshToken } = require('./oauthHelpers');
+
+const OURA_RANK = getActivitySourceRank('oura');
+const GOOGLE_FIT_RANK = getActivitySourceRank('google_fit');
+
+// Kolumny, których niezerowa wartość oznacza "to źródło realnie dostarczyło dane
+// o aktywności za ten dzień" - decydują o tym, czy etykieta activity_source zostaje
+// przy dotychczasowym (wyżej notowanym) źródle.
+const ACTIVITY_LABEL_COLUMNS = [
+  'steps', 'active_calories', 'total_calories_burned', 'active_minutes', 'distance_meters'
+];
+const GOOGLE_FIT_LABEL_COLUMNS = ['steps', 'active_calories', 'distance_meters'];
 
 async function syncOura(userId) {
   const accessToken = await getOrRefreshToken(userId, 'oura');
@@ -276,9 +292,11 @@ async function syncOura(userId) {
           metrics.readiness_score = existing.readiness_score;
         }
 
-        // PRIORYTET: Apple Health jest źródłem autorytatywnym dla aktywności
-        // (steps/kalorie/minuty), bo Oura i Withings i tak synchronizują się do Apple
-        // Health na telefonie, a Apple Health dostarcza dane szybciej i pełniej.
+        // PRIORYTET: patrz utils/activitySources.js - hierarchia
+        // apple > google_fit > oura, wspólna dla WSZYSTKICH upsertów aktywności.
+        // Wcześniej każdy upsert bronił się wyłącznie przed nadpisaniem danych
+        // z 'apple', przez co Google Fit i Oura nadpisywały się nawzajem i wynik
+        // dla tej samej doby zależał od kolejności synchronizacji w danej godzinie.
         //
         // POPRAWKA (2026-06-19): blokada "activity_source = 'apple' -> nie nadpisuj"
         // chroniła kolumnę NIEZALEŻNIE od tego, czy Apple faktycznie wysłało dla niej
@@ -314,9 +332,9 @@ async function syncOura(userId) {
           )
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(user_id, date) DO UPDATE SET
-            steps = CASE WHEN activity_source = 'apple' AND COALESCE(steps, 0) > 0 THEN steps ELSE COALESCE(excluded.steps, steps) END,
-            active_calories = CASE WHEN activity_source = 'apple' AND COALESCE(active_calories, 0) > 0 THEN active_calories ELSE COALESCE(excluded.active_calories, active_calories) END,
-            total_calories_burned = CASE WHEN activity_source = 'apple' AND COALESCE(total_calories_burned, 0) > 0 THEN total_calories_burned ELSE COALESCE(excluded.total_calories_burned, total_calories_burned) END,
+            ${preserveHigherPriority('steps', OURA_RANK)},
+            ${preserveHigherPriority('active_calories', OURA_RANK)},
+            ${preserveHigherPriority('total_calories_burned', OURA_RANK)},
             sleep_score = COALESCE(excluded.sleep_score, sleep_score),
             sleep_duration = COALESCE(excluded.sleep_duration, sleep_duration),
             sleep_deep = COALESCE(excluded.sleep_deep, sleep_deep),
@@ -325,28 +343,20 @@ async function syncOura(userId) {
             hrv = COALESCE(excluded.hrv, hrv),
             rhr = COALESCE(excluded.rhr, rhr),
             temperature_deviation = COALESCE(excluded.temperature_deviation, temperature_deviation),
-            active_minutes = CASE WHEN activity_source = 'apple' AND COALESCE(active_minutes, 0) > 0 THEN active_minutes ELSE COALESCE(excluded.active_minutes, active_minutes) END,
+            ${preserveHigherPriority('active_minutes', OURA_RANK)},
             respiratory_rate = COALESCE(excluded.respiratory_rate, respiratory_rate),
             spo2_percentage = COALESCE(excluded.spo2_percentage, spo2_percentage),
-            distance_meters = CASE WHEN activity_source = 'apple' AND COALESCE(distance_meters, 0) > 0 THEN distance_meters ELSE COALESCE(excluded.distance_meters, distance_meters) END,
+            ${preserveHigherPriority('distance_meters', OURA_RANK)},
             sedentary_minutes = COALESCE(excluded.sedentary_minutes, sedentary_minutes),
             low_activity_minutes = COALESCE(excluded.low_activity_minutes, low_activity_minutes),
             stress_high_minutes = COALESCE(excluded.stress_high_minutes, stress_high_minutes),
             stress_recovery_minutes = COALESCE(excluded.stress_recovery_minutes, stress_recovery_minutes),
             stress_summary = COALESCE(excluded.stress_summary, stress_summary),
-            activity_source = CASE
-              WHEN activity_source = 'apple' AND (
-                COALESCE(steps, 0) > 0 OR COALESCE(active_calories, 0) > 0
-                OR COALESCE(total_calories_burned, 0) > 0 OR COALESCE(active_minutes, 0) > 0
-                -- Runda 12 (audyt): dodano distance_meters - bez tego dnia, w których
-                -- Apple Health dostarczał WYŁĄCZNIE dystans (bez kroków/kalorii/minut
-                -- aktywności w tym konkretnym imporcie), traciły ochronę source='apple'
-                -- i Oura/Google Fit mogły nadpisać distance_meters mimo że ta kolumna
-                -- sama w sobie jest chroniona (CASE przy distance_meters powyżej).
-                OR COALESCE(distance_meters, 0) > 0
-              ) THEN activity_source
-              ELSE COALESCE(excluded.activity_source, activity_source)
-            END,
+            -- Runda 12 (audyt): distance_meters MUSI być na liście kolumn decydujących
+            -- o zachowaniu etykiety - bez tego dni, w których wyżej notowane źródło
+            -- dostarczyło WYŁĄCZNIE dystans (bez kroków/kalorii/minut w tym imporcie),
+            -- traciły ochronę i etykieta przechodziła na źródło niższego rzędu.
+            ${preserveSourceLabel(OURA_RANK, ACTIVITY_LABEL_COLUMNS)},
             last_sync = excluded.last_sync
         `, [
           userId, dateStr,
@@ -472,10 +482,19 @@ async function syncGoogleFit(userId) {
     return { success: false, error: 'Brak aktywnego tokenu Google Fit. Połącz się ponownie w Ustawieniach.' };
   }
 
+  // Granice okna MUSZĄ zaczynać się dokładnie o północy czasu Europe/Warsaw.
+  // bucketByTime w Google Fit dzieli okno na kubełki od startTimeMillis co
+  // durationMillis - czyli kubełki są wyrównane do PUNKTU STARTU, nie do UTC.
+  // Wcześniej startem był "teraz minus 7 dni", więc każdy kubełek obejmował dobę
+  // liczoną od bieżącej godziny (np. 14:00-14:00), a nie dobę kalendarzową.
+  // Sumy 7-dniowe wychodziły z tego mniej więcej poprawne, ale przypisanie do
+  // konkretnego DNIA było przesunięte - a na tym opierają się insighty czasowe
+  // (meal-timing-sleep, sedentary-sleep, early-strain-alert), gdzie przesunięcie
+  // zmienia wniosek, nie tylko liczbę. Start ustawiony na północ warszawską
+  // sprawia, że każdy kubełek to dokładnie jedna doba kalendarzowa w tej samej
+  // strefie, w której liczy je reszta aplikacji (patrz utils/dates.js).
   const now = new Date();
-  const past = new Date();
-  past.setDate(now.getDate() - 7);
-  const startTimeMillis = past.getTime();
+  const startTimeMillis = getWarsawDayStartMillis(now, -7);
   const endTimeMillis = now.getTime();
 
   console.log(`[SYNC GOOGLE FIT] Pobieranie kroków/kalorii dla użytkownika ${userId}...`);
@@ -509,11 +528,19 @@ async function syncGoogleFit(userId) {
     const lastSyncTime = new Date().toISOString();
 
     for (const bucket of buckets) {
-      // Granice dobowe Google Fit (bucketByTime) są liczone w UTC - API
-      // dataset:aggregate nie przyjmuje parametru strefy czasowej. Data dnia może więc
-      // być przesunięta o 1-2h względem innych źródeł (Oura, Apple Health), które
-      // liczą dobę w Europe/Warsaw. Akceptowalny kompromis, bez wpływu na sumy 7-dniowe.
-      const dateStr = timestampToDateString(Math.floor(Number(bucket.startTimeMillis) / 1000));
+      // Kubełki są wyrównane do północy warszawskiej (patrz startTimeMillis wyżej),
+      // ale durationMillis to sztywne 24h, więc po zmianie czasu letni/zimowy
+      // kolejne kubełki w oknie dryfują o godzinę (np. zaczynają się o 23:00 dnia
+      // poprzedniego). Etykietujemy więc kubełek po jego ŚRODKU, a nie po początku:
+      // dla kubełka wyrównanego środek wypada w południe tego samego dnia, a dla
+      // przesuniętego o godzinę - nadal w obrębie właściwej doby. Dzięki temu
+      // przypisanie do dnia jest poprawne również w tygodniu ze zmianą czasu.
+      // (Sama zawartość kubełka jest wtedy przesunięta o godzinę - tego przy
+      // sztywnym durationMillis uniknąć się nie da bez 7 osobnych zapytań do API.)
+      const bucketStartMs = Number(bucket.startTimeMillis);
+      const bucketEndMs = Number(bucket.endTimeMillis) || (bucketStartMs + 86400000);
+      const bucketMidpointMs = bucketStartMs + (bucketEndMs - bucketStartMs) / 2;
+      const dateStr = timestampToDateString(Math.floor(bucketMidpointMs / 1000));
 
       let steps = 0;
       let calories = 0;
@@ -535,19 +562,18 @@ async function syncGoogleFit(userId) {
       distance = Math.round(distance);
 
       if (steps > 0 || calories > 0 || distance > 0) {
-        // Ten sam wzorzec ochrony kolumn co w syncOura: Apple Health (jeśli ma realne
-        // dane > 0 dla tej daty) ma priorytet; Google Fit i Oura są równorzędne źródła.
+        // Ten sam wzorzec ochrony kolumn co w syncOura, z jednej wspólnej hierarchii
+        // (utils/activitySources.js): apple > google_fit > oura. Google Fit stoi wyżej
+        // od Oury, bo jak Apple Health raportuje na bieżąco z telefonu, a Oura domyka
+        // dobę dopiero następnego ranka.
         await db.run(`
           INSERT INTO health_metrics (user_id, date, steps, active_calories, distance_meters, activity_source, last_sync)
           VALUES (?, ?, ?, ?, ?, 'google_fit', ?)
           ON CONFLICT(user_id, date) DO UPDATE SET
-            steps = CASE WHEN activity_source = 'apple' AND COALESCE(steps, 0) > 0 THEN steps ELSE COALESCE(excluded.steps, steps) END,
-            active_calories = CASE WHEN activity_source = 'apple' AND COALESCE(active_calories, 0) > 0 THEN active_calories ELSE COALESCE(excluded.active_calories, active_calories) END,
-            distance_meters = CASE WHEN activity_source = 'apple' AND COALESCE(distance_meters, 0) > 0 THEN distance_meters ELSE COALESCE(excluded.distance_meters, distance_meters) END,
-            activity_source = CASE
-              WHEN activity_source = 'apple' AND (COALESCE(steps, 0) > 0 OR COALESCE(active_calories, 0) > 0 OR COALESCE(distance_meters, 0) > 0) THEN activity_source
-              ELSE COALESCE(excluded.activity_source, activity_source)
-            END,
+            ${preserveHigherPriority('steps', GOOGLE_FIT_RANK)},
+            ${preserveHigherPriority('active_calories', GOOGLE_FIT_RANK)},
+            ${preserveHigherPriority('distance_meters', GOOGLE_FIT_RANK)},
+            ${preserveSourceLabel(GOOGLE_FIT_RANK, GOOGLE_FIT_LABEL_COLUMNS)},
             last_sync = excluded.last_sync
         `, [
           userId, dateStr,

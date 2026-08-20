@@ -10,17 +10,17 @@ const logger = require('../services/logger');
 const { getAppConfig, generateOAuthState, verifyOAuthState, getVerifiedSessionByToken } = require('../services/oauthHelpers');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 
-// Pomocnicza funkcja do tworzenia sesji (tymczasowej lub stałej) - wydzielona, bo ten
-// sam wzorzec (wygeneruj token, policz expires_at, wstaw wiersz do sessions) był
-// powtórzony osobno w kilkunastu miejscach w tym pliku (force_password_change,
-// require_2fa, setup_2fa, logowanie bez 2FA, logowanie Google, weryfikacja 2FA,
-// rejestracja...), z identyczną logiką poza długością ważności i flagą is_verified_2fa.
-// `ttlDays` przyjmuje też wartości ułamkowe (np. tymczasowe sesje 5-minutowe, patrz
-// TEMP_SESSION_TTL_DAYS poniżej) - liczone i tak w milisekundach.
-// Prefiks tokenu ('temp_' dla krótkotrwałych sesji weryfikacyjnych, 'sess_' dla
-// docelowych sesji zalogowania) zachowuje dokładnie te same wzorce tokenów, które
+// Helper for creating a session (temporary or permanent) - extracted because the same
+// pattern (generate a token, compute expires_at, insert a sessions row) was repeated
+// separately in a dozen places in this file (force_password_change, require_2fa, setup_2fa,
+// login without 2FA, Google login, 2FA verification, registration and so on) with identical
+// logic apart from the validity period and the is_verified_2fa flag.
+// `ttlDays` also accepts fractional values (5-minute temporary sessions, see
+// TEMP_SESSION_TTL_DAYS below) - it is computed in milliseconds anyway.
+// The token prefix ('temp_' for short-lived verification sessions, 'sess_' for real login
+// sessions) preserves exactly the same token patterns that
 // rozpoznaje reszta kodu (np. getVerifiedSessionByToken, middleware/auth.js).
-const TEMP_SESSION_TTL_DAYS = 5 / (24 * 60); // 5 minut wyrażone w dniach
+const TEMP_SESSION_TTL_DAYS = 5 / (24 * 60); // 5 minutes expressed in days
 const PERMANENT_SESSION_TTL_DAYS = 7;
 
 const validatePassword = (password) => {
@@ -44,10 +44,9 @@ async function createSession(userId, isVerified2fa, ttlDays = PERMANENT_SESSION_
   return token;
 }
 
-// ===== Logowanie przez Google =====
-// Krok 1: przekierowanie do ekranu zgody Google. Client ID/Secret konfigurowane
-// globalnie przez admina (Panel Admina), bo logowanie dotyczy całej aplikacji,
-// a nie integracji per-użytkownik (jak Oura/Withings).
+// ===== Google sign-in =====
+// configured globally by an administrator (Admin Panel), because sign-in applies to the
+// whole application rather than being a per-user integration like Oura or Withings.
 router.get('/api/auth/google', async (req, res) => {
   try {
     const clientId = await getAppConfig('google_client_id');
@@ -70,14 +69,14 @@ router.get('/api/auth/google', async (req, res) => {
   }
 });
 
-// Krok 1b: jak wyżej, ale dla użytkownika JUŻ ZALOGOWANEGO, który chce explicite
-// powiązać swoje istniejące konto z Google (Ustawienia -> "Połącz z Google"),
-// a nie logować się nim od nowa. Logowanie Google (powyżej) i tak łączy konta po
-// e-mailu jako efekt domyślny, ale tylko gdy e-mail się zgadza - ten przepływ
-// działa niezależnie od adresu e-mail, bo użytkownik jest już zweryfikowany sesją.
-// `state` jest tu podpisany HMAC-em (generateOAuthState), w przeciwieństwie do
-// zwykłego logowania Google, gdzie state to tylko losowy ciąg bez weryfikacji -
-// to po tym callback rozróżnia oba przepływy.
+// Step 1b: as above, but for a user who is ALREADY LOGGED IN and explicitly wants to link
+// their existing account to Google (Settings -> 'Connect with Google') rather than sign in
+// afresh. Google sign-in above already links accounts by email as a side effect, but only
+// when the email matches - this flow works regardless of the email address, because the user
+// is already verified by their session.
+// `state` is HMAC-signed here (generateOAuthState), unlike ordinary Google sign-in where
+// state is just a random string with no verification - that is how the callback tells the
+// two flows apart.
 router.get('/api/auth/google/link', async (req, res) => {
   const { token } = req.query;
   if (!token) return res.status(401).send('Brak tokenu autoryzacji.');
@@ -107,8 +106,8 @@ router.get('/api/auth/google/link', async (req, res) => {
 });
 
 // Krok 2: callback - wymiana kodu na token, pobranie profilu, znalezienie/utworzenie konta
-// (lub, jeśli `state` wskazuje na przepływ łączenia konta - patrz wyżej, po prostu
-// przypisanie google_id do już zalogowanego użytkownika).
+// (or, when `state` indicates the account-linking flow above, simply assigning google_id to
+// the already logged-in user).
 router.get('/api/auth/google/callback', async (req, res) => {
   const { code, error, state } = req.query;
   const verified = verifyOAuthState(state);
@@ -162,11 +161,10 @@ router.get('/api/auth/google/callback', async (req, res) => {
       throw new Error('Odpowiedź Google nie zawiera identyfikatora użytkownika (sub).');
     }
 
-    // Przepływ łączenia konta (Ustawienia -> "Połącz z Google"): użytkownik jest już
-    // zalogowany (zweryfikowany przez podpisany `state`), więc tylko przypisujemy
-    // google_id do JEGO konta - nie logujemy, nie tworzymy nowego konta, nie wydajemy
-    // nowej sesji. Blokujemy "podebranie" konta, jeśli ten sam google_id jest już
-    // przypisany do innego użytkownika.
+      // Account-linking flow (Settings -> 'Connect with Google'): the user is already logged
+      // in, verified by the signed `state`, so we only assign google_id to THEIR account - no
+      // sign-in, no new account, no new session. We block account takeover if the same
+      // google_id is already assigned to a different user.
     if (isLinkFlow) {
       const conflictingUser = await db.get(`SELECT id FROM users WHERE google_id = ? AND id != ?`, [profile.sub, verified.userId]);
       if (conflictingUser) {
@@ -176,13 +174,13 @@ router.get('/api/auth/google/callback', async (req, res) => {
       return res.redirect('/?tab=settings&google_link=success');
     }
 
-    // 1. Szukamy użytkownika już powiązanego z tym kontem Google
+      // 1. Look for a user already linked to this Google account
     let user = await db.get(`SELECT * FROM users WHERE google_id = ?`, [profile.sub]);
 
     if (!user && profile.email) {
-      // 2. Jeśli nie znaleziono, ale e-mail się zgadza z istniejącym kontem (logowanie hasłem) -
-      // NIE łączymy automatycznie ze względów bezpieczeństwa (zapobiega przejęciu konta przez rejestrację
-      // z fałszywym adresem e-mail). Odsyłamy użytkownika do zalogowania się hasłem i połączenia w Ustawieniach.
+      // 2. If none was found but the email matches an existing account (password login),
+      // we do NOT link automatically, for security reasons - that would allow account takeover
+      // via a forged email address. We direct the user to sign in with their password and link
       const existingByEmail = await db.get(`SELECT * FROM users WHERE email = ?`, [profile.email]);
       if (existingByEmail) {
         return res.redirect('/?google_error=email_exists');
@@ -190,10 +188,10 @@ router.get('/api/auth/google/callback', async (req, res) => {
     }
 
     if (!user) {
-      // 3. Brak konta - tworzymy nowe. Konto Google nie ma znanego hasła, więc
-      // generujemy losowy, niewykorzystywany hash (NOT NULL w schemacie), żeby
-      // logowanie hasłem dla tego konta było faktycznie niemożliwe, dopóki
-      // użytkownik sam nie ustawi hasła w Ustawieniach.
+        // 3. No account - create one. A Google account has no known password, so we generate
+        // a random, unused hash (the schema requires NOT NULL) to make password login for
+        // this account genuinely impossible until the user sets a password themselves in
+        // Settings.
       const randomPassword = crypto.randomBytes(24).toString('hex');
       const passwordHash = await bcrypt.hash(randomPassword, 10);
       const syncToken = 'sync_' + crypto.randomBytes(24).toString('hex');
@@ -229,13 +227,13 @@ router.get('/api/auth/google/callback', async (req, res) => {
       return res.redirect('/?google_error=account_inactive');
     }
 
-    // Respektujemy 2FA, jeśli użytkownik je wcześniej włączył (logowanie Google nie omija 2FA)
+      // Respect 2FA if the user enabled it earlier - Google sign-in does not bypass 2FA
     if (user.totp_enabled === 1) {
       const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
-      // Token w fragmencie URL (#), NIE w query stringu: fragment nigdy nie jest
-      // wysyłany przez przeglądarkę do serwera przy kolejnym żądaniu (np. GET /),
-      // więc żywy token sesji nie trafia do logów morgan('dev') (logującego pełny
-      // URL żądania) ani do nagłówka Referer/historii przeglądarki.
+      // The token goes in the URL fragment (#), NOT the query string: a fragment is never
+      // sent by the browser to the server on a subsequent request (a plain GET /, say), so a
+      // live session token does not reach morgan('dev') logs, which record the full request
+      // URL, nor the Referer header or browser history.
       return res.redirect(`/#google_temp_token=${tempToken}`);
     }
 
@@ -277,7 +275,7 @@ router.post('/api/login', async (req, res) => {
 
     await loginAttempts.recordSuccess(req.ip, username);
 
-    // Sprawdź czy wymuszona jest zmiana hasła
+    // Check whether a password change is being forced
     if (user.force_password_change === 1) {
       const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
 
@@ -288,7 +286,7 @@ router.post('/api/login', async (req, res) => {
     }
 
     if (user.totp_enabled === 1) {
-      // Generowanie tymczasowego tokenu (ważnego 5 minut)
+      // Generate a temporary token, valid for 5 minutes
       const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
 
       return res.json({
@@ -296,18 +294,18 @@ router.post('/api/login', async (req, res) => {
         tempToken: tempToken
       });
     } else {
-      // B-W4: Wymuszenie 2FA działa dla WSZYSTKICH użytkowników — w tym admina (usunięto bypass)
+    // B-W4: forced 2FA applies to ALL users, admin included (the bypass was removed)
       const force2faRow = await db.get(`SELECT value FROM app_config WHERE key = 'force_2fa'`);
       const isForce2faEnabled = force2faRow && force2faRow.value === '1';
       const isUserForce2fa = user.force_2fa === 1;
 
       if (isForce2faEnabled || isUserForce2fa) {
-        // Sprawdź wiek konta w UTC (tylko dla globalnego wymuszenia, dla indywidualnego wymuszamy natychmiast!)
+    // Check the account age in UTC (only for the global enforcement; for an individual one
         const userCreated = user.created_at ? new Date(user.created_at + 'Z') : new Date();
         const hoursSinceCreation = (Date.now() - userCreated.getTime()) / (1000 * 60 * 60);
 
         if (isUserForce2fa || hoursSinceCreation > 24) {
-          // Wymuszamy setup 2FA przy logowaniu
+      // Force 2FA setup at login
           const secret = user.totp_secret || authenticator.generateSecret();
           if (!user.totp_secret) {
             await db.run(`UPDATE users SET totp_secret = ? WHERE id = ?`, [secret, user.id]);
@@ -327,7 +325,7 @@ router.post('/api/login', async (req, res) => {
         }
       }
 
-      // Logowanie bezpośrednie bez 2FA (wymuszenie wyłączone lub konto młodsze niż 24h)
+    // Direct login without 2FA (enforcement off, or the account is younger than 24h)
       const permanentToken = await createSession(user.id, false);
 
       return res.json({
@@ -335,7 +333,7 @@ router.post('/api/login', async (req, res) => {
       });
     }
   } catch (err) {
-    console.error('Błąd logowania:', err);
+    console.error('Login failed:', err);
     res.status(500).json({ error: 'Błąd logowania serwera.' });
   }
 });
@@ -379,18 +377,18 @@ router.post('/api/verify-2fa-setup', async (req, res) => {
 
     await loginAttempts.recordSuccess(req.ip, tempToken);
 
-    // Aktywuj 2FA dla użytkownika
+    // Activate 2FA for the user
     await db.run(`UPDATE users SET totp_enabled = 1, force_2fa = 0 WHERE id = ?`, [session.user_id]);
 
-    // Wygeneruj stały token sesji (ważny 7 dni), już zweryfikowany 2FA
+    // Issue a permanent session token (valid 7 days), already 2FA-verified
     const permanentToken = await createSession(session.user_id, true);
 
-    // Usuń tymczasową sesję
+    // Remove the temporary session
     await db.run(`DELETE FROM sessions WHERE token = ?`, [tempToken]);
 
     res.json({ token: permanentToken });
   } catch (err) {
-    console.error('Błąd weryfikacji 2FA setup:', err);
+    console.error('2FA setup verification failed:', err);
     res.status(500).json({ error: 'Błąd serwera.' });
   }
 });
@@ -434,15 +432,15 @@ router.post('/api/login-2fa', async (req, res) => {
 
     await loginAttempts.recordSuccess(req.ip, tempToken);
 
-    // Wygeneruj stały token sesji (ważny 7 dni), już zweryfikowany 2FA
+    // Issue a permanent session token (valid 7 days), already 2FA-verified
     const permanentToken = await createSession(session.user_id, true);
 
-    // Usuń tymczasową sesję
+    // Remove the temporary session
     await db.run(`DELETE FROM sessions WHERE token = ?`, [tempToken]);
 
     res.json({ token: permanentToken });
   } catch (err) {
-    console.error('Błąd logowania 2FA:', err);
+    console.error('2FA login failed:', err);
     res.status(500).json({ error: 'Błąd serwera.' });
   }
 });
@@ -489,7 +487,7 @@ router.post('/api/change-password-forced', async (req, res) => {
     const user = await db.get(`SELECT totp_enabled, username, totp_secret, force_2fa FROM users WHERE id = ?`, [session.user_id]);
     
     if (user.totp_enabled === 1) {
-      // B-W5: Unieważnij stary tempToken i wygeneruj nowy po zmianie hasła
+    // B-W5: invalidate the old tempToken and issue a new one after a password change
       await db.run(`DELETE FROM sessions WHERE token = ?`, [tempToken]);
       const newTempToken = await createSession(session.user_id, false, TEMP_SESSION_TTL_DAYS);
       res.json({
@@ -508,7 +506,7 @@ router.post('/api/change-password-forced', async (req, res) => {
         const otpauth = authenticator.keyuri(user.username, 'Dietetyk AI', secret);
         const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
 
-        // B-W5: Unieważnij stary tempToken i wygeneruj nowy przed setup_2fa
+    // B-W5: invalidate the old tempToken and issue a new one before setup_2fa
         await db.run(`DELETE FROM sessions WHERE token = ?`, [tempToken]);
         const newTempToken = await createSession(session.user_id, false, TEMP_SESSION_TTL_DAYS);
         res.json({
@@ -520,7 +518,7 @@ router.post('/api/change-password-forced', async (req, res) => {
       } else {
         const permanentToken = await createSession(session.user_id, false);
 
-        // Usuń tymczasową sesję
+    // Remove the temporary session
         await db.run(`DELETE FROM sessions WHERE token = ?`, [tempToken]);
 
         res.json({
@@ -534,7 +532,7 @@ router.post('/api/change-password-forced', async (req, res) => {
   }
 });
 
-// 6e. Sprawdzenie statusu zaproszenia (dla rejestracji)
+// 6e. Check invitation status (for registration)
 router.get('/api/invitation-status', async (req, res) => {
   const { token } = req.query;
   if (!token) {
@@ -564,13 +562,12 @@ router.post('/api/register-invitation', async (req, res) => {
     return res.status(400).json({ error: passError });
   }
 
-  // Endpointy rejestracji (w przeciwieństwie do /api/login, /api/login-2fa,
-  // /api/verify-2fa-setup) nie miały DEDYKOWANEJ ochrony przed automatycznym
-  // masowym tworzeniem kont z jednego IP - chronił je tylko ogólny apiRateLimiter
-  // (120 żądań/min). Reużywamy mechanizm loginAttempts (per-IP, nie per-username,
-  // bo przy rejestracji nazwa użytkownika jest inna przy każdej próbie) - każda
-  // próba rejestracji (niezależnie od wyniku) liczy się do limitu, w przeciwieństwie
-  // do logowania, gdzie tylko NIEUDANE próby się liczą.
+// The registration endpoints (unlike /api/login, /api/login-2fa and /api/verify-2fa-setup)
+// had no DEDICATED protection against automated mass account creation from one IP - only the
+// general apiRateLimiter (120 requests/min) covered them. We reuse the loginAttempts
+// mechanism, keyed per IP rather than per username, because at registration the username
+// differs on every attempt. Every registration attempt counts towards the limit regardless
+// of outcome, unlike login where only FAILED attempts count.
   const registerLockedMs = await loginAttempts.isLocked(req.ip, 'register_endpoint');
   if (registerLockedMs > 0) {
     return res.status(429).json({ error: `Za dużo prób rejestracji z tego adresu IP. Spróbuj ponownie za ${Math.ceil(registerLockedMs / 60000)} min.` });
@@ -623,13 +620,13 @@ router.post('/api/register-invitation', async (req, res) => {
   }
 });
 
-// 6f-2. Publiczna rejestracja (bez tokenu zaproszenia)
+// 6f-2. Public registration (without an invitation token)
 router.post('/api/register-public', async (req, res) => {
-  // Runda 17 (naprawa z audytu): ten endpoint wcześniej nie miał ŻADNEJ flagi
-  // włącz/wyłącz i całkowicie omijał system zaproszeń admina (/api/admin/invite).
-  // Domyślnie WYŁĄCZONY - flaga `allow_public_registration` w app_config (domyślny
-  // wiersz '0' wstawiany w db.js, ta sama konwencja co `force_2fa`), zarządzana
-  // przez admina w GET/POST /api/admin/config.
+// Round 17 (audit fix): this endpoint previously had NO enable/disable flag at all and
+// bypassed the admin invitation system (/api/admin/invite) entirely. It is OFF by default -
+// the `allow_public_registration` flag in app_config (the default '0' row is inserted in
+// db.js, the same convention as `force_2fa`), managed by an administrator through
+// GET/POST /api/admin/config.
   const allowPublicRegRow = await db.get(`SELECT value FROM app_config WHERE key = 'allow_public_registration'`);
   const isPublicRegistrationEnabled = allowPublicRegRow && allowPublicRegRow.value === '1';
   if (!isPublicRegistrationEnabled) {
@@ -645,7 +642,7 @@ router.post('/api/register-public', async (req, res) => {
     return res.status(400).json({ error: passError });
   }
 
-  // Patrz komentarz w /api/register-invitation - ten sam mechanizm anty-spam per-IP.
+    // See the comment in /api/register-invitation - the same per-IP anti-spam mechanism.
   const registerLockedMs = await loginAttempts.isLocked(req.ip, 'register_endpoint');
   if (registerLockedMs > 0) {
     return res.status(429).json({ error: `Za dużo prób rejestracji z tego adresu IP. Spróbuj ponownie za ${Math.ceil(registerLockedMs / 60000)} min.` });
@@ -674,7 +671,7 @@ router.post('/api/register-public', async (req, res) => {
       VALUES (?, ?, ?, 0, ?, 'user', 'active', ?)
     `, [username, passwordHash, syncToken, email || null, secret]);
 
-    // Wstawienie domyślnych celów dla nowego użytkownika
+    // Insert the default targets for the new user
     const defaultSettings = [
       { key: 'target_calories', value: '2500' },
       { key: 'target_protein', value: '150' },

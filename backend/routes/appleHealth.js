@@ -3,62 +3,61 @@ const router = express.Router();
 const db = require('../db');
 const { parseHealthAutoExportDate, dateObjToLocalDateString, getWarsawWallClock } = require('../utils/dates');
 
-// Webhook odbierający dane z apki "Health Auto Export" (iOS) - bridge między Apple Health
-// a naszym backendem (HealthKit nie ma publicznego API w chmurze, więc potrzebny jest
-// pośrednik działający na telefonie, patrz https://github.com/Lybron/health-auto-export).
+// Webhook receiving data from the "Health Auto Export" iOS app - a bridge between Apple
+// Health and this backend. HealthKit has no public cloud API, so an intermediary running
+// on the phone is required (see https://github.com/Lybron/health-auto-export).
 //
-// AUTORYZACJA: ten endpoint NIE używa sesji/ciasteczek (apka na telefonie wysyła żądanie
-// w tle, bez przeglądarki) - identyfikujemy użytkownika przez jego unikalny `sync_token`
-// (kolumna users.sync_token, już od dawna obecna w bazie, widoczna w Ustawieniach) wpisany
-// wprost w URL webhooka. Dlatego ten router MUSI być zamontowany w server.js PRZED
+// AUTHORISATION: this endpoint does NOT use sessions or cookies - the phone app sends the
+// request in the background, with no browser. We identify the user by their unique
+// `sync_token` (the users.sync_token column, long present in the database and visible in
+// Settings) written directly into the webhook URL. This router MUST therefore be mounted
+// in server.js BEFORE
 // `app.use('/api', requireAuth)` - tak samo jak routes/healthcheck.js.
 //
-// REKONCYLIACJA Z OURA: Oura Ring też dostarcza steps/active_calories/total_calories
-// (services/sync.js). Wcześniej Oura była traktowana jako bardziej autorytatywne źródło,
-// ale w praktyce dane Oura (i Withings) i tak synchronizują się do Apple Health na
-// telefonie - więc Apple Health jest faktycznie najpełniejszym, najszybszym źródłem
-// (Oura potrafi dawać dane z opóźnieniem - dobowe dane finalizują się zwykle następnego
-// ranka, patrz wcześniejsza diagnoza przez scripts/check-oura-api.sh). Priorytet
-// odwrócony: Apple Health jest teraz źródłem AUTORYTATYWNYM dla aktywności.
-// Kolumna health_metrics.activity_source ('apple' | 'google_fit' | 'oura') pamięta,
-// kto ostatnio zapisał dane aktywności dla danej daty. Hierarchia źródeł jest jedna
-// dla całej aplikacji i mieszka w utils/activitySources.js:
-//   apple (3) > google_fit (2) > oura (1)
-//   - Ten webhook stoi na szczycie hierarchii, więc ZAWSZE nadpisuje dane aktywności
-//     i ustawia activity_source='apple'. Nie potrzebuje żadnej klauzuli ochronnej.
-//   - syncOura i syncGoogleFit (services/sync.js) budują swoje klauzule ON CONFLICT
-//     przez preserveHigherPriority()/preserveSourceLabel() z tej samej hierarchii,
-//     więc nie nadpiszą kolumny, w której siedzą realne dane z wyżej notowanego
-//     źródła. Wcześniej bronił się przed nadpisaniem wyłącznie 'apple', a Google Fit
-//     i Oura nadpisywały się nawzajem - wynik dla tej samej doby zależał wtedy od
-//     kolejności synchronizacji.
+// RECONCILIATION WITH OURA: the Oura Ring also provides steps/active_calories/
+// total_calories (services/sync.js). Oura used to be treated as the more authoritative
+// source, but in practice Oura (and Withings) data syncs into Apple Health on the phone
+// anyway - which makes Apple Health the fullest and fastest source. Oura can lag: daily
+// figures usually finalise the following morning (see the earlier diagnosis via
+// scripts/check-oura-api.sh). The priority was therefore inverted: Apple Health is now the
+// AUTHORITATIVE source for activity.
+// The health_metrics.activity_source column ('apple' | 'google_fit' | 'oura') records who
+// last wrote activity data for a given date. The source hierarchy is defined once for the
+// whole application, in utils/activitySources.js:
+//   - This webhook sits at the top of the hierarchy, so it ALWAYS overwrites activity data
+//     and sets activity_source='apple'. It needs no protective clause.
+//   - syncOura and syncGoogleFit (services/sync.js) build their ON CONFLICT clauses from
+//     that same hierarchy via preserveHigherPriority()/preserveSourceLabel(), so they will
+//     not overwrite a column holding real data from a higher-ranked source. Previously the
+//     only thing guarded against was overwriting 'apple', while Google Fit and Oura
+//     overwrote each other - the result for a given day then depended on sync order.
 //
 // FORMAT PAYLOADU (Health Auto Export, "Automatyzacja typu REST API"):
 //   { "data": { "metrics": [ { "name": "step_count", "units": "steps",
 //       "data": [ { "date": "2026-06-18 14:00:00 +0200", "qty": 1234 }, ... ] }, ... ] } }
-// Pole "name" to zawsze snake_case identyfikator metryki (np. "step_count",
-// "active_energy", "basal_energy_burned", "apple_exercise_time") - NIE wyświetlana
-// nazwa z UI apki (np. "Step Count"). Potwierdzone na podstawie przykładowych
-// payloadów z dokumentacji/community (m.in. ladvien.com, irvinlim/apple-health-ingester).
+// The "name" field is always a snake_case metric identifier ("step_count",
+// "active_energy", "basal_energy_burned", "apple_exercise_time") - NOT the display name
+// from the app's UI ("Step Count"). Confirmed against sample payloads from the
+// documentation and community (ladvien.com, irvinlim/apple-health-ingester among others).
 //
-// Obsługujemy tylko metryki potrzebne do bilansu kalorycznego (kroki, kalorie, minuty
-// aktywności), temperaturę nadgarstka, dystans i wodę ("Dietary Water" - patrz
-// METRIC_FIELD_MAP niżej) z data.metrics[] - inne metryki w tym payloadzie (np. sen) są
-// po prostu ignorowane, nie traktujemy ich jako błąd. WYJĄTEK: tętno per trening z data.workouts[]
-// (avgHeartRate/maxHeartRate/heartRateData) - patrz sekcja "STREFY KARDIO" niżej, JEST
-// obsługiwane, o ile użytkownik włączył przełącznik "Include Workout Metrics" w
-// automatyzacji Health Auto Export na telefonie (domyślnie wyłączony - bez niego
-// payload treningu nie zawiera w ogóle pól tętna).
+// We handle only the metrics needed for the calorie balance (steps, calories, active
+// minutes), wrist temperature, distance and water ("Dietary Water" - see METRIC_FIELD_MAP
+// below) from data.metrics[]. Other metrics in the payload, such as sleep, are simply
+// ignored rather than treated as an error. EXCEPTION: per-workout heart rate from
+// data.workouts[] (avgHeartRate/maxHeartRate/heartRateData) IS handled - see the "CARDIO
+// ZONES" section below - provided the user enabled the "Include Workout Metrics" toggle in
+// the Health Auto Export automation on their phone. It is off by default, and without it
+// the workout payload carries no heart-rate fields at all.
 
-// Górne limity rozmiaru payloadu webhooka (Runda 12, audyt bezpieczeństwa) - patrz
-// komentarz przy ich użyciu w handlerze POST niżej.
+// Upper size limits for the webhook payload (round 12, security audit) - see the comment
+// where they are used in the POST handler below.
 const MAX_METRIC_ENTRIES_PER_REQUEST = 20000;
 const MAX_WORKOUTS_PER_REQUEST = 500;
 
 const KJ_TO_KCAL = 1 / 4.184;
 
-// Health Auto Export może wysyłać energię w "kJ" albo "kcal" w zależności od ustawień
-// regionalnych jednostek na telefonie użytkownika - zawsze konwertujemy do kcal.
+// Health Auto Export may send energy in "kJ" or "kcal" depending on the phone's regional
+// unit settings - we always convert to kcal.
 function toKcal(qty, units) {
   const u = (units || '').toLowerCase();
   if (u === 'kj' || u === 'kilojoule' || u === 'kilojoules') {
@@ -67,8 +66,8 @@ function toKcal(qty, units) {
   return qty;
 }
 
-// Health Auto Export może wysyłać temperaturę w stopniach F (jeśli telefon ma
-// regionalne jednostki US) albo C - zawsze konwertujemy do °C.
+// Health Auto Export may send temperature in Fahrenheit (on a phone with US regional
+// units) or Celsius - we always convert to °C.
 function toCelsius(qty, units) {
   const u = (units || '').toLowerCase();
   if (u === 'degf' || u === 'fahrenheit' || u === '°f' || u === 'f') {
@@ -77,8 +76,8 @@ function toCelsius(qty, units) {
   return qty;
 }
 
-// Health Auto Export wysyła dystans w "km" albo "mi" w zależności od regionalnych
-// jednostek na telefonie - zawsze konwertujemy do metrów (tak jak Oura/Google Fit).
+// Health Auto Export sends distance in "km" or "mi" depending on the phone's regional
+// units - we always convert to metres (as with Oura and Google Fit).
 function toMeters(qty, units) {
   const u = (units || '').toLowerCase();
   if (u === 'mi' || u === 'mile' || u === 'miles') {
@@ -87,14 +86,14 @@ function toMeters(qty, units) {
   if (u === 'km' || u === 'kilometer' || u === 'kilometers' || u === 'kilometres') {
     return qty * 1000;
   }
-  // 'm' / 'meter' / nieznane - zakładamy, że już jest w metrach.
+  // 'm' / 'meter' / unknown - assume it is already in metres.
   return qty;
 }
 
-// Health Auto Export wysyła wodę ("Dietary Water" - HKQuantityTypeIdentifier
-// dietaryWater) w "mL", "L" albo "fl_oz_us"/"fl_oz_imp" w zależności od regionalnych
-// jednostek na telefonie - zawsze konwertujemy do mililitrów (tak jak kolumna
-// health_metrics.water_ml zasilana przez /api/water/add w routes/health.js).
+// Health Auto Export sends water ("Dietary Water" - HKQuantityTypeIdentifier dietaryWater)
+// in "mL", "L" or "fl_oz_us"/"fl_oz_imp" depending on the phone's regional units - we
+// always convert to millilitres, matching the health_metrics.water_ml column fed by
+// /api/water/add in routes/health.js.
 function toMilliliters(qty, units) {
   const u = (units || '').toLowerCase();
   if (u === 'l' || u === 'liter' || u === 'liters' || u === 'litre' || u === 'litres') {
@@ -109,16 +108,16 @@ function toMilliliters(qty, units) {
   if (u === 'cup' || u === 'cups') {
     return qty * 240;
   }
-  // 'ml' / 'millilitre' / nieznane - zakładamy, że już jest w mililitrach.
+  // 'ml' / 'millilitre' / unknown - assume it is already in millilitres.
   return qty;
 }
 
-// STREFY KARDIO (Karvonen) per trening - patrz migracja w db.js (apple_health_workouts.
-// avg_heart_rate/max_heart_rate/zone1_minutes..zone5_minutes). Te same progi procentowe
-// rezerwy tętna (50/60/70/80/90%), co statyczna tabela referencyjna "Strefy Tętna" na
-// Dashboardzie (frontend/src/components/Dashboard.jsx) i ten sam wzór HRmax = 220 - wiek
-// na bazie roku urodzenia (routes/dashboard.js) - żeby obie karty pokazywały zgodne ze
-// sobą granice stref.
+// CARDIO ZONES (Karvonen) per workout - see the migration in db.js
+// (apple_health_workouts.avg_heart_rate/max_heart_rate/zone1_minutes..zone5_minutes). The
+// same heart-rate-reserve percentages (50/60/70/80/90%) as the static "Heart rate zones"
+// reference table on the Dashboard (frontend/src/components/Dashboard.jsx), and the same
+// HRmax = 220 - age formula based on birth year (routes/dashboard.js) - so both cards show
+// zone boundaries that agree with each other.
 const KARVONEN_ZONE_UPPER_BOUNDS = [0.6, 0.7, 0.8, 0.9]; // <0.6 -> Z1, <0.7 -> Z2, <0.8 -> Z3, <0.9 -> Z4, >=0.9 -> Z5
 
 function numOrNull(v) {
@@ -133,9 +132,9 @@ const shiftDate = (dateStr, deltaDays) => {
   return dt.toISOString().split('T')[0];
 };
 
-// Klasyfikuje pojedynczy odczyt tętna do strefy 1-5 (Karvonen). Zwraca null, gdy nie da
-// się tego policzyć (brak HRmax - użytkownik nie podał roku urodzenia w profilu - albo
-// rezerwa tętna wychodzi <= 0, np. błędnie wpisany rok urodzenia dający HRmax <= RHR).
+// Classifies a single heart-rate reading into zone 1-5 (Karvonen). Returns null when it
+// cannot be computed: no HRmax, because the user has not set a birth year in their profile, or
+// the heart-rate reserve comes out <= 0, e.g. a mistyped birth year giving HRmax <= RHR.
 function classifyKarvonenZone(hr, userMaxHr, rhr) {
   if (!Number.isFinite(hr) || userMaxHr == null) return null;
   const hrReserve = userMaxHr - rhr;
@@ -147,10 +146,10 @@ function classifyKarvonenZone(hr, userMaxHr, rhr) {
   return 5;
 }
 
-// Wyciąga reprezentatywną wartość tętna z jednej próbki heartRateData - Health Auto
-// Export używa RÓŻNYCH kształtów w zależności od wersji eksportu ("Workouts v1": pole
-// `qty`; "Workouts v2": pola `Min`/`Avg`/`Max`) - bierzemy średnią, jeśli jest, inaczej
-// pierwszą dostępną liczbę.
+// Extracts a representative heart-rate value from one heartRateData sample. Health Auto
+// Export uses DIFFERENT shapes depending on the export version ("Workouts v1": a `qty`
+// field; "Workouts v2": `Min`/`Avg`/`Max` fields) - we take the average when present,
+// otherwise the first available number.
 function extractSampleHr(entry) {
   if (!entry) return null;
   const candidates = [entry.Avg, entry.avg, entry.qty, entry.Max, entry.max, entry.Min, entry.min];
@@ -161,19 +160,19 @@ function extractSampleHr(entry) {
   return null;
 }
 
-const MAX_SAMPLE_GAP_MINUTES = 5; // Health Auto Export zwykle próbkuje tętno podczas
-// treningu ~co minutę - większy odstęp między kolejnymi próbkami (np. utracone próbki,
-// duplikat znacznika czasu) ucinamy do tego limitu, żeby jedna "dziura" w danych nie
-// zaliczyła kilkudziesięciu minut do przypadkowej strefy.
-const DEFAULT_LAST_SAMPLE_MINUTES = 1; // czas przypisany ostatniej próbce w serii (nie
-// ma kolejnej próbki, więc nie da się policzyć realnego odstępu).
+const MAX_SAMPLE_GAP_MINUTES = 5; // Health Auto Export usually samples heart rate during
+// a workout about once a minute - a larger gap between consecutive samples (lost samples,
+// a duplicated timestamp) is clamped to this limit, so one hole in the data cannot credit
+// tens of minutes to an arbitrary zone.
+const DEFAULT_LAST_SAMPLE_MINUTES = 1; // duration assigned to the last sample in a series
+// (there is no following sample, so the real gap cannot be computed).
 
-// Liczy realny rozkład minut treningu w 5 strefach Karvonena na bazie szeregu próbek
-// tętna z payloadu (workout.heartRateData). Gdy payload nie zawiera szeregu próbek, ale
-// zawiera samo uśrednione tętno treningu (workout.avgHeartRate) i znamy czas trwania
-// treningu, jako rozsądny fallback przypisujemy CAŁY czas trwania do jednej strefy
-// odpowiadającej temu uśrednionemu tętru - to wciąż realne zmierzone tętno, tylko bez
-// rozkładu w czasie, więc lepsze niż brak jakichkolwiek danych o strefach.
+// Computes the real distribution of workout minutes across the five Karvonen zones from
+// the heart-rate sample series in the payload (workout.heartRateData). When the payload has
+// no sample series but does carry the workout's averaged heart rate (workout.avgHeartRate)
+// and we know the duration, a reasonable fallback assigns the ENTIRE duration to the single
+// zone matching that average - still a real measured heart rate, just without its
+// distribution over time, which beats having no zone data at all.
 function computeWorkoutHrZones(workout, userMaxHr, rhr, durationMinutes) {
   const avgHrQty = numOrNull(workout.avgHeartRate && workout.avgHeartRate.qty)
     ?? numOrNull(workout.heartRate && workout.heartRate.avg && workout.heartRate.avg.qty);
@@ -181,8 +180,8 @@ function computeWorkoutHrZones(workout, userMaxHr, rhr, durationMinutes) {
     ?? numOrNull(workout.heartRate && workout.heartRate.max && workout.heartRate.max.qty);
 
   if (userMaxHr == null) {
-    // Bez roku urodzenia użytkownika nie da się policzyć stref Karvonena - zwracamy
-    // przynajmniej surowe avg/max tętno (jeśli payload je zawiera), strefy zostają NULL.
+    // Without the user's birth year the Karvonen zones cannot be computed - we still return
+    // the raw avg/max heart rate when the payload carries it, and leave the zones NULL.
     return { avgHr: avgHrQty, maxHr: maxHrQty, zones: [null, null, null, null, null] };
   }
 
@@ -225,37 +224,37 @@ function computeWorkoutHrZones(workout, userMaxHr, rhr, durationMinutes) {
 }
 
 // Mapowanie nazw metryk Health Auto Export -> nasze pola w health_metrics.
-// `field` to nasz wewnętrzny bucket (patrz `byDate` poniżej), nie nazwa kolumny SQL 1:1 -
-// total_calories_burned liczymy jako suma active_calories + basal_calories.
-// `mode: 'last'` (w przeciwieństwie do domyślnego sumowania) - dla temperatury
-// nadgarstka NIE sumujemy kolejnych wpisów z tego samego dnia (to jeden pomiar
-// nocny, nie wartość kumulatywna jak kroki/kalorie) - bierzemy ostatnią wartość
+// `field` is our internal bucket (see `byDate` below), not a 1:1 SQL column name -
+// total_calories_burned is computed as active_calories + basal_calories.
+// `mode: 'last'` (as opposed to the default summing): for wrist temperature we do NOT add
+// up successive entries from the same day. It is a single overnight measurement, not a
+// cumulative value like steps or calories - so we take the last value
 // z paczki danych.
 const METRIC_FIELD_MAP = {
   step_count: { field: 'steps', convert: (qty) => qty },
   active_energy: { field: 'active_calories', convert: toKcal },
   basal_energy_burned: { field: 'basal_calories', convert: toKcal },
   apple_exercise_time: { field: 'active_minutes', convert: (qty) => qty },
-  // Wymaga włączenia metryki "Wrist Temperature" w automatyzacji Health Auto
-  // Export na telefonie (domyślnie wyłączona) - dostępna tylko z Apple Watch
-  // Series 8+/Ultra. Inna wartość niż Oura `temperature_deviation` (tam to
-  // odchylenie od bazowej, tu wartość absolutna w °C).
+  // Requires the "Wrist Temperature" metric to be enabled in the Health Auto Export
+  // automation on the phone (off by default) - available only on Apple Watch Series
+  // 8+/Ultra. A different value from Oura's `temperature_deviation`, which is a deviation
+  // from baseline; this is an absolute value in °C.
   wrist_temperature: { field: 'wrist_temperature', convert: toCelsius, mode: 'last' },
-  // Dystans (chód + bieg) - wcześniej w ogóle nieobsługiwany (payload przychodził,
-  // jeśli użytkownik miał tę metrykę włączoną w automatyzacji, ale był po cichu
-  // ignorowany, bo nie było dla niego wpisu w tej mapie). Sumujemy jak kroki/kalorie
-  // (wartość kumulatywna w ciągu dnia, nie chwilowa).
+  // Distance (walking + running) - previously not handled at all. The payload arrived if
+  // the user had that metric enabled in the automation, but was silently ignored because
+  // this map had no entry for it. Summed like steps and calories (a cumulative value across
+  // the day rather than an instantaneous one).
   walking_running_distance: { field: 'distance_meters', convert: toMeters },
-  // Woda ("Dietary Water") - źródło: "smart butelka" użytkownika, która loguje wypitą
-  // wodę do Apple Health, skąd Health Auto Export eksportuje ją dalej do tego webhooka.
-  // Wymaga włączenia metryki "Dietary Water" w automatyzacji Health Auto Export na
-  // telefonie (domyślnie wyłączona, tak jak Wrist Temperature). UWAGA: nazwa pola JSON
-  // "dietary_water" jest wyprowadzona z konwencji snake_case widocznej w pozostałych
-  // metrykach tej mapy (np. step_count, active_energy, apple_exercise_time) i z nazwy
-  // identyfikatora HealthKit (HKQuantityTypeIdentifier.dietaryWater) - nie udało się
-  // znaleźć jej w dokumentacji Health Auto Export w formie 1:1 (wiki opisuje strukturę
-  // ogólną, a nie pełną listę nazw pól). Jeśli po włączeniu synchronizacji w logach
-  // serwera "Dietetyk" nie pojawią się wpisy dla wody, sprawdź w logu webhooka, jaka
+  // Water ("Dietary Water") - the source is the user's smart bottle, which logs intake into
+  // Apple Health, from where Health Auto Export forwards it to this webhook.
+  // Requires the "Dietary Water" metric to be enabled in the Health Auto Export automation
+  // on the phone (off by default, like Wrist Temperature). NOTE: the JSON field name
+  // "dietary_water" is inferred from the snake_case convention visible in the other
+  // identifiers and from the HealthKit identifier
+  // (HKQuantityTypeIdentifier.dietaryWater) - it could not be found verbatim in the Health
+  // Auto Export documentation, whose wiki describes the general structure rather than a full
+  // list of field names. If no water entries appear in the server log after enabling the
+  // sync, check the webhook log to see which
   // nazwa faktycznie przychodzi w payloadzie, i popraw klucz w tej mapie.
   dietary_water: { field: 'water_ml', convert: toMilliliters },
   resting_heart_rate: { field: 'rhr', convert: (qty) => qty, mode: 'last' },
@@ -276,27 +275,27 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
       FROM users WHERE sync_token = ?
     `, [syncToken.trim()]);
     if (!user) {
-      // Celowo ten sam, generyczny komunikat jak przy braku tokenu - nie chcemy ujawniać,
-      // czy podany token kiedykolwiek istniał.
+      // Deliberately the same generic message as for a missing token - we do not want to
+      // reveal whether the supplied token ever existed.
       return res.status(404).json({ error: 'Nieznany token synchronizacji.' });
     }
 
-    // HRmax (220 - wiek) na bazie roku urodzenia - ten sam wzór co w routes/dashboard.js,
-    // potrzebny tutaj do policzenia stref Karvonena per trening (patrz computeWorkoutHrZones).
-    // Bug fix: rok liczony przez getWarsawWallClock (nie goły `new Date()`, strefa procesu
-    // Node) - ten sam wzorzec błędu naprawiony w routes/dashboard.js (patrz komentarz tam):
-    // na hostingu w UTC, w oknie 00:00-01:59 czasu warszawskiego 1 stycznia, `new
-    // Date().getFullYear()` zwracał jeszcze poprzedni rok, więc strefy kardio (Karvonen)
-    // treningów zapisanych w tym krótkim oknie były liczone z HRmax o rok "za młodym".
+    // HRmax (220 - age) from the birth year - the same formula as in routes/dashboard.js,
+    // needed here to compute the per-workout Karvonen zones (see computeWorkoutHrZones).
+    // Bug fix: the year is read via getWarsawWallClock rather than a bare `new Date()` in
+    // the Node process timezone - the same class of bug fixed in routes/dashboard.js (see
+    // the comment there): during the Warsaw night window on a UTC server, `new
+    // Date().getFullYear()` could still return the previous year, so the Karvonen cardio zones
+    // of workouts saved in that short window would have used an HRmax a year too young.
     const currentYear = getWarsawWallClock().getUTCFullYear();
     const userMaxHr = user.birth_year ? (220 - (currentYear - user.birth_year)) : null;
 
-    // RHR (tętno spoczynkowe) per dzień treningu - cache w ramach jednego żądania
-    // webhooka, żeby nie odpytywać bazy wielokrotnie dla treningów z tego samego dnia.
-    // Fallback: jeśli dany dzień nie ma jeszcze zapisanego RHR (np. Oura zsynchronizuje
-    // się później), bierzemy najnowszy wcześniejszy znany RHR użytkownika; jeśli
-    // zupełnie nieznany, używamy orientacyjnej wartości 60 bpm (przeciętne RHR dorosłej
-    // osoby) - lepsze niż RHR=0, które fałszywie zawyżałoby rezerwę tętna.
+    // Resting heart rate per workout day - cached within a single webhook request so we do
+    // not query the database repeatedly for workouts from the same day.
+    // Fallback: if a day has no RHR stored yet (Oura may sync later), we take the user's
+    // most recent earlier known RHR; if none is known at all, we use an indicative 60 bpm
+    // (a typical adult resting heart rate) - better than RHR=0, which would falsely inflate
+    // the heart-rate reserve.
     const DEFAULT_RHR_FALLBACK = 60;
     const rhrCache = new Map();
     async function getRestingHrForDate(dateStr) {
@@ -319,23 +318,23 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
       return rhr;
     }
 
-    // Automatyzacja z "Typ danych: Treningi" (Workouts) wysyła payload w INNYM formacie
-    // niż automatyzacja ogólnych metryk zdrowia - dane są w polu data.workouts[], a nie
-    // data.metrics[] (potwierdzone na podstawie ręcznego eksportu CSV "Workouts-*.csv":
+  // An automation with 'Data type: Workouts' sends its payload in a DIFFERENT format from
+  // the general health-metrics automation - the data is in data.workouts[] rather than
+  // data.metrics[] (confirmed from a manual 'Workouts-*.csv' export:
     // kolumny Workout Type/Start/End/Aktywna Energia (kJ)/Energia Spoczynkowa (kJ)/...).
-    // Dokładny kształt obiektu treningu w JSON potwierdzony na podstawie logów produkcyjnych:
+  // The exact shape of the workout object in JSON, confirmed from production logs:
     //   { id, name, start: "2026-06-18 06:00:26 +0200", end: "...",
     //     duration: 4715.99 (SEKUNDY), activeEnergyBurned: { qty: 2299.5, units: "kJ" },
     //     intensity: {...}, temperature: {...}, humidity: {...}, metadata: {} }
     // Mapujemy: activeEnergyBurned -> active_calories (po konwersji do kcal), duration
     // (sekundy -> minuty) -> active_minutes, przypisane do dnia kalendarzowego pola `start`.
-    // Trening NIE dostarcza basal_calories, więc total_calories_burned nie jest tu liczone
+  // A workout does NOT provide basal_calories, so total_calories_burned is not computed here
     // (dashboard.js i tak ma fallback bmr + active_calories, gdy total_calories_burned brak).
     //
-    // BEZ RYZYKA PODWÓJNEGO LICZENIA: użytkownik potwierdził, że to JEDYNA skonfigurowana
-    // automatyzacja Health Auto Export (brak równoległej automatyzacji "ogólne metryki",
-    // która już wliczałaby kalorie treningowe do dobowego active_energy) - bezpiecznie
-    // można więc zapisywać activeEnergyBurned z treningów jako active_calories.
+  // NO RISK OF DOUBLE COUNTING: the user confirmed this is the ONLY configured Health Auto
+  // Export automation - there is no parallel general-metrics automation already folding
+  // workout calories into the daily active_energy - so writing activeEnergyBurned from
+  // workouts as active_calories is safe.
     const rawMetrics = req.body && req.body.data && req.body.data.metrics;
     const rawWorkouts = req.body && req.body.data && req.body.data.workouts;
     const metrics = Array.isArray(rawMetrics) ? rawMetrics : null;
@@ -346,16 +345,16 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
     }
 
     if (metrics) {
-      console.log(`[APPLE HEALTH DEBUG] Użytkownik ${user.id} wysłał metryki: [${metrics.filter(m => m && m.name).map(m => m.name).join(', ')}]`);
+      console.log(`[APPLE HEALTH DEBUG] User ${user.id} sent metrics: [${metrics.filter(m => m && m.name).map(m => m.name).join(', ')}]`);
     }
 
-    // Audyt bezpieczeństwa (Runda 12): ten webhook NIE ma autentykacji sesyjnej (tylko
-    // sync_token w URL, patrz komentarz na początku pliku) i przed tą zmianą nie miał
-    // ŻADNEGO górnego limitu liczby wpisów w payloadzie. Każdy trening robi sekwencyjne
-    // zapytania do bazy (getRestingHrForDate + INSERT), a każdy wpis metryki jest
-    // przetwarzany w pętli - spreparowany payload z tysiącami elementów mógłby zająć
-    // serwer na długo (DoS). Realny payload z Health Auto Export (nawet przy zbiorczej
-    // wysyłce wielu dni/automatyzacji naraz) nie powinien przekraczać tych wartości.
+    // Security audit (round 12): this webhook has NO session authentication - only the
+    // sync_token in the URL, see the comment at the top of this file - and before this
+    // change had NO upper limit on the number of entries in a payload. Every workout issues
+    // sequential database queries (getRestingHrForDate + INSERT), and every metric entry is
+    // processed in a loop, so a crafted payload with thousands of elements could occupy the
+    // server for a long time (a DoS). A real Health Auto Export payload, even when sending
+    // many days or automations at once, should not exceed these values.
     const totalMetricEntries = metrics
       ? metrics.reduce((sum, m) => sum + (m && Array.isArray(m.data) ? m.data.length : 0), 0)
       : 0;
@@ -366,10 +365,10 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
       return res.status(400).json({ error: `Za dużo treningów w jednym żądaniu (limit: ${MAX_WORKOUTS_PER_REQUEST}).` });
     }
 
-    // Sumujemy wszystkie wpisy danej metryki/treningu przypadające na ten sam dzień
-    // kalendarzowy (Health Auto Export może wysyłać dane w wielu mniejszych, np.
-    // godzinowych, paczkach - suma tych paczek daje prawidłową dobową wartość dla
-    // kroków/kalorii/minut aktywności, bo to wartości kumulatywne, nie chwilowe).
+    // We sum all entries of a given metric or workout that fall on the same calendar day
+    // (Health Auto Export may send data in several smaller batches, hourly for instance -
+    // summing those batches gives the correct daily value for steps, calories and active
+    // minutes, because those are cumulative rather than instantaneous).
     const byDate = {};
     let matchedEntries = 0;
 
@@ -377,7 +376,7 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
       for (const metric of metrics) {
         const name = metric && typeof metric.name === 'string' ? metric.name.toLowerCase() : '';
         
-        // Specjalny parser dla analizy snu (sleep_analysis), ponieważ jest to metryka kategorialna (przedziały czasowe)
+      // Special parser for sleep analysis (sleep_analysis), because it is a categorical metric
         if (name === 'sleep_analysis') {
           if (!Array.isArray(metric.data)) continue;
           if (metric.data.length > 0) {
@@ -392,7 +391,7 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
             const endParsed = parseHealthAutoExportDate(endStr);
             if (!startParsed || !endParsed) continue;
 
-            // Tradycyjnie czas snu przypisuje się do dnia, w którym użytkownik się budzi (endDate)
+        // By convention sleep duration is attributed to the day the user wakes up (endDate)
             const dateStr = dateObjToLocalDateString(endParsed);
             
             if (!byDate[dateStr]) {
@@ -476,7 +475,7 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
           const bucket = byDate[dateStr];
           const converted = handler.convert(qty, metric.units);
           if (name === 'dietary_water') {
-            // Runda 3 (audyt): Idempotentność wody - zapisz próbkę unikalną po user_id i timestamp
+    // Round 3 (audit): water idempotency - store the sample keyed by user_id and timestamp
             const timestamp = entry.date || parsedDate.toISOString();
             const insertResult = await db.run(`
               INSERT OR IGNORE INTO apple_health_water_samples (user_id, timestamp, date, qty)
@@ -495,13 +494,12 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
       }
     }
 
-    // Każdy trening zapisujemy NAJPIERW osobno (zidentyfikowany przez workout.id) do
-    // tabeli apple_health_workouts - patrz komentarz przy tej tabeli w db.js po co
-    // (uniknięcie podwójnego liczenia przy ponownym wysłaniu tego samego treningu, oraz
-    // prawidłowe sumowanie wielu treningów danego dnia dostarczonych w różnych wywołaniach
-    // webhooka). Dobową sumę do health_metrics liczymy NA KOŃCU jako SUM(...) z tej
-    // tabeli dla wszystkich dni, których dotyczy ten payload - nie inkrementujemy jej
-    // bezpośrednio z treści żądania.
+    // Every workout is FIRST stored separately, identified by workout.id, in the
+    // apple_health_workouts table - see the comment on that table in db.js for why (avoiding
+    // double counting when the same workout is re-sent, and correctly summing several
+    // workouts from one day delivered across different webhook calls). The daily total in
+    // health_metrics is computed AT THE END as SUM(...) over that table for every day this
+    // payload touches - we never increment it directly from the request body.
     let matchedWorkouts = 0;
     const workoutAffectedDates = new Set();
     if (workouts) {
@@ -525,16 +523,16 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
         }
 
         // `workout.name` to typ treningu z UI apki (np. "Running", "Functional
-        // Strength Training") - patrz potwierdzony kształt obiektu treningu w
-        // komentarzu nad tym handlerem. Zapisujemy go, żeby Dashboard mógł pokazać
-        // sekcję "Ostatnia aktywność" z realną nazwą/ikoną, a nie pustą listą.
+      // Strength Training') - see the confirmed workout object shape in the comment above
+      // this handler. We store it so the Dashboard can show
+      // the 'Latest activity' section with a real name and icon rather than an empty list.
         const workoutType = typeof workout.name === 'string' && workout.name.trim()
           ? workout.name.trim()
           : null;
 
-        // Strefy kardio (Karvonen) per trening - patrz computeWorkoutHrZones wyżej.
-        // Wymaga RHR z dnia treningu (nie dnia "dziś") - trening może dotyczyć dowolnej
-        // wcześniejszej daty z payloadu.
+      // Cardio zones (Karvonen) per workout - see computeWorkoutHrZones above.
+      // Requires the RHR from the workout's own day, not from 'today' - a workout can belong
+      // to any earlier date in the payload.
         const rhrForWorkoutDate = await getRestingHrForDate(dateStr);
         const hrZones = computeWorkoutHrZones(workout, userMaxHr, rhrForWorkoutDate, durationMinutes);
 
@@ -586,19 +584,19 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
       }
     }
 
-    // Post-processing danych snu i obliczanie sleep_score na podstawie celu użytkownika
+    // Post-processing of the sleep data and computing sleep_score against the user's target
     const sleepGoalRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'target_sleep_duration'", [user.id]);
     const targetSleep = sleepGoalRow ? parseFloat(sleepGoalRow.value) : 7.2;
 
     for (const dateStr of Object.keys(byDate)) {
       const bucket = byDate[dateStr];
       if (bucket.sleep_duration !== null) {
-        // Jeśli nie zarejestrowano faz snu, ale mamy czas w łóżku (np. stary zegarek/brak sleep stages)
+      // If no sleep stages were recorded but we do have time in bed (an older watch, or no sleep stages)
         if (bucket.sleep_duration === 0 && bucket.in_bed_duration > 0) {
           bucket.sleep_duration = bucket.in_bed_duration;
         }
         
-        // Zabezpieczenie sanity-check (maksymalnie 24h na dobę)
+      // Sanity guard (at most 24h per day)
         if (bucket.sleep_duration > 24) bucket.sleep_duration = 24;
         if (bucket.sleep_deep > 24) bucket.sleep_deep = 24;
         if (bucket.sleep_rem > 24) bucket.sleep_rem = 24;
@@ -610,8 +608,8 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
 
     const dates = Object.keys(byDate);
     if (dates.length === 0) {
-      // Brak rozpoznanych przez nas metryk w payloadzie - nie jest to błąd (apka może
-      // wysyłać też metryki, których nie obsługujemy, np. tętno czy sen).
+      // No metrics we recognise in this payload - not an error, since the app may also send
+      // metrics we do not handle, such as heart rate or sleep.
       return res.json({ status: 'ok', saved_dates: [] });
     }
 
@@ -641,8 +639,8 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
 
       let readinessScore = null;
       if (user.has_oura !== 1) {
-        // Oblicz syntetyczny readiness_score na bazie Apple Health (sen + HRV + RHR) dla użytkowników bez Oury.
-        // Jeśli jakieś parametry nie dotarły w tej konkretnej paczce, pobieramy je z bazy (logowanie progresywne).
+    // Compute a synthetic readiness_score from Apple Health (sleep + HRV + RHR) for the user.
+    // Parameters missing from this particular batch are read from the database (logged earlier).
         let sleepScoreForReadiness = sleepScore;
         let hrvForReadiness = hrv;
         let rhrForReadiness = rhr;
@@ -658,7 +656,7 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
         }
 
         if (sleepScoreForReadiness !== null || hrvForReadiness !== null || rhrForReadiness !== null) {
-          // Pobierz baselines dla HRV i RHR z ostatnich 30 dni (bez dzisiaj)
+    // Fetch the HRV and RHR baselines from the last 30 days, excluding today
           const baselineStart = shiftDate(dateStr, -30);
           const baselineRows = await db.all(
             `SELECT hrv, rhr FROM health_metrics
@@ -707,12 +705,13 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
         }
       }
 
-      // Zabezpieczenie danych Oura Ring: jeśli użytkownik ma połączoną Ourę, dane o śnie z Apple Health
-      // zapisujemy, o ile Oura jeszcze nie dostarczyła swoich danych (identyfikowane przez brak readiness_score).
-      // W przeciwnym wypadku (użytkownik bez Oury, np. żona), Apple Health jest źródłem nadrzędnym.
-      // Aby zapobiec nadpisywaniu kompletnego snu przez cząstkowe/mniejsze paczki w ciągu dnia, zachowujemy maksymalną wartość (MAX).
-      // NULLIF(..., 0) zamienia wynikowe 0 z powrotem na NULL, gdy obie strony były NULL —
-      // bez tego MAX(COALESCE(NULL,0), COALESCE(NULL,0)) = 0, które insighty traktują jako "śpiał 0h".
+    // Protecting Oura Ring data: if the user has Oura connected, sleep data from Apple Health
+    // is stored only while Oura has not yet delivered its own (identified by the absence of
+    // Oura fields). Otherwise - a user without an Oura ring - Apple Health is the primary
+    // source. To stop a complete night's sleep being overwritten by smaller partial batches
+    // later in the day, NULLIF(..., 0) turns a resulting 0 back into NULL when both sides were
+    // NULL - without it MAX(COALESCE(NULL,0), COALESCE(NULL,0)) = 0, which insights would read
+    // as 'slept zero hours' rather than 'no data'.
       const sleepDurationUpdate = user.has_oura === 1
         ? 'sleep_duration = CASE WHEN readiness_score IS NOT NULL THEN sleep_duration ELSE NULLIF(MAX(COALESCE(sleep_duration, 0), COALESCE(excluded.sleep_duration, 0)), 0) END'
         : 'sleep_duration = NULLIF(MAX(COALESCE(sleep_duration, 0), COALESCE(excluded.sleep_duration, 0)), 0)';
@@ -767,7 +766,7 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
       savedDates.push(dateStr);
     }
 
-    console.log(`[APPLE HEALTH] Użytkownik ${user.id}: zapisano dane dla dat [${savedDates.join(', ')}] (${matchedEntries} wpisów metryk, ${matchedWorkouts} treningów z payloadu).`);
+    console.log(`[APPLE HEALTH] User ${user.id}: saved data for dates [${savedDates.join(', ')}] (${matchedEntries} metric entries, ${matchedWorkouts} workouts z payloadu).`);
     res.json({ status: 'ok', saved_dates: savedDates, workouts_received: workouts ? workouts.length : 0 });
   } catch (err) {
     console.error('[APPLE HEALTH ERROR]', err.message);

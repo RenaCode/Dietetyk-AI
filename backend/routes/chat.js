@@ -30,7 +30,7 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
   const queryDate = date || getLocalDateString();
 
   try {
-    // Pobierz cele użytkownika
+    // Fetch the user's targets
     const settingsRows = await db.all(`SELECT * FROM settings WHERE user_id = ?`, [req.user.id]);
     const settings = {};
     settingsRows.forEach(r => {
@@ -39,11 +39,11 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
 
     const bmr = getBmr(settings);
 
-    // Pobierz dzisiejsze dane zdrowotne
+    // Fetch today's health data
     const health = await db.get(`SELECT * FROM health_metrics WHERE user_id = ? AND date = ?`, [req.user.id, queryDate]) || getDefaultHealthMetrics();
 
-    // Tylko kolumny liczbowe potrzebne do bilansu kalorycznego czatu - bez
-    // image_base64/analysis_json, które tu nigdy nie są używane (patrz forEach niżej).
+    // Only the numeric columns needed for the chat's calorie balance - no image_base64 or
+    // analysis_json, which are never used here (see the forEach below).
     const mealRows = await db.all(`SELECT calories, protein, carbs, fat FROM meals WHERE user_id = ? AND date = ?`, [req.user.id, queryDate]);
     let totalEaten = { calories: 0, protein: 0, carbs: 0, fat: 0 };
     mealRows.forEach(r => {
@@ -57,11 +57,10 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
     const totalBurned = health.total_calories_burned || (bmr + activeCalories);
     const netCalories = totalEaten.calories - totalBurned;
 
-    // Treningi z Apple Health (apple_health_workouts) dla wybranego dnia - wcześniej
-    // czat w ogóle nie widział tych danych, mimo że są zbierane i wykorzystywane na
-    // Dashboardzie (patrz routes/dashboard.js). Potrzebne, żeby AI mogło odpowiadać
-    // na pytania o trening/progres siłowy w oparciu o realną aktywność użytkownika,
-    // a nie zgadywać "w ciemno".
+    // Apple Health workouts (apple_health_workouts) for the selected day. The chat could not
+    // see this data at all before, even though it is collected and used on the Dashboard (see
+    // routes/dashboard.js). It is needed so the model can answer questions about training and
+    // strength progress from the user's real activity rather than guessing blind.
     const todayWorkoutRows = await db.all(
       `SELECT workout_type, duration_minutes, active_calories, avg_heart_rate, max_heart_rate
        FROM apple_health_workouts WHERE user_id = ? AND date = ? ORDER BY updated_at DESC`,
@@ -77,7 +76,7 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
           return parts.join('') + ')';
         }).join('; ');
 
-    // Pobierz najświeższe dane dla wagi, tłuszczu i mięśni (jeśli dzisiejsze są null)
+    // Fetch the most recent weight, body fat and muscle values when today's are null
     let displayWeight = health.weight;
     let displayFatRatio = health.fat_ratio;
     let displayMuscleMass = health.muscle_mass;
@@ -100,8 +99,8 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
       [req.user.id]
     );
 
-    // Okno historii: domyślnie 7 dni, rozszerzone do 90 dni jeśli treść wiadomości
-    // wskazuje na pytanie o dłuższy okres (patrz messageNeedsLongHistory powyżej).
+    // History window: 7 days by default, widened to 90 when the message suggests a question
+    // about a longer period (see messageNeedsLongHistory above).
     const useExtendedHistory = messageNeedsLongHistory(message);
     const lookbackDays = useExtendedHistory ? CHAT_EXTENDED_LOOKBACK_DAYS : CHAT_DEFAULT_LOOKBACK_DAYS;
     const pastDateLimit = new Date(new Date(queryDate).getTime() - lookbackDays * 24 * 60 * 60 * 1000);
@@ -131,9 +130,9 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
     let weeklyTrendSummary = '';
     if (historyMetrics.length > 0 || historyMeals.length > 0 || historyWorkouts.length > 0) {
       if (useExtendedHistory) {
-        // Pytanie wskazuje na dłuższy okres - zwarte podsumowanie tygodniowe
-        // (patrz buildWeeklyTrendSummary) zamiast logu dzień po dniu, żeby nie
-        // rozdąć prompta przy oknie do 90 dni.
+      // The question points at a longer period - a compact weekly summary (see
+      // buildWeeklyTrendSummary) instead of a day-by-day log, so the prompt does not balloon
+      // over a 90-day window.
         weeklyTrendSummary = `\nPodsumowanie tygodniowe użytkownika z ostatnich ${lookbackDays} dni (przed wybraną datą) - Twoje pytanie wskazuje na potrzebę szerszego kontekstu czasowego niż tylko ostatni tydzień:\n`
           + buildWeeklyTrendSummary(historyMetrics, historyMeals, historyWorkouts, pastDateStr, queryDate);
       } else {
@@ -176,7 +175,9 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
             dayLog += ` | Posiłki (${dayMeals.length}): łącznie zjedzone ${totalCal} kcal (B: ${totalP}g, W: ${totalC}g, T: ${totalF}g)`;
           }
           if (dayWorkouts.length > 0) {
-            const workoutsSummary = dayWorkouts.map(w => `${w.workout_type || 'Trening'} ${Math.round(w.duration_minutes || 0)}min${w.avg_heart_rate ? `, śr. tętno ${Math.round(w.avg_heart_rate)}bpm` : ''}`).join('; ');
+            // 'Trening' stays Polish: it is a fallback label interpolated into the Gemini prompt
+    // below, so it is prompt content rather than something a reader of this code sees.
+    const workoutsSummary = dayWorkouts.map(w => `${w.workout_type || 'Trening'} ${Math.round(w.duration_minutes || 0)}min${w.avg_heart_rate ? `, śr. tętno ${Math.round(w.avg_heart_rate)}bpm` : ''}`).join('; ');
             dayLog += ` | Treningi: ${workoutsSummary}`;
           }
           weeklyTrendSummary += dayLog + '\n';
@@ -187,11 +188,11 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
     // Formatowanie historii czatu z tej sesji
     let historyContext = '';
     if (Array.isArray(history) && history.length > 0) {
-      // Filtrowanie pustych wpisów
+    // Filter out empty entries
       let filteredHistory = history.filter(h => h.text && h.text.trim().length > 0);
       
-      // Wykluczamy ostatnią wiadomość z historii, jeśli jest identyczna z bieżącym zapytaniem użytkownika
-      // (ponieważ bieżące zapytanie jest już dołączone na końcu promptu jako "Pytanie użytkownika")
+    // Exclude the last message from the history when it is identical to the current query
+    // (the current query is already appended at the end of the prompt as the user's question)
       if (
         filteredHistory.length > 0 &&
         filteredHistory[filteredHistory.length - 1].sender === 'user' &&
@@ -200,49 +201,48 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
         filteredHistory.pop();
       }
 
-      // Przycinamy historię do ostatnich 15 wiadomości, by uniknąć rozdęcia promptu (prompt bloat)
+    // Trim the history to the last 15 messages to keep the prompt from ballooning (the prompt
       filteredHistory = filteredHistory.slice(-15);
 
       if (filteredHistory.length > 0) {
         historyContext = '\nHistoria rozmowy w tej sesji (od najstarszej):\n' + filteredHistory.map(h => {
           const roleName = h.sender === 'user' ? 'Użytkownik' : 'Dietetyk AI';
-          // Przycinamy długie wiadomości w historii do 500 znaków jako dodatkowa ochrona
+    // Trim long messages in the history to 500 characters as an additional safeguard
           const text = h.text.length > 500 ? h.text.slice(0, 500) + '...' : h.text;
-          // B-W2: Wiadomości użytkownika owinięte w user_input zapobiegają prompt injection
+    // B-W2: wrapping user messages in user_input prevents prompt injection
           return h.sender === 'user' ? `${roleName}: <user_input>${text}</user_input>` : `${roleName}: ${text}`;
         }).join('\n') + '\n';
       }
     }
 
     // "Tag dnia" (day_events) z analizowanego okna historii [pastDateStr, queryDate] -
-    // żeby AI w czacie też wiedziało o dniach oznaczonych jako choroba/wakacje/późne
-    // zaśnięcie i nie sugerowało korekt na bazie nietypowych danych z tych dni
-    // (patrz utils/dayEvents.js, ten sam mechanizm co w dashboard.js).
+    // so the chat also knows about days tagged as illness/holiday/late bedtime and does not
+    // suggest corrections based on the atypical data from those days (see utils/dayEvents.js,
+    // the same mechanism as in dashboard.js).
     const dayEventsInWindow = await getDayEventsInRange(req.user.id, pastDateStr, queryDate);
     const dayEventsContext = formatDayEventsForPrompt(dayEventsInWindow);
 
-    // Pobierz klucz API użytkownika (jeśli posiada)
+    // Fetch the user's API key, if they have one
     const apiKeyRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'gemini_api_key'", [req.user.id]);
     const userApiKey = apiKeyRow ? decrypt(apiKeyRow.value) : null;
 
-    // Cel sylwetki (opis tekstowy, ustawiany w Ustawieniach - patrz routes/account.js).
-    // W czacie wykorzystujemy tylko tekst, NIE zdjęcie referencyjne - w odróżnieniu od
-    // dashboard.js (gdzie porada AI generowana jest raz dziennie, w tle, z cache),
-    // czat odpowiada na KAŻDĄ wiadomość użytkownika "na żywo", więc dociąganie obrazu
-    // do każdego zapytania Gemini niepotrzebnie zwiększałoby czas odpowiedzi i koszt.
+    // The physique goal (the text description set in Settings - see routes/account.js).
+    // The chat uses only the text, NOT the reference photo: unlike dashboard.js, where the AI
+    // advice is generated once a day in the background and cached, the chat answers EVERY
+    // user message live, so attaching the image to every Gemini request would needlessly
+    // increase latency and cost.
     const bodyGoalRow = await db.get(`SELECT body_goal_text FROM users WHERE id = ?`, [req.user.id]);
     const bodyGoalText = bodyGoalRow && bodyGoalRow.body_goal_text ? bodyGoalRow.body_goal_text : null;
 
-    // Imię (jeśli ustawione w Ustawieniach) ma priorytet nad loginem technicznym.
+    // The first name, if set in Settings, takes precedence over the technical login.
     const displayName = req.user.first_name || req.user.username;
     const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
     const language = langRow ? langRow.value : 'pl';
 
-    // Aktualna pogoda i pora dnia (Zadanie: algorytm ma znać i uwzględniać w
-    // analizie bieżącą pogodę/czas - patrz utils/weatherContext.js). Nigdy nie
-    // rzuca wyjątku, więc nie wymaga dodatkowego try/catch tutaj. Lokalizacja:
-    // własna użytkownika (Ustawienia -> Lokalizacja), jeśli ustawiona, inaczej
-    // domyślna lokalizacja wdrożenia (patrz stałe w weatherContext.js).
+    // Current weather and time of day (the model should know and account for both - see
+    // utils/weatherContext.js). It never throws, so no extra try/catch is needed here.
+    // Location: the user's own (Settings -> Location) when set, otherwise the deployment
+    // default (see the constants in weatherContext.js).
     const userLocation = await getUserLocationOverride(req.user.id);
     const weatherTimeContext = await getWeatherAndTimeContext(language, userLocation?.lat, userLocation?.lon);
 

@@ -1,28 +1,26 @@
-name: Build i publikacja obrazów Docker
+name: Build and publish Docker images
 
-# Buduje obrazy backendu i frontendu przy każdym pushu na main i wypycha je do
-# GitHub Container Registry (ghcr.io). Serwer produkcyjny tylko je pobiera
-# (docker-compose pull) - nie trzyma już kodu źródłowego ani nie buduje lokalnie.
+# Builds the backend and frontend images on every push to main and pushes them to the
+# GitHub Container Registry (ghcr.io). The production server only pulls them
+# (docker-compose pull) - it no longer holds source code or builds locally.
 #
-# Budowanie backendu i frontendu jest rozdzielone na dwa niezależne joby
-# (build-backend, build-frontend). Dzięki filtrowi ścieżek (dorny/paths-filter)
-# każdy z nich uruchamia się tylko wtedy, gdy zmieniły się pliki dotyczące
-# danego serwisu - zmiana tylko w backendzie nie wywoła już zbędnego
-# przebudowania i redeployu obrazu frontendu (i odwrotnie). Ręczne odpalenie
-# przez "workflow_dispatch" zawsze buduje oba obrazy.
+# Building the backend and the frontend is split into two independent jobs
+# (build-backend, build-frontend). Thanks to the path filter (dorny/paths-filter) each
+# runs only when files belonging to that service changed - a backend-only change no longer
+# triggers a pointless rebuild and redeploy of the frontend image, and vice versa. A manual
+# run via workflow_dispatch always builds both images.
 #
-# Po zbudowaniu i wypchnięciu obrazów (CI), job "deploy" (CD) loguje się po SSH
-# na serwer produkcyjny i odświeża kontenery (docker compose pull + up -d).
+# After the images are built and pushed (CI), the deploy job (CD) connects over SSH to the
+# production server and refreshes the containers (docker compose pull + up -d).
 # Wymaga ustawienia w repo (Settings -> Secrets and variables -> Actions):
 #   VPS_HOST     - adres IP lub domena serwera (np. 185.201.112.104)
-#   VPS_USER     - dedykowany, NIEPRIVILEGOWANY użytkownik SSH (np. "deploy"),
-#                  będący członkiem grupy "docker" - celowo NIE root. Patrz
-#                  notatka w repo / wiadomość Claude z instrukcją utworzenia
-#                  tego konta na serwerze.
-#   VPS_SSH_KEY  - prywatny klucz SSH (klucz dedykowany tylko do CI/CD, którego
-#                  publiczny odpowiednik trzeba dodać do ~/.ssh/authorized_keys
+#   VPS_USER     - a dedicated, UNPRIVILEGED SSH user (e.g. "deploy") belonging to the
+#                  "docker" group - deliberately NOT root. See the repository notes for
+#                  instructions on creating that account on the server.
+#   VPS_SSH_KEY  - the private SSH key (dedicated to CI/CD only), whose public counterpart
+#                  must be added to ~/.ssh/authorized_keys
 #                  konta "deploy" na serwerze)
-#   VPS_SSH_PORT - (opcjonalnie) port SSH, domyślnie 22
+#   VPS_SSH_PORT - (optional) SSH port, 22 by default
 
 on:
   push:
@@ -38,8 +36,8 @@ permissions:
   packages: write
 
 jobs:
-  # Wykrywa, które części repo się zmieniły, żeby joby budujące backend/frontend
-  # mogły się uruchamiać niezależnie od siebie tylko wtedy, gdy to konieczne.
+# Detects which parts of the repository changed, so the backend and frontend build jobs can
+# run independently of each other and only when necessary.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -47,7 +45,7 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
       - uses: actions/checkout@v5
-      - name: Wykrywanie zmienionych ścieżek
+      - name: Detect changed paths
         id: filter
         uses: dorny/paths-filter@v3
         with:
@@ -59,15 +57,14 @@ jobs:
               - 'frontend/**'
               - 'docker/frontend.Dockerfile'
 
-  # Testy/audyt bezpieczeństwa backendu - osobny job, ZANIM zaczniemy budować
-  # i publikować obraz Docker. Wcześniej audyt był jednym ze stepów wewnątrz
-  # joba budującego obraz - błąd audytu i błąd builda lądowały w tym samym
-  # miejscu, co utrudniało odczytanie, co faktycznie nie przeszło. Rozdzielenie
-  # na osobny job daje też gwarancję, że obraz NIGDY nie zostanie zbudowany
-  # i wypchnięty z niezweryfikowanych zależności (build-backend rusza tylko,
-  # gdy ten job zakończy się sukcesem - patrz `needs`/`if` poniżej).
+# Backend tests and security audit - a separate job, run BEFORE we start building and
+# publishing the Docker image. The audit used to be one step inside the image-building job,
+# so an audit failure and a build failure surfaced in the same place, making it hard to tell
+# what had actually failed. Splitting it out also guarantees that an image is NEVER built
+# and pushed from unverified dependencies (build-backend starts only when this job succeeds -
+# see `needs`/`if` below).
   test-backend:
-    name: Testy i audyt bezpieczeństwa (backend)
+    name: Tests and security audit (backend)
     needs: changes
     if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -75,40 +72,38 @@ jobs:
       - name: Checkout kodu
         uses: actions/checkout@v5
 
-      - name: Ustawienie Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # Osobny step tylko do wygenerowania package-lock.json (potrzebnego
-      # `npm audit`) - nie instalujemy pełnego node_modules, bo go tu nie
-      # potrzebujemy (obraz Docker instaluje zależności sam, w swoim builderze).
-      - name: Instalacja zależności (lockfile)
+      # A separate step purely to generate package-lock.json (needed by `npm audit`) - we do
+      # not install the full node_modules, because it is not needed here: the Docker image
+      # installs dependencies itself, in its own builder.
+      - name: Install dependencies (lockfile)
         working-directory: ./backend
         run: npm install --package-lock-only
 
-      # Skan podatności zależności npm. Działa tutaj (w CI), a nie lokalnie
-      # w środowisku deweloperskim/sandboksie, bo CI ma realny dostęp do
-      # rejestru npm. --omit=dev - audytujemy tylko zależności produkcyjne
-      # (devDependencies, np. nodemon, nigdy nie trafiają do obrazu Docker).
+      # Vulnerability scan of the npm dependencies. It runs here in CI rather than locally in
+      # a development environment or sandbox, because CI has real access to the npm registry.
+      # --omit=dev - we audit production dependencies only (devDependencies such as nodemon
+      # never reach the Docker image).
       #
-      # Wynik filtrujemy przez scripts/check-npm-audit.js, bo `npm audit`
-      # samo w sobie nie odróżnia podatności w kodzie runtime od podatności
-      # w narzędziach used tylko przy `npm ci` do skompilowania natywnego
-      # bindingu sqlite3 (node-gyp -> tar/make-fetch-happen/cacache/
-      # http-proxy-agent/@tootallnate/once). Próba "naprawienia" tego przez
-      # podbicie sqlite3 na wersję główną faktycznie wysadziła produkcję
-      # (prebuildowany binarz wymagał nowszego glibc niż ma node:20-slim -
-      # ERR_DLOPEN_FAILED). Te konkretne pakiety są więc jawnie, z
-      # uzasadnieniem, na białej liście - każda INNA podatność high/critical
-      # (czyli realna zależność runtime) wciąż blokuje pipeline.
+      # The result is filtered through scripts/check-npm-audit.js, because `npm audit` on its
+      # own does not distinguish a vulnerability in runtime code from one in tooling used only
+      # during `npm ci` to compile a native module (node-gyp, tar, http-proxy-agent,
+      # @tootallnate/once). An attempt to "fix" this by bumping sqlite3 to a new major version
+      # actually broke production: the prebuilt binary required a newer glibc than node:20-slim
+      # provides (ERR_DLOPEN_FAILED). Those specific packages are therefore explicitly
+      # whitelisted with a justification - any OTHER high or critical vulnerability, meaning a
+      # real runtime dependency, still blocks the pipeline.
       #
-      # "sqlite3" jest też na tej liście (poza samymi narzędziami
-      # node-gyp/tar/...): `npm audit` "podciąga" ryzyko z całego łańcucha
-      # transitive deps do bezpośredniej zależności w package.json, jeśli
-      # jedyny sugerowany fix wymaga podbicia właśnie jej. Dlatego sqlite3
-      # sam wychodzi jako "high" - to wciąż ten sam, już udokumentowany
-      # problem (build-time-only), nie nowa, realna podatność runtime.
+      # "sqlite3" is on that list too (alongside the node-gyp/tar tooling itself): `npm audit`
+      # propagates risk from the whole chain
+      # from a transitive dependency up to the direct dependency in package.json when the only
+      # suggested fix requires bumping that one. That is why sqlite3 itself comes out as
+      # "high" - still the same already-documented build-time-only problem, not a new, real
+      # runtime vulnerability.
       - name: npm audit (backend)
         working-directory: ./backend
         run: |
@@ -116,27 +111,27 @@ jobs:
           node ../scripts/check-npm-audit.js /tmp/audit-backend.json "tar,@tootallnate/once,http-proxy-agent,make-fetch-happen,cacache,node-gyp,sqlite3,brace-expansion,ip-address"
 
       # Testy jednostkowe backendu (tests/test-encryption.js, test-rate-limit.js,
-      # test-chat.js, test-meals.js - patrz package.json "test"). Wcześniej te pliki
-      # istniały w tests/, ale nic nigdy ich nie uruchamiało w CI (ani nie było skryptu
-      # npm "test") - błąd w logice czatu/analizy posiłków/szyfrowania/rate-limitera
-      # przechodziłby niezauważony aż do produkcji. Osobny `npm ci` (pełny install),
-      # bo krok audytu wyżej celowo instaluje tylko lockfile, bez node_modules.
-      - name: Instalacja zależności (pełny install do testów)
+      # test-chat.js, test-meals.js - see the "test" script in package.json). These files
+      # existed in tests/ before, but nothing ever ran them in CI and there was no npm "test"
+      # script - a bug in the chat, meal analysis, encryption or rate limiter logic would have
+      # gone unnoticed all the way to production. A separate `npm ci` (a full install), because
+      # the audit step above deliberately installs only the lockfile, without node_modules.
+      - name: Install dependencies (full install for tests)
         working-directory: ./backend
         run: npm ci
 
-      - name: Testy jednostkowe (backend)
+      - name: Unit tests (backend)
         working-directory: ./backend
         env:
           APP_PASSWORD: dietetyk-ci-test-password
         run: npm test
 
-      # Przekazujemy świeżo zregenerowany lockfile do joba build-backend
-      # (osobny runner = osobny checkout, nie widzi plików z tego joba).
-      # Dzięki temu `npm ci` w Dockerze zawsze dostaje lockfile zgodny
-      # z aktualnym package.json, wygenerowany tu, w CI, gdzie jest realny
-      # dostęp do rejestru npm - nikt nie musi odświeżać go ręcznie lokalnie.
-      - name: Przekazanie zaktualizowanego lockfile do build-backend
+      # Pass the freshly regenerated lockfile to the build-backend job (a separate runner means
+      # a separate checkout, which cannot see files from this job). This way `npm ci` inside
+      # Docker always receives a lockfile consistent with the current package.json, generated
+      # here in CI where there is real access to the npm registry - nobody has to refresh it by
+      # hand locally.
+      - name: Pass the updated lockfile to build-backend
         uses: actions/upload-artifact@v4
         with:
           name: backend-lockfile
@@ -144,7 +139,7 @@ jobs:
           retention-days: 1
 
   build-backend:
-    name: Build i push obrazu (backend)
+    name: Build and push image (backend)
     needs: [changes, test-backend]
     if: |
       (needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') &&
@@ -154,23 +149,23 @@ jobs:
       - name: Checkout kodu
         uses: actions/checkout@v5
 
-      - name: Pobranie zaktualizowanego lockfile z joba test-backend
+      - name: Fetch the updated lockfile from the test-backend job
         uses: actions/download-artifact@v4
         with:
           name: backend-lockfile
           path: backend
 
-      - name: Logowanie do GitHub Container Registry
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Ustawienie Buildx
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Metadane obrazu (tagi)
+      - name: Image metadata (tags)
         id: meta
         uses: docker/metadata-action@v6
         with:
@@ -179,12 +174,12 @@ jobs:
             type=raw,value=latest
             type=sha,format=short
 
-      # Build i push są teraz osobnymi krokami: jeśli sam build (kompilacja
-      # Dockerfile, npm ci w obrazie itd.) zawiedzie, nic nie trafia do
-      # registry - krok push w ogóle się nie wykona. Wcześniej jeden krok
-      # robił oba na raz, co utrudniało odróżnienie błędu builda od błędu
+      # Build and push are now separate steps: if the build itself (compiling the Dockerfile,
+      # npm ci inside the image and so on) fails, nothing reaches the registry - the push step
+      # never runs at all. A single step used to do both, which made it hard to tell a build
+      # failure from a
       # logowania/publikacji do ghcr.io.
-      - name: Build obrazu backendu (bez push)
+      - name: Build backend image (no push)
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -206,10 +201,10 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=backend
 
-  # Analogiczny, osobny job audytu dla frontendu - patrz komentarz przy
-  # test-backend powyżej (te samo uzasadnienie rozdzielenia od builda).
+# The equivalent separate audit job for the frontend - see the comment on test-backend above
+# (the same reasoning for splitting it from the build).
   test-frontend:
-    name: Testy i audyt bezpieczeństwa (frontend)
+    name: Tests and security audit (frontend)
     needs: changes
     if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -217,12 +212,12 @@ jobs:
       - name: Checkout kodu
         uses: actions/checkout@v5
 
-      - name: Ustawienie Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Instalacja zależności (lockfile)
+      - name: Install dependencies (lockfile)
         working-directory: ./frontend
         run: npm install --package-lock-only
 
@@ -230,7 +225,7 @@ jobs:
         working-directory: ./frontend
         run: npm audit --audit-level=high --omit=dev
 
-      - name: Przekazanie zaktualizowanego lockfile do build-frontend
+      - name: Pass the updated lockfile to build-frontend
         uses: actions/upload-artifact@v4
         with:
           name: frontend-lockfile
@@ -238,7 +233,7 @@ jobs:
           retention-days: 1
 
   build-frontend:
-    name: Build i push obrazu (frontend)
+    name: Build and push image (frontend)
     needs: [changes, test-frontend]
     if: |
       (needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch') &&
@@ -248,23 +243,23 @@ jobs:
       - name: Checkout kodu
         uses: actions/checkout@v5
 
-      - name: Pobranie zaktualizowanego lockfile z joba test-frontend
+      - name: Fetch the updated lockfile from the test-frontend job
         uses: actions/download-artifact@v4
         with:
           name: frontend-lockfile
           path: frontend
 
-      - name: Logowanie do GitHub Container Registry
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Ustawienie Buildx
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Metadane obrazu (tagi)
+      - name: Image metadata (tags)
         id: meta
         uses: docker/metadata-action@v6
         with:
@@ -273,7 +268,7 @@ jobs:
             type=raw,value=latest
             type=sha,format=short
 
-      - name: Build obrazu frontendu (bez push)
+      - name: Build frontend image (no push)
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -296,34 +291,34 @@ jobs:
           cache-from: type=gha,scope=frontend
 
   test-e2e:
-    name: Testy E2E (Playwright)
+    name: E2E tests (Playwright)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kodu
         uses: actions/checkout@v5
 
-      - name: Ustawienie Node.js
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Instalacja zależności (backend)
+      - name: Install dependencies (backend)
         working-directory: ./backend
         run: npm ci
 
-      - name: Instalacja zależności i budowa (frontend)
+      - name: Install dependencies and build (frontend)
         working-directory: ./frontend
         run: |
           npm ci
           npm run build
 
-      - name: Instalacja zależności (root)
+      - name: Install dependencies (root)
         run: npm ci
 
-      - name: Instalacja przeglądarek Playwright
+      - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Uruchomienie testów E2E
+      - name: Run E2E tests
         env:
           ADMIN_INITIAL_PASSWORD: 3bda877d518c8cf7a80b32bb
           APP_PASSWORD: dietetyk-admin
@@ -338,14 +333,13 @@ jobs:
       (needs.build-backend.result == 'success' || needs.build-frontend.result == 'success')
     runs-on: ubuntu-latest
     steps:
-      # Runda 19 (audyt): main jest teraz chronione regułą wymagającą PR (patrz
-      # ruleset repo "protect-main") - domyślny GITHUB_TOKEN push'uje jako
-      # github-actions[bot], który NIE jest na liście wyjątków (GitHub nie
-      # pozwala dodać generycznej integracji "GitHub Actions" jako bypass actor
-      # na repo osobistym, tylko na organizacyjnym). Używamy więc dedykowanego,
-      # precyzyjnie zakresowanego PAT (uprawnienia: tylko Contents: Read&Write na
-      # tym repo) należącego do właściciela repo - push z tym tokenem liczy się
-      # jako push admina, więc reguła go przepuszcza.
+      # Round 19 (audit): main is now protected by a rule requiring a PR (see the repository
+      # ruleset "protect-main") - the default GITHUB_TOKEN pushes as github-actions[bot], which
+      # is NOT on the bypass list (GitHub does not allow adding the generic "GitHub Actions"
+      # integration as a bypass actor on a personal repository, only on an organisation one).
+      # We therefore use a dedicated, narrowly scoped PAT (permissions: Contents: Read & Write
+      # on this repository only) owned by the repository owner - a push with that token counts
+      # as an admin push, so the rule lets it through.
       - name: Checkout kodu
         uses: actions/checkout@v5
         with:
@@ -355,14 +349,13 @@ jobs:
         id: vars
         run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
-      # Retry z fetch+reset przed każdą próbą (Runda 19 - naprawa po prawdziwej
-      # kolizji push'a): jeśli w międzyczasie main przesunęło się (inny bieg tego
-      # samego workflow, np. push i ręczny workflow_dispatch blisko siebie w
-      # czasie), zwykły `git push` dostaje "rejected (fetch first)" i cały krok
-      # pada, mimo że zmiana w values.yaml jest identyczna/nieszkodliwa. Zamiast
-      # tego resetujemy do najświeższego origin/main i powtarzamy idempotentne
-      # sed'y - jeśli inny bieg już wprowadził tę samą zmianę, `git diff --cached
-      # --quiet` wykryje brak realnej różnicy i pomijamy commit.
+      # Retry with fetch+reset before each attempt (round 19 - fixed after a real push
+      # collision): if main moved in the meantime - another run of this same workflow, e.g. a
+      # push and a manual workflow_dispatch close together - a plain `git push` gets
+      # "rejected (fetch first)" and the whole step fails, even though the change to values.yaml
+      # is identical and harmless. Instead we reset to the freshest origin/main and repeat the
+      # idempotent seds - if another run already made the same change, `git diff --cached
+      # --quiet` detects that there is no real difference and we skip the commit.
       - name: Update image tags in values.yaml
         run: |
           if [ "${{ needs.build-backend.result }}" != "success" ] && [ "${{ needs.build-frontend.result }}" != "success" ]; then

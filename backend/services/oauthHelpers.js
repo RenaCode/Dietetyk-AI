@@ -3,14 +3,14 @@ const db = require('../db');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const { encrypt, decrypt } = require('../utils/encryption');
 
-// Sekret do podpisywania (HMAC) parametru `state` w przepływie OAuth.
-// Wcześniej w razie braku APP_PASSWORD w środowisku kod po cichu używał
-// stałego, znanego z kodu źródłowego ciągu 'default_secret' - co czyniłoby
-// podpis trywialnym do podrobienia (atak CSRF na przepływ OAuth) w razie
-// pomyłki przy konfiguracji .env na produkcji. Teraz: brak konfiguracji
-// = błąd startowy (fail-fast), żeby taka pomyłka nigdy nie przeszła niezauważona.
-// Można nadpisać dedykowaną zmienną OAUTH_STATE_SECRET, żeby nie używać
-// hasła panelu admina (APP_PASSWORD) jednocześnie jako sekretu kryptograficznego.
+// Secret used to sign (HMAC) the `state` parameter in the OAuth flow.
+// Previously, if APP_PASSWORD was missing from the environment the code silently fell back
+// to a fixed string 'default_secret' that is visible in the source - which would make the
+// signature trivial to forge (a CSRF attack on the OAuth flow) after a .env misconfiguration
+// in production. Now a missing configuration is a startup error (fail-fast), so such a
+// mistake can never pass unnoticed.
+// It can be overridden with a dedicated OAUTH_STATE_SECRET variable, so the admin panel
+// password (APP_PASSWORD) need not double as a cryptographic secret.
 const OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || process.env.APP_PASSWORD;
 if (!OAUTH_STATE_SECRET) {
   throw new Error(
@@ -19,9 +19,9 @@ if (!OAUTH_STATE_SECRET) {
   );
 }
 
-// Helper do pobierania konfiguracji z bazy app_config. decrypt() jest bezpieczne do
-// wywołania dla KAŻDEGO klucza (nie tylko sekretnych z APP_SECRET_CONFIG_KEYS) - dla
-// wartości nigdy nie zaszyfrowanych przez encrypt() (patrz utils/encryption.js) jest
+// Helper for reading configuration from the app_config table. decrypt() is safe to call for
+// EVERY key, not only the secret ones in APP_SECRET_CONFIG_KEYS - for values never encrypted
+// by encrypt() (see utils/encryption.js) it is
 // no-opem, bo brakuje im rozpoznawalnego prefiksu.
 async function getAppConfig(key) {
   if (key === 'app_url' && process.env.APP_URL) {
@@ -31,23 +31,23 @@ async function getAppConfig(key) {
   return row ? decrypt(row.value) : null;
 }
 
-// Helper do pobierania ustawień konkretnego użytkownika - decrypt() jak wyżej,
-// bezpieczne dla wartości niesekretnych (no-op bez prefiksu enc:v1:).
+// Helper for reading a specific user's settings - decrypt() as above, safe for non-secret
+// values (a no-op without the enc:v1: prefix).
 async function getUserSetting(userId, key) {
   const row = await db.get(`SELECT value FROM settings WHERE user_id = ? AND key = ?`, [userId, key]);
   return row ? decrypt(row.value) : null;
 }
 
-// Weryfikacja tokenu sesji dla tras OAuth INICJUJĄCYCH połączenie (Oura/Withings/
-// Google Fit/Google link), które dostają token przez ?token= w query (nawigacja
-// najwyższego poziomu, nie fetch z nagłówkiem Authorization - patrz komentarz w
-// middleware/auth.js). Te trasy są na liście wyjątków requireAuth, więc same
-// odpowiadają za pełną weryfikację - wcześniej sprawdzały TYLKO ważność tokenu
-// sesji, NIE sprawdzając, czy użytkownik z włączonym 2FA faktycznie dokończył
-// weryfikację kodu (sesja tymczasowa z is_verified_2fa=0 i krótkim TTL mogła
-// teoretycznie zainicjować podłączenie konta zewnętrznego). Ta funkcja replikuje
-// dokładnie tę samą kontrolę, którą requireAuth stosuje dla tras za nagłówkiem
-// Authorization, więc obie ścieżki mają taki sam poziom bezpieczeństwa.
+// Session token verification for the OAuth routes that INITIATE a connection
+// (Oura/Withings/Google Fit/Google link) and receive the token through ?token= in the query
+// string, because they are reached by a top-level navigation rather than a fetch with an
+// Authorization header (see the comment in middleware/auth.js). Those routes are on
+// requireAuth's exception list, so they are responsible for full verification themselves -
+// and they used to check ONLY that the session token was valid, without checking whether a
+// user with 2FA enabled had actually completed the code verification (a temporary session
+// with is_verified_2fa=0 and a short TTL could in theory initiate linking an external
+// account). This function replicates exactly the same checks requireAuth applies to routes
+// behind the Authorization header, so both paths offer the same level of security.
 async function getVerifiedSessionByToken(token) {
   if (!token) return null;
   const session = await db.get(`
@@ -66,10 +66,10 @@ async function getVerifiedSessionByToken(token) {
 
 // Bezpieczne generowanie i weryfikacja stanu OAuth (stateless)
 function generateOAuthState(userId, service = 'oura') {
-  // crypto.randomBytes (CSPRNG) zamiast Math.random() (PRNG nie-kryptograficzny,
-  // przewidywalny przy znajomości stanu generatora). Sam HMAC nadal chroni przed
-  // podrobieniem state bez znajomości OAUTH_STATE_SECRET, ale sól/nonce w przepływie
-  // anty-CSRF powinna być generowana kryptograficznie bezpiecznym generatorem.
+// crypto.randomBytes (a CSPRNG) rather than Math.random() (a non-cryptographic PRNG,
+// predictable if the generator state is known). The HMAC alone still prevents forging state
+// without knowing OAUTH_STATE_SECRET, but the salt/nonce in an anti-CSRF flow should be
+// generated by a cryptographically secure generator.
   const salt = crypto.randomBytes(16).toString('hex');
   const data = `${userId}:${service}:${salt}`;
   const hmac = crypto.createHmac('sha256', OAUTH_STATE_SECRET).update(data).digest('hex');
@@ -78,21 +78,21 @@ function generateOAuthState(userId, service = 'oura') {
 
 function verifyOAuthState(state) {
   if (!state) return null;
-  // Aktualny format to zawsze 4 części (userId:service:salt:hmac) - generowany
-  // wyłącznie przez generateOAuthState powyżej. Usunięto martwą gałąź obsługującą
-  // stary, 3-częściowy format (userId:salt:hmac, z domyślnym service='oura') -
-  // żaden aktualny generator state już go nie tworzy.
+  // The current format is always four parts (userId:service:salt:hmac), produced solely by
+  // generateOAuthState above. The dead branch handling the old three-part format
+  // (userId:salt:hmac, with a default service='oura') was removed - no current state
+  // generator produces it any more.
   const parts = state.split(':');
   if (parts.length === 4) {
     const [userId, service, salt, hmac] = parts;
     const expectedHmac = crypto.createHmac('sha256', OAUTH_STATE_SECRET).update(`${userId}:${service}:${salt}`).digest('hex');
-    // Bug fix: porównanie HMAC-ów przez `===` porównuje string bajt po bajcie i
-    // przerywa na pierwszej różnicy, co teoretycznie ujawnia przez czas odpowiedzi,
-    // ile początkowych znaków zgadza się z oczekiwanym HMAC-em (timing attack) -
-    // ten sam typ ryzyka, przed którym reszta pliku świadomie chroni (patrz komentarz
-    // o CSPRNG w generateOAuthState). crypto.timingSafeEqual porównuje w stałym
-    // czasie; wymaga buforów o równej długości, więc najpierw porównujemy długość
-    // (sama długość HMAC-a SHA-256 w hex jest stała i nie jest sekretem).
+  // Bug fix: comparing HMACs with `===` compares the strings byte by byte and stops at the
+  // first difference, which in theory leaks through response timing how many leading
+  // characters match the expected HMAC (a timing attack) - the same class of risk the rest of
+  // this file deliberately guards against (see the CSPRNG comment in generateOAuthState).
+  // crypto.timingSafeEqual compares in constant time; it requires buffers of equal length, so
+  // we compare the length first (the length of a SHA-256 HMAC in hex is fixed and not a
+  // secret).
     const hmacBuf = Buffer.from(hmac, 'utf8');
     const expectedBuf = Buffer.from(expectedHmac, 'utf8');
     const hmacValid = hmacBuf.length === expectedBuf.length && crypto.timingSafeEqual(hmacBuf, expectedBuf);
@@ -103,24 +103,24 @@ function verifyOAuthState(state) {
   return null;
 }
 
-// Pobieranie / Odświeżanie tokenu OAuth
+// Fetching and refreshing an OAuth token
 async function getOrRefreshToken(userId, service) {
   const token = await db.get(`SELECT * FROM oauth_tokens WHERE user_id = ? AND service = ?`, [userId, service]);
   if (!token) return null;
-  // Odszyfrowanie od razu po odczycie - reszta funkcji (poniżej) operuje na
-  // token.access_token/refresh_token tak, jakby zawsze były plaintextem.
+  // Decrypt immediately after reading - the rest of the function below treats
+  // token.access_token/refresh_token as if they had always been plaintext.
   token.access_token = decrypt(token.access_token);
   token.refresh_token = decrypt(token.refresh_token);
 
   const expiresAt = new Date(token.expires_at);
   const now = new Date();
 
-  // Jeśli token jest ważny dłużej niż 5 minut, zwracamy go
+  // If the token is valid for more than 5 minutes, return it as is
   if (expiresAt.getTime() - now.getTime() > 5 * 60 * 1000) {
     return token.access_token;
   }
 
-  console.log(`[OAUTH] Odświeżanie tokenu dla użytkownika ${userId}, serwis: ${service}...`);
+  console.log(`[OAUTH] Refreshing token for user ${userId}, service: ${service}...`);
   let isPermanentFailure = false;
 
   try {
@@ -190,8 +190,8 @@ async function getOrRefreshToken(userId, service) {
 
       const resJson = await response.json();
       if (resJson.status !== 0) {
-        // Statusy błędów Withings: np. 100 (invalid token), 200 (invalid client), itp.
-        // Wykluczamy tymczasowe błędy (np. 503 lub 601) - w ich przypadku nie usuwamy tokenu.
+      // Withings error statuses: 100 (invalid token), 200 (invalid client) and so on.
+      // Transient errors (503 or 601) are excluded - for those we do not delete the token.
         if (resJson.status === 100 || resJson.status === 200 || resJson.status === 501) {
           isPermanentFailure = true;
         }
@@ -245,12 +245,12 @@ async function getOrRefreshToken(userId, service) {
       return data.access_token;
     }
   } catch (err) {
-    console.error(`[OAUTH ERROR] Błąd odświeżania tokenu dla ${service} (użytkownik ${userId}):`, err.message);
+    console.error(`[OAUTH ERROR] Failed to refresh the token for ${service} (user ${userId}):`, err.message);
     if (isPermanentFailure) {
-      console.warn(`[OAUTH] Usuwanie niepoprawnego tokenu z bazy dla ${service} (użytkownik ${userId}) ze względu na trwale niepoprawną autoryzację.`);
+      console.warn(`[OAUTH] Deleting the invalid token from the database for ${service} (user ${userId}) because the authorisation is permanently invalid.`);
       await db.run(`DELETE FROM oauth_tokens WHERE user_id = ? AND service = ?`, [userId, service]);
     } else {
-      console.log(`[OAUTH] Zachowywanie tokenu dla ${service} (użytkownik ${userId}) w bazie - błąd ma charakter przejściowy.`);
+      console.log(`[OAUTH] Keeping the token for ${service} (user ${userId}) in the database - the error looks transient.`);
     }
     return null;
   }

@@ -19,7 +19,7 @@ router.get('/api/health/history', requireAuth, async (req, res) => {
   }
 });
 
-// Historia obwodów ciała
+// Body circumference history
 router.get('/api/body-measurements', requireAuth, async (req, res) => {
   try {
     const rows = await db.all(`
@@ -35,17 +35,17 @@ router.get('/api/body-measurements', requireAuth, async (req, res) => {
   }
 });
 
-// Górny/dolny limit fizycznie sensownego obwodu ciała w cm - bez tego literówka
-// (np. wpisanie wagi 95 w pole obwodu, albo brakujący przecinek dziesiętny - "950"
-// zamiast "95,0") cicho zapisywałaby się do bazy i zatruwała insight body-recomposition
-// oraz wykresy w Trends fałszywym skokiem.
+// Upper and lower bounds for a physically sensible body circumference in cm - without them
+// a typo (entering a weight of 95 into a circumference field, or a missing decimal point,
+// '950' instead of '95.0') would be stored silently and poison the body-recomposition
+// insight and the Trends charts with a phantom jump.
 const MIN_MEASUREMENT_CM = 1;
 const MAX_MEASUREMENT_CM = 300;
 
-// Konwertuje wartość z body na liczbę z walidacją zakresu. Zwraca `undefined`
-// jeśli pole nie zostało przesłane (pole ma zostać nietknięte - patrz COALESCE
-// w zapytaniu poniżej), `null` jeśli przesłano puste pole (czyszczenie wartości),
-// albo zgłasza błąd zakresu (rzucany wyjątek z komunikatem dla użytkownika).
+// Converts a value from the body to a number with range validation. Returns `undefined`
+// when the field was not submitted (leave it untouched - see the COALESCE in the query
+// below), `null` when an empty field was submitted (clearing the value), or raises a range
+// error (an exception carrying a message for the user).
 function parseMeasurement(value, label) {
   if (value === undefined) return undefined;
   if (value === null || value === '') return null;
@@ -59,7 +59,7 @@ function parseMeasurement(value, label) {
   return num;
 }
 
-// Zapisz/aktualizuj obwody ciała
+// Save or update body circumferences
 router.post('/api/body-measurements', requireAuth, async (req, res) => {
   const { date, chest, waist, hips, biceps, thigh, biceps_left, biceps_right, shoulders, waist_above, waist_below } = req.body;
   if (!date) return res.status(400).json({ error: 'Data jest wymagana.' });
@@ -124,11 +124,11 @@ router.post('/api/body-measurements', requireAuth, async (req, res) => {
   }
 });
 
-// Usuń pomiar obwodu ciała
+// Delete a body circumference measurement
 router.delete('/api/body-measurements/:id', requireAuth, async (req, res) => {
   try {
     const result = await db.run(`DELETE FROM body_measurements WHERE id = ? AND user_id = ?`, [req.params.id, req.user.id]);
-    // B-N1: Sprawdź czy rekord faktycznie istniał (chroni przed 200 OK przy nieistniejącym ID)
+    // B-N1: check the record actually existed (guards against 200 OK for a non-existent one)
     if (result.changes === 0) return res.status(404).json({ error: 'Pomiar nie znaleziony.' });
     res.json({ success: true, message: 'Pomiar obwodu ciała został usunięty.' });
   } catch (err) {
@@ -137,7 +137,7 @@ router.delete('/api/body-measurements/:id', requireAuth, async (req, res) => {
   }
 });
 
-// Dodanie wypitej wody (licznik dzienny, addytywny - wielokrotne kliknięcia w ciągu dnia się sumują)
+// Add water intake (a daily, additive counter - repeated taps during the day
 router.post('/api/water/add', requireAuth, async (req, res) => {
   const { date, amount_ml } = req.body;
   const amount = Number(amount_ml);
@@ -145,8 +145,8 @@ router.post('/api/water/add', requireAuth, async (req, res) => {
   if (!amount || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ error: 'Ilość wody (amount_ml) musi być liczbą większą od zera.' });
   }
-  // Górny limit na pojedynczy wpis - bez tego błąd UI/integracji (np. pomylenie ml
-  // z litrami) mógłby dopisać absurdalną wartość do dziennego licznika wody.
+// Upper limit for a single entry - without it a UI or integration bug (confusing ml with
+// litres, say) could append an absurd value to the daily water counter.
   if (amount > 5000) {
     return res.status(400).json({ error: 'Nieprawidłowa ilość wody (maks. 5000 ml na wpis).' });
   }
@@ -166,7 +166,7 @@ router.post('/api/water/add', requireAuth, async (req, res) => {
   }
 });
 
-// Zresetowanie licznika wody dla danego dnia (np. cofnięcie błędnego wpisu)
+// Reset the water counter for a given day (undoing a mistaken entry, for instance)
 router.post('/api/water/reset', requireAuth, async (req, res) => {
   const { date } = req.body;
   if (!date) return res.status(400).json({ error: 'Data jest wymagana.' });
@@ -184,12 +184,12 @@ router.post('/api/water/reset', requireAuth, async (req, res) => {
   }
 });
 
-// Limit długości pola suplementów - bez tego dowolnie duży string (np. wklejony
-// przez pomyłkę cały dokument) trafiałby bez ograniczeń do bazy i do każdego
-// miejsca, które to pole odczytuje (Dashboard, PDF, insight supplements-sleep).
+// Length limit for the supplements field - without it an arbitrarily large string (a whole
+// document pasted by mistake) would go unbounded into the database and into every place
+// that reads the field (Dashboard, PDF, the supplements-sleep insight).
 const MAX_SUPPLEMENTS_LENGTH = 2000;
 
-// Zapisz/aktualizuj suplementy dla danego dnia
+// Save or update the supplements for a given day
 router.post('/api/supplements', requireAuth, async (req, res) => {
   const { date, supplements } = req.body;
   if (!date) return res.status(400).json({ error: 'Data jest wymagana.' });
@@ -211,8 +211,8 @@ router.post('/api/supplements', requireAuth, async (req, res) => {
   }
 });
 
-// Zapisz/aktualizuj poziom energii i nastrój dla danego dnia (skala 1-5).
-// Oba pola są opcjonalne — można wysłać tylko jedno z nich.
+// Save or update the energy level and mood for a given day (a 1-5 scale).
+// Both fields are optional - only one of them may be sent.
 const FEELING_MIN = 1;
 const FEELING_MAX = 5;
 
@@ -234,8 +234,8 @@ router.post('/api/feeling', requireAuth, async (req, res) => {
   }
 
   try {
-    // COALESCE(excluded.pole, pole) = zachowaj istniejącą wartość, jeśli nowa jest NULL.
-    // Dzięki temu można zaktualizować samo energy_level bez kasowania mood i odwrotnie.
+    // COALESCE(excluded.field, field) = keep the existing value when the new one is NULL.
+    // That allows updating energy_level alone without clearing mood, and vice versa.
     await db.run(`
       INSERT INTO health_metrics (user_id, date, energy_level, mood)
       VALUES (?, ?, ?, ?)

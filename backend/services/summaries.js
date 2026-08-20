@@ -6,7 +6,7 @@ const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
 const { decrypt } = require('../utils/encryption');
 const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 
-// ===== Wspólne funkcje pomocnicze (wydzielone z duplikacji w 3 funkcjach poniżej) =====
+// ===== Shared helpers (extracted from duplication across the three functions below) =====
 
 async function getUserAndEmail(userId, customEmail) {
   const user = await db.get(`SELECT username, email, role, first_name FROM users WHERE id = ?`, [userId]);
@@ -34,38 +34,38 @@ async function getUserSettings(userId) {
     bmr: settings.bmr ?? 1800,
     targetWaterMl: settings.target_water_ml ?? 2500,
     // 0 = nieustawiony (ta sama konwencja co w routes/dashboard.js) - liczbowy cel
-    // wagi jest opcjonalny, w przeciwieństwie do kalorii/makro, które mają sensowne
-    // wartości domyślne.
+// the weight target is optional, unlike calories and macros, which have sensible
+// defaults.
     targetWeightKg: settings.target_weight_kg || 0
   };
 }
 
-// Rozbieżność cel wagi (liczbowy target_weight_kg) vs realne tempo zmiany wagi w
-// tym tygodniu - jedyna nowa logika produktowa w tym raporcie (resztę stanowi
-// wpięcie do już istniejącego maila tygodniowego). Wykorzystuje wyłącznie dane już
-// zbierane przez aplikację (cel wagi z ustawień + historia wagi z health_metrics) -
-// żadnych nowych danych od użytkownika, żadnego kopiowania funkcji z konkurencji.
-// Zwraca null, gdy nie da się sensownie ocenić tempa (brak celu, brak aktualnej
-// wagi, albo za mało pomiarów w tym tygodniu, żeby tempo nie było zgadywane z
-// jednego punktu) - zgodnie z ustalonym wzorcem "nie fabrykuj wniosków z rzadkich
-// danych" używanym w innych funkcjach produktowych (patrz routes/dashboard.js).
+// Divergence between the weight goal (the numeric target_weight_kg) and the real rate of
+// weight change this week - the only new product logic in this report; the rest is wiring
+// into the existing weekly email. It uses only data the app already collects (the weight
+// target from settings plus weight history from health_metrics) - nothing new is asked of
+// the user.
+// Returns null when the rate cannot be judged sensibly (no target, no current weight, or
+// too few measurements this week for the rate to be more than a guess from one point) -
+// following the established 'do not fabricate conclusions from sparse data' pattern used
+// by the other product features (see routes/dashboard.js).
 function buildGoalPaceAnalysis(targetWeightKg, currentWeight, weeklyWeightChange) {
   if (!targetWeightKg || currentWeight === null || weeklyWeightChange === null) {
     return null;
   }
   const GOAL_REACHED_TOLERANCE_KG = 0.3;
-  const remainingKg = Math.round((currentWeight - targetWeightKg) * 10) / 10; // >0: trzeba schudnąć, <0: trzeba przybrać
+  const remainingKg = Math.round((currentWeight - targetWeightKg) * 10) / 10; // >0: needs to lose weight, <0: needs to gain
   if (Math.abs(remainingKg) <= GOAL_REACHED_TOLERANCE_KG) {
     return { status: 'reached', remainingKg, currentWeight, targetWeightKg, weeklyWeightChange };
   }
   const goalDirection = remainingKg > 0 ? -1 : 1; // kierunek WYMAGANY przez cel
   const actualDirection = weeklyWeightChange === 0 ? 0 : (weeklyWeightChange > 0 ? 1 : -1);
   const directionMismatch = actualDirection !== 0 && actualDirection !== goalDirection;
-  // Runda 12 (audyt): próg minimalnego tempa - przy weeklyWeightChange bliskim zeru
-  // (np. 0.01 kg/tydzień) dzielenie dawało absurdalne wartości (setki/tysiące tygodni),
-  // które trafiały bez sensu do promptu AI w mailu. Poniżej tego progu tempo jest zbyt
-  // małe, by sensownie prognozować datę - traktujemy to jak "stalled" (brak postępu),
-  // mimo że formalnie actualDirection mogło wypaść niezerowe.
+  // Round 12 (audit): a minimum-rate threshold. With weeklyWeightChange close to zero
+  // (0.01 kg/week, say) the division produced absurd values - hundreds or thousands of
+  // weeks - which then went into the AI prompt in the email. Below this threshold the rate
+  // is too small to forecast a date from, so we treat it as 'stalled' even though
+  // actualDirection may formally have come out non-zero.
   const MIN_WEEKLY_CHANGE_FOR_PROJECTION_KG = 0.05;
   let weeksToGoal = null;
   if (!directionMismatch && actualDirection !== 0 && Math.abs(weeklyWeightChange) >= MIN_WEEKLY_CHANGE_FOR_PROJECTION_KG) {
@@ -77,12 +77,12 @@ function buildGoalPaceAnalysis(targetWeightKg, currentWeight, weeklyWeightChange
   };
 }
 
-// Agregacja statystyk żywieniowo-zdrowotnych z zakresu dni (używana przez raport tygodniowy i miesięczny)
+// Aggregates nutrition and health statistics over a date range (used by the weekly and
 async function aggregateNutritionAndHealth(meals, healthMetrics, numDays, userId, startDate) {
-  // UWAGA: totalFiber/totalSugar/totalSodium MUSZĄ być zadeklarowane (let) PRZED forEach
-  // poniżej, który ich używa - wcześniej deklaracja była niżej w funkcji, więc każde
-  // wywołanie dla niepustej listy posiłków rzucało ReferenceError (Temporal Dead Zone),
-  // co wyłączało całe raporty tygodniowe/miesięczne dla każdego użytkownika z posiłkami.
+// NOTE: totalFiber/totalSugar/totalSodium MUST be declared (let) BEFORE the forEach below
+// that uses them - the declaration used to sit lower in the function, so every call with a
+// non-empty meal list threw a ReferenceError (temporal dead zone), which broke the weekly
+// and monthly reports entirely for every user who had logged any meals.
   let totalEatenCal = 0, totalProtein = 0, totalCarbs = 0, totalFat = 0;
   let totalFiber = 0, totalSugar = 0, totalSodium = 0;
   meals.forEach(m => {
@@ -149,24 +149,23 @@ async function aggregateNutritionAndHealth(meals, healthMetrics, numDays, userId
     }
   });
 
-  // Runda 12 (audyt): wcześniej workoutsCount liczył DNI, w których active_calories > 0,
-  // co (a) niedoszacowywało dni z kilkoma treningami (liczone jako 1) i (b) gubiło treningi
-  // bez zarejestrowanych kalorii aktywnych (np. trening siłowy bez danych z zegarka). Teraz
-  // liczymy realne wiersze z dedykowanej tabeli apple_health_workouts, tak jak robi to już
+  // Round 12 (audit): workoutsCount used to count DAYS where active_calories > 0, which
+  // (a) undercounted days with several workouts, scoring them as 1, and (b) missed workouts
+  // with no recorded active calories, such as strength training without watch data. We now
+  // count real rows from the dedicated apple_health_workouts table, as already done by
   // routes/dashboard.js (np. recovery-insight/workout-calorie-efficiency).
   const workoutsCount = userId && startDate
     ? (await db.get(`SELECT COUNT(*) AS count FROM apple_health_workouts WHERE user_id = ? AND date >= ?`, [userId, startDate])).count
     : healthMetrics.filter(h => (h.active_calories || 0) > 0).length;
 
-  // POPRAWKA (runda 4 audytu): średnie dzienne liczone tu były dzielone przez STAŁĄ
-  // długość okna (numDays=7 lub 30), niezależnie od tego, ile dni w tym okresie
-  // użytkownik faktycznie zalogował posiłki/miał zsynchronizowane dane - w
-  // odróżnieniu od routes/dashboard.js (funkcja aggregateNutrition), gdzie świadomie
-  // dzieli się przez rzeczywistą liczbę dni z danymi (daysLogged), żeby nieregularne
-  // logowanie nie zaniżało sztucznie średniej (np. 2 dni x 2000 kcal / 7 dni = ~571
-  // kcal/dzień, zamiast prawdziwych 2000 kcal/dzień). Tu liczymy analogiczny
-  // licznik dni z realnymi danymi - osobno dla posiłków (po unikalnych datach) i
-  // osobno dla metryk zdrowia (jeden wiersz health_metrics = jeden dzień synchronizacji).
+  // FIX (audit round 4): the daily averages computed here were divided by the FIXED window
+  // length (numDays = 7 or 30), regardless of how many days in that period the user had
+  // actually logged meals or synced data - unlike routes/dashboard.js (aggregateNutrition),
+  // which deliberately divides by the real number of days with data (daysLogged) so that
+  // irregular logging does not artificially deflate the average (2 days x 2000 kcal / 7 days
+  // = ~571 kcal/day instead of the true 2000 kcal/day). Here we compute the equivalent
+  // counter of days with real data - separately for meals (by distinct dates) and for health
+  // metrics (one health_metrics row means one synced day).
   const mealDaysLogged = new Set(meals.map(m => m.date)).size;
   const nutritionDivisor = mealDaysLogged > 0 ? mealDaysLogged : numDays;
   const healthDaysLogged = sortedHealthMetrics.length;
@@ -203,10 +202,10 @@ async function aggregateNutritionAndHealth(meals, healthMetrics, numDays, userId
     avgSleepScore, avgReadinessScore, avgWeight, avgFatRatio, avgMuscleMass,
     avgBpSystolic, avgBpDiastolic, supplementsLogged,
     workoutsCount, weightChange, fatRatioChange, muscleMassChange,
-    // Surowe sumy z całego okna (7 lub 30 dni) - potrzebne tam, gdzie raport ma
-    // porównywać sumę z okresu do celu okresowego (np. cel tygodniowy = cel
-    // dobowy x 7), a nie średnią dobową do celu dobowego (patrz statRows w
-    // sendWeeklySummaryForUser - Zadanie: cel powinien być per tydzień, nie dzień).
+  // Raw totals for the whole window (7 or 30 days) - needed where the report compares a
+  // period total against a period target (a weekly target being the daily target x 7)
+  // rather than a daily average against a daily target (see statRows in
+  // sendWeeklySummaryForUser - the target should be per week, not per day).
     totalEatenCalories: Math.round(totalEatenCal),
     totalProteinG: Math.round(totalProtein * 10) / 10,
     totalCarbsG: Math.round(totalCarbs * 10) / 10,
@@ -214,7 +213,7 @@ async function aggregateNutritionAndHealth(meals, healthMetrics, numDays, userId
   };
 }
 
-// Wywołanie AI z ujednoliconą logiką klucza API / fallbacku / obsługi błędów
+// AI invocation with unified API key, fallback and error handling
 async function generateAiSummaryText({ userId, user, prompt, shouldGenerate, fallbackMessage, errorLogLabel, errorMessagePrefix }) {
   let result = fallbackMessage;
   const apiKeyRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'gemini_api_key'", [userId]);
@@ -232,11 +231,10 @@ async function generateAiSummaryText({ userId, user, prompt, shouldGenerate, fal
   return result;
 }
 
-// Konwersja markdown z Gemini na HTML (identyczna logika używana w 3 raportach).
-// Linia po linii - obsługuje nagłówki (## / ###), listy punktowane ("- "/"* ") i
-// pogrubienia, zamiast samego zamieniania \n na <br/> jak poprzednio (ten prosty
-// zamiennik nie domykał <ul> i nie rozumiał nagłówków, więc nowa, ustrukturyzowana
-// odpowiedź AI - "## Analiza" / "## Rekomendacje" w punktach - renderowała się płasko).
+// Converts Gemini's markdown into HTML (identical logic used by all three reports).
+// Line by line - handles headings (## / ###), bullet lists ('- ' / '* ') and
+// the previous replacement did not close <ul> and did not understand headings, so the new
+// structured AI response - '## Analysis' / '## Recommendations' in bullets - rendered flat.
 // Najpierw escapujemy HTML (tekst generuje LLM), tak jak w renderAdviceMarkdown na froncie.
 function markdownToHtml(text) {
   const escaped = text
@@ -268,7 +266,7 @@ function markdownToHtml(text) {
   return html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 }
 
-// Wspólny CSS dla wszystkich maili podsumowujących
+// Shared CSS for all summary emails
 const EMAIL_STYLE = `
   body {
     font-family: Arial, sans-serif;
@@ -346,7 +344,7 @@ const EMAIL_STYLE = `
   }
 `;
 
-// Wspólny generator szablonu HTML maila (tytuł, podtytuł, tabela statystyk, sekcja AI)
+// Shared HTML email template generator (title, subtitle, statistics table, AI section)
 function buildSummaryEmailHtml({ title, headerSubtitleHtml, statsSectionTitle, valueColumnLabel, statRows, aiHtml }) {
   const rowsHtml = statRows.map(r => `
             <tr>
@@ -407,10 +405,10 @@ async function sendWeeklySummaryForUser(userId, customEmail = null) {
   // Pobranie danych z ostatnich 7 dni
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-  // Tylko kolumny faktycznie używane przez aggregateNutritionAndHealth poniżej
-  // (sumy/średnie liczbowe) - SELECT * ściągał tu niepotrzebnie image_base64
-  // (potencjalnie kilka MB na posiłek) i pełny analysis_json, mimo że raport
-  // tygodniowy nigdy nie wyświetla zdjęć ani pełnej analizy AI per posiłek.
+    // Only the columns actually used by aggregateNutritionAndHealth below (numeric sums and
+    // averages) - SELECT * pulled in image_base64 (potentially several MB per meal) and the
+    // full analysis_json unnecessarily, even though the weekly report never shows photos or
+    // the full per-meal AI analysis.
   const meals = await db.all(`
     SELECT calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ?
   `, [userId, sevenDaysAgo]);
@@ -424,24 +422,24 @@ async function sendWeeklySummaryForUser(userId, customEmail = null) {
   const avgTotalBurned = bmr + stats.avgActiveCalories;
   const avgNetCalories = stats.avgEatenCalories - avgTotalBurned;
 
-  // ===== Rozbieżność cel sylwetki/wagi vs tempo (Zadanie: tygodniowy raport
-  // rozbieżności cel-sylwetka vs tempo) - wpięte do już istniejącego maila
-  // tygodniowego, bo to najmniej inwazyjne miejsce: użytkownik i tak go dostaje
-  // raz w tygodniu, zamiast tworzyć osobny mail/scheduler dla tej samej częstotliwości.
+    // ===== Divergence between the physique/weight goal and the actual rate. Wired into the
+    // existing weekly email because that is the least invasive place: the user receives it
+    // once a week anyway, so there is no need for a separate email and scheduler at the same
+    // frequency.
   const bodyGoalRow = await db.get(`SELECT body_goal_text FROM users WHERE id = ?`, [userId]);
   const bodyGoalText = bodyGoalRow && bodyGoalRow.body_goal_text ? bodyGoalRow.body_goal_text : null;
 
-  // Aktualna waga = najnowszy pomiar w ogóle (nie tylko z tego tygodnia), bo
-  // użytkownik mógł nie zsynchronizować wagi akurat w ostatnich 7 dniach.
+    // Current weight = the most recent measurement overall, not only from this week, because
+    // the user may not have synced their weight in the last 7 days.
   const latestWeightRow = await db.get(
     `SELECT weight FROM health_metrics WHERE user_id = ? AND weight IS NOT NULL ORDER BY date DESC LIMIT 1`,
     [userId]
   );
   const currentWeight = latestWeightRow ? latestWeightRow.weight : null;
 
-  // stats.weightChange (pierwszy-ostatni pomiar w oknie 7 dni) przy JEDNYM pomiarze
-  // w tygodniu wychodzi sztucznie jako 0 (stagnacja), co dla oceny tempa byłoby
-  // mylące - tu wymagamy minimum 2 pomiarów w tygodniu, inaczej nie oceniamy tempa.
+    // stats.weightChange (first minus last measurement in the 7-day window) comes out as an
+    // artificial 0 (stagnation) when there is only ONE measurement in the week, which would
+    // be misleading for judging the rate - so we require at least 2, or skip the judgement.
   const weightCountThisWeek = healthMetrics.filter(h => h.weight !== null && h.weight !== undefined).length;
   const weeklyWeightChange = weightCountThisWeek >= 2 ? stats.weightChange : null;
 
@@ -563,13 +561,12 @@ Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek 
     statsSectionTitle: 'Twoje Statystyki Tygodniowe',
     valueColumnLabel: 'Tydzień',
     statRows: [
-      // Kalorie/makro: SUMA z całego tygodnia vs cel TYGODNIOWY (dobowy x 7) -
-      // wcześniej porównywano tu średnią dobową (stats.avgX) do celu dobowego,
-      // co przy nieregularnym logowaniu posiłków (mealDaysLogged < 7) potrafiło
-      // wygenerować myląco wysokie "średnie" porównywane z dobowym celem (Zadanie:
-      // cel powinien być per tydzień, a nie dzień). Kroki/Kalorie Spalone/Woda
-      // pozostają jako średnia dobowa, bo te metryki użytkownik faktycznie
-      // synchronizuje/śledzi dzień po dniu, nie tygodniowo.
+    // Calories and macros: the WEEKLY TOTAL against the WEEKLY target (daily x 7). This used
+    // to compare the daily average (stats.avgX) against the daily target, which with
+    // irregular meal logging (mealDaysLogged < 7) could produce misleadingly high 'averages'
+    // measured against a daily target. Steps, calories burned and water stay as daily
+    // averages, because those are metrics the user genuinely syncs and tracks day by day
+    // rather than weekly.
       { label: 'Kalorie Spożyte (tydzień)', value: `${stats.totalEatenCalories} kcal`, target: `${targetCalories * 7} kcal` },
       { label: 'Białko (tydzień)', value: `${stats.totalProteinG}g`, target: `${targetProtein * 7}g` },
       { label: 'Węglowodany (tydzień)', value: `${stats.totalCarbsG}g`, target: `${targetCarbs * 7}g` },
@@ -578,9 +575,9 @@ Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek 
       { label: 'Kalorie Spalone (śr. dobowa, Aktywne)', value: `${stats.avgActiveCalories} kcal` },
       { label: 'Treningi w tygodniu', value: stats.workoutsCount },
       { label: 'Woda (śr. dobowa)', value: `${stats.avgWaterMl}ml`, target: `${targetWaterMl}ml` },
-      // Wiersz celu wagi pokazywany tylko, gdy mamy z czego liczyć tempo (patrz
-      // buildGoalPaceAnalysis powyżej) - inaczej tabela sugerowałaby ocenę tempa
-      // bez wystarczających danych.
+    // The weight-goal row is shown only when there is enough data to compute the rate (see
+    // buildGoalPaceAnalysis above) - otherwise the table would imply a judgement of pace
+    // made without sufficient data.
       ...(goalPaceAnalysis ? [{
         label: 'Zmiana wagi (tydzień)',
         value: `${goalPaceAnalysis.weeklyWeightChange > 0 ? '+' : ''}${goalPaceAnalysis.weeklyWeightChange} kg`,
@@ -590,7 +587,7 @@ Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek 
     aiHtml: markdownToHtml(aiSummary)
   });
 
-  console.log(`[MAILGUN] Rozpoczęcie wysyłania tygodniowego podsumowania do ${emailToUse}`);
+  console.log(`[MAILGUN] Sending the weekly summary to ${emailToUse}`);
   await sendMailgunEmail({
     to: emailToUse,
     subject: `Dietetyk AI: Twoje Tygodniowe Podsumowanie (${user.username})`,
@@ -605,9 +602,9 @@ async function sendDailySummaryForUser(userId, customEmail = null) {
 
   const date = getLocalDateString();
 
-  // Posiłki z dzisiaj. Tylko kolumny potrzebne do listy w mailu (raw_text +
-  // wartości liczbowe) - bez image_base64/pełnego analysis_json, które tu
-  // nigdy nie są wyświetlane (patrz advicePrompt niżej - tylko nazwa + makro).
+    // Today's meals. Only the columns needed for the list in the email (raw_text plus the
+    // numeric values) - no image_base64 or full analysis_json, which are never displayed here
+    // (see advicePrompt below - name and macros only).
   const mealRows = await db.all(`SELECT id, raw_text, calories, protein, carbs, fat FROM meals WHERE user_id = ? AND date = ?`, [userId, date]);
   let totalEaten = { calories: 0, protein: 0, carbs: 0, fat: 0 };
   const meals = mealRows.map(r => {
@@ -615,11 +612,11 @@ async function sendDailySummaryForUser(userId, customEmail = null) {
     totalEaten.protein += r.protein;
     totalEaten.carbs += r.carbs;
     totalEaten.fat += r.fat;
-    // UWAGA: wcześniej ten wiersz nadpisywał calories/protein/carbs/fat surowym,
-    // niesanityzowanym analysis_json (ten sam wzorzec błędu co w meals.js/dashboard.js,
-    // tu wcześniej przeoczony) - lista posiłków w mailu codziennym mogła pokazywać
-    // inne wartości niż realnie zsumowane w totalEaten powyżej. Skoro zapytanie nie
-    // ściąga już analysis_json, ten wiersz po prostu zwraca sanitizowane kolumny.
+    // NOTE: this row used to overwrite calories/protein/carbs/fat with the raw, unsanitised
+    // analysis_json (the same class of bug as in meals.js/dashboard.js, overlooked here at
+    // the time) - so the meal list in the daily email could show different values from the
+    // totals summed in totalEaten above. Now that the query no longer pulls analysis_json,
+    // this row simply returns the sanitised columns.
     return { id: r.id, raw_text: r.raw_text, calories: r.calories, protein: r.protein, carbs: r.carbs, fat: r.fat };
   });
 
@@ -627,11 +624,11 @@ async function sendDailySummaryForUser(userId, customEmail = null) {
   totalEaten.carbs = Math.round(totalEaten.carbs * 10) / 10;
   totalEaten.fat = Math.round(totalEaten.fat * 10) / 10;
 
-  // Dane zdrowotne z dzisiaj. Wcześniej fallback (gdy brak wiersza health_metrics na
-  // dany dzień) był trzecią, niezsynchronizowaną kopią domyślnego obiektu (oprócz
-  // dashboard.js i chat.js, które już dawno przeszły na wspólny getDefaultHealthMetrics()) -
-  // ta kopia nie miała np. respiratory_rate, spo2_percentage czy ciśnienia tętniczego,
-  // co łatwo przeoczyć przy rozszerzaniu raportu o nowe metryki w przyszłości.
+    // Today's health data. The fallback used when no health_metrics row exists for a day used
+    // to be a third, unsynchronised copy of the default object - alongside dashboard.js and
+    // chat.js, which had long since moved to the shared getDefaultHealthMetrics(). That copy
+    // lacked respiratory_rate, spo2_percentage and blood pressure, which is easy to overlook
+    // when extending the report with new metrics later.
   const health = await db.get(`SELECT * FROM health_metrics WHERE user_id = ? AND date = ?`, [userId, date]) || getDefaultHealthMetrics();
 
   const activeCalories = health.active_calories || 0;
@@ -641,11 +638,11 @@ async function sendDailySummaryForUser(userId, customEmail = null) {
   const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [userId]);
   const language = langRow ? langRow.value : 'pl';
 
-  // Aktualna pogoda i pora dnia (Zadanie: algorytm ma znać i uwzględniać w
-  // analizie bieżącą pogodę/czas - patrz utils/weatherContext.js), pobierana
-  // automatycznie z Open-Meteo, bez żadnego wpisywania przez użytkownika.
-  // Lokalizacja: własna użytkownika (Ustawienia -> Lokalizacja), jeśli
-  // ustawiona, inaczej domyślna lokalizacja wdrożenia.
+    // Current weather and time of day (the model should know and account for both - see
+    // utils/weatherContext.js), fetched automatically from Open-Meteo with nothing for the
+    // user to enter.
+    // Location: the user's own (Settings -> Location) when set, otherwise the deployment's
+    // default location.
   const userLocation = await getUserLocationOverride(userId);
   const weatherTimeContext = await getWeatherAndTimeContext(language, userLocation?.lat, userLocation?.lon);
 
@@ -753,7 +750,7 @@ Sformatuj odpowiedź w strukturze Markdown: jedno krótkie zdanie wstępu, nagł
     aiHtml: markdownToHtml(aiAdvice)
   });
 
-  console.log(`[MAILGUN] Rozpoczęcie wysyłania codziennego podsumowania do ${emailToUse}`);
+  console.log(`[MAILGUN] Sending the daily summary to ${emailToUse}`);
   await sendMailgunEmail({
     to: emailToUse,
     subject: `Dietetyk AI: Twoje Codzienne Podsumowanie (${user.username})`,
@@ -761,7 +758,7 @@ Sformatuj odpowiedź w strukturze Markdown: jedno krótkie zdanie wstępu, nagł
   });
 }
 
-// ===== Raport miesięczny (analogiczny do tygodniowego, okno 30 dni) =====
+// ===== Monthly report (mirrors the weekly one, over a 30-day window) =====
 async function sendMonthlySummaryForUser(userId, customEmail = null) {
   const { user, emailToUse } = await getUserAndEmail(userId, customEmail);
   const { targetCalories, targetProtein, targetCarbs, targetFat, bmr, targetWaterMl } = await getUserSettings(userId);
@@ -769,9 +766,9 @@ async function sendMonthlySummaryForUser(userId, customEmail = null) {
   // Pobranie danych z ostatnich 30 dni
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
-  // Patrz komentarz w sendWeeklySummaryForUser - tylko kolumny liczbowe potrzebne
-  // do agregacji, bez image_base64/analysis_json (raport miesięczny tym bardziej
-  // nie wyświetla zdjęć pojedynczych posiłków).
+    // See the comment in sendWeeklySummaryForUser - only the numeric columns needed for the
+    // aggregation, without image_base64 or analysis_json (the monthly report shows individual
+    // meal photos even less than the weekly one).
   const meals = await db.all(`
     SELECT calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ?
   `, [userId, thirtyDaysAgo]);
@@ -890,7 +887,7 @@ Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek 
     aiHtml: markdownToHtml(aiSummary)
   });
 
-  console.log(`[MAILGUN] Rozpoczęcie wysyłania miesięcznego podsumowania do ${emailToUse}`);
+  console.log(`[MAILGUN] Sending the monthly summary to ${emailToUse}`);
   await sendMailgunEmail({
     to: emailToUse,
     subject: `Dietetyk AI: Twoje Miesięczne Podsumowanie (${user.username})`,
@@ -902,13 +899,13 @@ module.exports = {
   sendWeeklySummaryForUser,
   sendDailySummaryForUser,
   sendMonthlySummaryForUser,
-  // Wyeksportowane też jako samodzielne helpery - wykorzystywane przez
-  // services/pdfReport.js (eksport PDF dla lekarza/dietetyka), żeby nie
-  // duplikować tej samej logiki agregacji statystyk/ustawień.
+// Also exported as standalone helpers - used by services/pdfReport.js (the PDF export for a
+// doctor or dietician) so the same statistics and settings aggregation logic is not
+// duplicated.
   getUserSettings,
   aggregateNutritionAndHealth,
-  // Wykorzystywane też przez routes/dashboard.js (/api/dashboard/weight-goal-forecast)
-  // - ta sama logika statusu/tempa celu wagi co w mailu tygodniowym, tu jako stała
-  // karta na dashboardzie, nie tylko w okresowych mailach.
+// Also used by routes/dashboard.js (/api/dashboard/weight-goal-forecast) - the same weight
+// goal status and pace logic as the weekly email, surfaced there as a permanent dashboard
+// card rather than only in periodic emails.
   buildGoalPaceAnalysis
 };

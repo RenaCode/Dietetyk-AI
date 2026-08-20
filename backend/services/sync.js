@@ -12,9 +12,9 @@ const { getOrRefreshToken } = require('./oauthHelpers');
 const OURA_RANK = getActivitySourceRank('oura');
 const GOOGLE_FIT_RANK = getActivitySourceRank('google_fit');
 
-// Kolumny, których niezerowa wartość oznacza "to źródło realnie dostarczyło dane
-// o aktywności za ten dzień" - decydują o tym, czy etykieta activity_source zostaje
-// przy dotychczasowym (wyżej notowanym) źródle.
+// Columns whose non-zero value means "this source really did provide activity data for
+// that day" - they decide whether the activity_source label stays with the existing,
+// higher-ranked source.
 const ACTIVITY_LABEL_COLUMNS = [
   'steps', 'active_calories', 'total_calories_burned', 'active_minutes', 'distance_meters'
 ];
@@ -33,7 +33,7 @@ async function syncOura(userId) {
   const startDate = formatDateString(past);
   const endDate = formatDateString(now);
 
-  console.log(`[SYNC OURA] Pobieranie danych gotowości/snu/aktywności dla użytkownika ${userId} od ${startDate} do ${endDate}...`);
+  console.log(`[SYNC OURA] Fetching readiness/sleep/activity data for user ${userId} from ${startDate} to ${endDate}...`);
 
   try {
     const sleepRes = await fetchWithTimeout(`https://api.ouraring.com/v2/usercollection/sleep?start_date=${startDate}&end_date=${endDate}`, {
@@ -92,9 +92,9 @@ async function syncOura(userId) {
     }
     const readData = await readRes.json();
 
-    // Dobowe SpO2 (Oura Gen 3+) - osobny endpoint, NIE część odpowiedzi /sleep.
-    // Dla pierścionków starszych niż Gen 3 Oura po prostu zwraca pustą tablicę
-    // `data` (nie błąd 4xx) - wtedy spo2_percentage zostaje null dla każdej daty.
+    // Daily SpO2 (Oura Gen 3+) - a separate endpoint, NOT part of the /sleep response.
+    // For rings older than Gen 3, Oura simply returns an empty `data` array rather than a
+    // 4xx error - spo2_percentage then stays null for every date.
     const spo2Res = await fetchWithTimeout(`https://api.ouraring.com/v2/usercollection/daily_spo2?start_date=${startDate}&end_date=${endDate}`, {
       headers: { 'Authorization': `Bearer ${accessToken}` }
     });
@@ -102,14 +102,14 @@ async function syncOura(userId) {
     if (spo2Res.ok) {
       spo2Data = await spo2Res.json();
     } else {
-      // Celowo nie przerywamy całej synchronizacji błędem SpO2 - to dodatkowa,
-      // nieobowiązkowa metryka. Logujemy i kontynuujemy bez niej.
-      console.warn(`[SYNC OURA] Pominięto SpO2 (Status ${spo2Res.status}) - kontynuuję bez tej metryki.`);
+      // We deliberately do not fail the whole sync on an SpO2 error - it is an extra,
+      // optional metric. Log it and carry on without it.
+      console.warn(`[SYNC OURA] Skipped SpO2 (status ${spo2Res.status}) - continuing without that metric.`);
     }
 
-    // Realny poziom stresu (endpoint /v2/usercollection/daily_stress) - dostępny
-    // tylko dla pierścionków z tą funkcją, dla starszych modeli `data` jest puste
-    // (nie błąd 4xx). Tak jak SpO2, brak tej metryki nie przerywa synchronizacji.
+    // Real stress level (the /v2/usercollection/daily_stress endpoint) - available only on
+    // rings that support it; on older models `data` comes back empty rather than as a 4xx.
+    // As with SpO2, a missing metric does not abort the sync.
     const stressRes = await fetchWithTimeout(`https://api.ouraring.com/v2/usercollection/daily_stress?start_date=${startDate}&end_date=${endDate}`, {
       headers: { 'Authorization': `Bearer ${accessToken}` }
     });
@@ -117,7 +117,7 @@ async function syncOura(userId) {
     if (stressRes.ok) {
       stressData = await stressRes.json();
     } else {
-      console.warn(`[SYNC OURA] Pominięto poziom stresu (Status ${stressRes.status}) - kontynuuję bez tej metryki.`);
+      console.warn(`[SYNC OURA] Skipped stress level (status ${stressRes.status}) - continuing without that metric.`);
     }
 
     const metricsByDate = {};
@@ -150,7 +150,7 @@ async function syncOura(userId) {
     }
 
     if (sleepData && sleepData.data) {
-      // Grupujemy wpisy snu według dni, aby poprawnie obsłużyć wiele wpisów (np. drzemki).
+    // Group sleep entries by day to handle multiple entries correctly, such as naps.
       const sleepByDay = {};
       sleepData.data.forEach(item => {
         const dateStr = item.day;
@@ -167,8 +167,8 @@ async function syncOura(userId) {
           let totalRemSec = 0;
           let hasLongSleep = false;
 
-          // Wybieramy główny rekord (główny sen 'long_sleep', a jeśli go brak - najdłuższą drzemkę)
-          // do wyciągnięcia pozostałych parametrów fizjologicznych (tętno spoczynkowe, HRV itp.).
+      // Pick the main record (the 'long_sleep' main sleep, or the longest nap if there is
+      // none) to read the remaining physiological values from - resting heart rate, HRV and so on.
           let primaryRecord = null;
           items.forEach(item => {
             totalDurationSec += item.total_sleep_duration || 0;
@@ -195,10 +195,10 @@ async function syncOura(userId) {
           if (primaryRecord) {
             metricsByDate[dateStr].rhr = primaryRecord.lowest_heart_rate || null;
             metricsByDate[dateStr].hrv = primaryRecord.average_hrv || null;
-            // `average_breath` - mimo że dokumentacja Oury nazywa to pole "breaths/second",
-            // realne wartości w odpowiedziach API (np. 12.1, 12.4) są w oczywisty sposób
-            // oddechami/MINUTĘ (norma snu to 12-20/min). Zapisujemy wartość bez konwersji,
-            // zaokrągloną do 1 miejsca po przecinku.
+        // `average_breath` - although Oura's documentation calls this field
+        // "breaths/second", the real values in API responses (12.1, 12.4 and the like) are
+        // obviously breaths per MINUTE, since the normal range during sleep is 12-20/min.
+        // We store the value without conversion, rounded to one decimal place.
             metricsByDate[dateStr].respiratory_rate = primaryRecord.average_breath ? Math.round(primaryRecord.average_breath * 10) / 10 : null;
           }
         }
@@ -231,12 +231,12 @@ async function syncOura(userId) {
           metricsByDate[dateStr].active_calories = item.active_calories || 0;
           metricsByDate[dateStr].total_calories = item.total_calories || 0;
           metricsByDate[dateStr].active_minutes = Math.round(((item.medium_activity_time || 0) + (item.high_activity_time || 0)) / 60) || 0;
-          // Dystans - Oura zwraca "ekwiwalent dystansu pieszego" w metrach (uwzględnia
-          // też inną aktywność przeliczoną na kroki/dystans, nie tylko czysty chodzony
-          // dystans GPS) - najlepsze dostępne realne pole dystansu z tego API.
+        // Distance - Oura returns an "equivalent walking distance" in metres, which also
+        // folds in other activity converted into steps/distance rather than pure GPS
+        // walking distance. It is the best real distance field this API offers.
           metricsByDate[dateStr].distance_meters = item.equivalent_walking_distance || null;
-          // Rozbicie dnia wg intensywności (sekundy -> minuty) - uzupełnia istniejące
-          // active_minutes (medium+high) o resztę dnia.
+        // Day broken down by intensity (seconds -> minutes) - complements the existing
+        // active_minutes (medium+high) with the rest of the day.
           metricsByDate[dateStr].sedentary_minutes = item.sedentary_time != null ? Math.round(item.sedentary_time / 60) : null;
           metricsByDate[dateStr].low_activity_minutes = item.low_activity_time != null ? Math.round(item.low_activity_time / 60) : null;
         }
@@ -248,13 +248,12 @@ async function syncOura(userId) {
         const dateStr = item.day;
         if (metricsByDate[dateStr]) {
           metricsByDate[dateStr].readiness_score = item.score || null;
-          // BUG (do 2026-06): Oura API v2 zwraca "temperature_deviation" jako
-          // płaskie pole na obiekcie readiness, NIE zagnieżdżone pod
-          // "temperature.deviation" (takiego zagnieżdżonego pola nie ma w
-          // ogóle w odpowiedzi /v2/usercollection/daily_readiness) - stara
-          // ścieżka item.temperature?.deviation była więc zawsze undefined,
-          // więc kolumna zawsze wpadała w fallback null. Stąd permanentne
-          // "--" przy "Odchylenie temperatury" na karcie Oura Ring Status.
+          // BUG (until 2026-06): the Oura v2 API returns "temperature_deviation" as a flat
+          // field on the readiness object, NOT nested under "temperature.deviation" - that
+          // nested field does not exist in the /v2/usercollection/daily_readiness response
+          // at all. The old item.temperature?.deviation path was therefore always
+          // undefined, so the column always fell back to null. That is why "Temperature
+          // deviation" on the Oura Ring status card permanently showed "--".
           metricsByDate[dateStr].temperature_deviation = item.temperature_deviation ?? null;
         }
       });
@@ -274,15 +273,16 @@ async function syncOura(userId) {
     const lastSyncTime = new Date().toISOString();
     for (const [dateStr, metrics] of Object.entries(metricsByDate)) {
       if (metrics.steps !== null || metrics.sleep_score !== null || metrics.readiness_score !== null) {
-        // Sprawdzamy czy w bazie istnieje już wiersz z nie-nullowym czasem snu
+        // Check whether a row with a non-null sleep duration already exists
         const existing = await db.get(
           'SELECT sleep_duration, sleep_score, sleep_deep, sleep_rem, rhr, hrv, readiness_score FROM health_metrics WHERE user_id = ? AND date = ?',
           [userId, dateStr]
         );
 
         if (existing && existing.sleep_duration !== null && !metrics.has_long_sleep) {
-          // Jeśli w bazie jest już czas snu, a Oura nie ma na ten dzień głównego snu (long_sleep),
-          // tylko np. same drzemki lub brak danych snu, nie nadpisujemy istniejącego czasu snu ani wskaźników.
+        // If the database already holds a sleep duration and Oura has no main sleep
+        // (long_sleep) for that day - only naps, or no sleep data at all - we leave the
+        // existing sleep duration and the derived metrics alone.
           metrics.sleep_duration = existing.sleep_duration;
           metrics.sleep_score = existing.sleep_score;
           metrics.sleep_deep = existing.sleep_deep;
@@ -292,31 +292,28 @@ async function syncOura(userId) {
           metrics.readiness_score = existing.readiness_score;
         }
 
-        // PRIORYTET: patrz utils/activitySources.js - hierarchia
-        // apple > google_fit > oura, wspólna dla WSZYSTKICH upsertów aktywności.
-        // Wcześniej każdy upsert bronił się wyłącznie przed nadpisaniem danych
-        // z 'apple', przez co Google Fit i Oura nadpisywały się nawzajem i wynik
-        // dla tej samej doby zależał od kolejności synchronizacji w danej godzinie.
+        // PRIORITY: see utils/activitySources.js - the hierarchy apple > google_fit > oura
+        // is shared by ALL activity upserts. Each upsert used to guard only against
+        // overwriting 'apple' data, so Google Fit and Oura overwrote each other and the
+        // result for a given day depended on the order the syncs ran in that hour.
         //
-        // POPRAWKA (2026-06-19): blokada "activity_source = 'apple' -> nie nadpisuj"
-        // chroniła kolumnę NIEZALEŻNIE od tego, czy Apple faktycznie wysłało dla niej
-        // realne dane. Jeśli webhook Apple Health zapisał dla danej daty same
-        // zera/null (np. automatyzacja odpaliła się, zanim zegarek zsynchronizował
-        // kroki, albo wysłała tylko część metryk), dzień zostawał trwale zablokowany
-        // na zerze - żaden kolejny resync Oury (mimo realnych, niezerowych danych) go
-        // nie poprawiał. Teraz blokada per-kolumna działa tylko, gdy istniejąca
-        // wartość Apple jest faktycznie > 0 - w przeciwnym razie Oura może ją
-        // uzupełnić. activity_source wraca na 'oura' tylko wtedy, gdy żadna z kolumn
-        // aktywności Apple nie miała realnych danych (czyli wszystkie zostały właśnie
-        // uzupełnione przez Oura) - jeśli chociaż jedna kolumna Apple była realna,
-        // etykieta źródła zostaje 'apple', zgodnie z tym, co faktycznie nadpisano.
-        // POPRAWKA (runda 4 audytu): wcześniej activitySource zależał WYŁĄCZNIE od
-        // metrics.steps !== null. Jeśli Oura dla danej daty dostarczyła np. tylko
-        // active_calories/active_minutes (kroki spóźnione lub niedostępne z danego
-        // modelu pierścionka), activitySource wpadał w null mimo zapisania realnych
-        // danych aktywności z Oura - dashboard/API błędnie pokazywały brak/nieznane
-        // źródło aktywności za ten dzień. Teraz źródło 'oura' jest ustawiane, gdy
-        // JAKAKOLWIEK kolumna aktywności ma realną wartość.
+        // FIX (2026-06-19): the "activity_source = 'apple' -> do not overwrite" guard used
+        // to protect a column REGARDLESS of whether Apple had actually sent real data for
+        // it. If the Apple Health webhook wrote only zeros or nulls for a date - because
+        // the automation fired before the watch had synced its steps, or sent only some of
+        // the metrics - the day was permanently pinned at zero: no later Oura resync would
+        // fix it, however real its data. The per-column guard now applies only when the
+        // existing Apple value is genuinely > 0; otherwise Oura may fill it in.
+        // activity_source falls back to 'oura' only when none of Apple's activity columns
+        // held real data (so all of them were just filled in by Oura) - if even one Apple
+        // column was real, the source label stays 'apple', matching what was actually
+        // overwritten.
+        // FIX (audit round 4): activitySource used to depend SOLELY on
+        // metrics.steps !== null. If Oura provided only active_calories/active_minutes for
+        // a date - steps delayed, or unavailable on that ring model - activitySource fell
+        // to null even though real activity data had been written, and the dashboard and
+        // API wrongly reported a missing or unknown activity source for that day. The
+        // source is now set to 'oura' when ANY activity column holds a real value.
         const hasOuraActivityData = metrics.steps !== null || metrics.active_calories !== null
           || metrics.active_minutes !== null || metrics.distance_meters !== null
           || metrics.total_calories !== null;
@@ -363,15 +360,13 @@ async function syncOura(userId) {
           metrics.steps, metrics.active_calories, metrics.total_calories,
           metrics.sleep_score, metrics.sleep_duration, metrics.sleep_deep, metrics.sleep_rem,
           metrics.readiness_score, metrics.hrv, metrics.rhr, metrics.temperature_deviation,
-          // BŁĄD (naprawione): było `metrics.active_minutes || 0`. Jeśli dane
-          // aktywności Oura nie trafiały dla danej daty, metrics.active_minutes
-          // było null/undefined, a `|| 0` zamieniało to na liczbę 0 - w
-          // przeciwieństwie do wszystkich innych pól powyżej, które poprawnie
-          // przechodzą jako null. Ponieważ UPDATE używa
-          // COALESCE(excluded.active_minutes, active_minutes), a COALESCE
-          // traktuje 0 jako realną wartość (nie NULL), KAŻDA synchronizacja bez
-          // dopasowanych danych aktywności na tę datę zerowała już zapisaną,
-          // prawdziwą wartość minut aktywności z poprzedniej synchronizacji.
+          // BUG (fixed): this used to be `metrics.active_minutes || 0`. When Oura activity
+          // data did not arrive for a date, metrics.active_minutes was null/undefined and
+          // `|| 0` turned it into the number 0 - unlike every other field above, which
+          // correctly passes through as null. Because the UPDATE uses
+          // COALESCE(excluded.active_minutes, active_minutes), and COALESCE treats 0 as a
+          // real value rather than NULL, EVERY sync without matching activity data for that
+          // date wiped out the real active-minutes value stored by a previous sync.
           metrics.active_minutes,
           metrics.respiratory_rate, metrics.spo2_percentage,
           metrics.distance_meters, metrics.sedentary_minutes, metrics.low_activity_minutes,
@@ -383,7 +378,7 @@ async function syncOura(userId) {
     }
     return { success: true };
   } catch (err) {
-    console.error(`[SYNC OURA ERROR] Użytkownik ${userId}:`, err);
+    console.error(`[SYNC OURA ERROR] User ${userId}:`, err);
     return { success: false, error: err.message };
   }
 }
@@ -400,7 +395,7 @@ async function syncWithings(userId) {
   past.setDate(now.getDate() - 30);
   const startTimestamp = Math.floor(past.getTime() / 1000);
 
-  console.log(`[SYNC WITHINGS] Pobieranie pomiarów wagi dla użytkownika ${userId}...`);
+  console.log(`[SYNC WITHINGS] Fetching weight measurements for user ${userId}...`);
 
   try {
     const response = await fetchWithTimeout('https://wbsapi.withings.net/v2/measure', {
@@ -411,8 +406,8 @@ async function syncWithings(userId) {
       },
       body: new URLSearchParams({
         action: 'getmeas',
-        // 1: waga (kg), 6: % tłuszczu, 76: mięśnie (kg), 9: ciśnienie rozkurczowe
-        // (diastolic, mmHg), 10: ciśnienie skurczowe (systolic, mmHg) - z ciśnieniomierza
+      // 1: weight (kg), 6: body fat %, 76: muscle mass (kg), 9: diastolic blood pressure
+      // (mmHg), 10: systolic blood pressure (mmHg) - from a blood pressure monitor
         // Withings (np. BPM Core), zapisywane w tej samej grupie pomiarowej co waga.
         meastypes: '1,6,76,9,10',
         category: '1',
@@ -443,7 +438,7 @@ async function syncWithings(userId) {
 
       grp.measures.forEach(m => {
         const val = m.value * Math.pow(10, m.unit);
-        // B-W3: Pomiń pomiar jeśli jednostka jest undefined → NaN propaguje do SQLite
+        // B-W3: skip the measurement when the unit is undefined, otherwise NaN propagates into SQLite
         if (isNaN(val) || !isFinite(val)) return;
         if (m.type === 1) weight = Math.round(val * 100) / 100;
         if (m.type === 6) fatRatio = Math.round(val * 100) / 100;
@@ -468,36 +463,35 @@ async function syncWithings(userId) {
     }
     return { success: true };
   } catch (err) {
-    console.error(`[SYNC WITHINGS ERROR] Użytkownik ${userId}:`, err);
+    console.error(`[SYNC WITHINGS ERROR] User ${userId}:`, err);
     return { success: false, error: err.message };
   }
 }
 
-// Synchronizacja Google Fit (kroki, kalorie aktywne) - w przeciwieństwie do Apple Health
-// (webhook/push z apki Health Auto Export), Google Fit nie ma mechanizmu push, więc
-// dane pobieramy aktywnie przez REST API (dataset:aggregate), analogicznie do Oura/Withings.
+// Google Fit sync (steps, active calories). Unlike Apple Health, which pushes through the
+// Health Auto Export webhook, Google Fit has no push mechanism, so we pull actively over
+// the REST API (dataset:aggregate), as with Oura and Withings.
 async function syncGoogleFit(userId) {
   const accessToken = await getOrRefreshToken(userId, 'google_fit');
   if (!accessToken) {
     return { success: false, error: 'Brak aktywnego tokenu Google Fit. Połącz się ponownie w Ustawieniach.' };
   }
 
-  // Granice okna MUSZĄ zaczynać się dokładnie o północy czasu Europe/Warsaw.
-  // bucketByTime w Google Fit dzieli okno na kubełki od startTimeMillis co
-  // durationMillis - czyli kubełki są wyrównane do PUNKTU STARTU, nie do UTC.
-  // Wcześniej startem był "teraz minus 7 dni", więc każdy kubełek obejmował dobę
-  // liczoną od bieżącej godziny (np. 14:00-14:00), a nie dobę kalendarzową.
-  // Sumy 7-dniowe wychodziły z tego mniej więcej poprawne, ale przypisanie do
-  // konkretnego DNIA było przesunięte - a na tym opierają się insighty czasowe
-  // (meal-timing-sleep, sedentary-sleep, early-strain-alert), gdzie przesunięcie
-  // zmienia wniosek, nie tylko liczbę. Start ustawiony na północ warszawską
-  // sprawia, że każdy kubełek to dokładnie jedna doba kalendarzowa w tej samej
-  // strefie, w której liczy je reszta aplikacji (patrz utils/dates.js).
+  // The window boundaries MUST start exactly at midnight Europe/Warsaw time.
+  // bucketByTime in Google Fit splits the window into buckets of durationMillis measured
+  // from startTimeMillis - so buckets are aligned to the START POINT, not to UTC.
+  // The start used to be "now minus 7 days", so each bucket covered a day counted from the
+  // current hour (14:00-14:00, say) rather than a calendar day. Seven-day totals came out
+  // roughly right, but the attribution to a specific DAY was shifted - and the time-based
+  // insights (meal-timing-sleep, sedentary-sleep, early-strain-alert) rest on exactly that,
+  // where a shift changes the conclusion rather than just the number. Starting at Warsaw
+  // midnight makes each bucket exactly one calendar day in the same timezone the rest of the
+  // application uses (see utils/dates.js).
   const now = new Date();
   const startTimeMillis = getWarsawDayStartMillis(now, -7);
   const endTimeMillis = now.getTime();
 
-  console.log(`[SYNC GOOGLE FIT] Pobieranie kroków/kalorii dla użytkownika ${userId}...`);
+  console.log(`[SYNC GOOGLE FIT] Fetching steps/calories for user ${userId}...`);
 
   try {
     const response = await fetchWithTimeout('https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate', {
@@ -528,15 +522,15 @@ async function syncGoogleFit(userId) {
     const lastSyncTime = new Date().toISOString();
 
     for (const bucket of buckets) {
-      // Kubełki są wyrównane do północy warszawskiej (patrz startTimeMillis wyżej),
-      // ale durationMillis to sztywne 24h, więc po zmianie czasu letni/zimowy
-      // kolejne kubełki w oknie dryfują o godzinę (np. zaczynają się o 23:00 dnia
-      // poprzedniego). Etykietujemy więc kubełek po jego ŚRODKU, a nie po początku:
-      // dla kubełka wyrównanego środek wypada w południe tego samego dnia, a dla
-      // przesuniętego o godzinę - nadal w obrębie właściwej doby. Dzięki temu
-      // przypisanie do dnia jest poprawne również w tygodniu ze zmianą czasu.
-      // (Sama zawartość kubełka jest wtedy przesunięta o godzinę - tego przy
-      // sztywnym durationMillis uniknąć się nie da bez 7 osobnych zapytań do API.)
+      // The buckets are aligned to Warsaw midnight (see startTimeMillis above), but
+      // durationMillis is a fixed 24h, so after a daylight-saving change the later buckets in
+      // the window drift by an hour - starting at 23:00 the previous day, for instance. We
+      // therefore label a bucket by its MIDPOINT rather than its start: for an aligned bucket
+      // the midpoint falls at noon of the same day, and for one shifted by an hour it still
+      // lands inside the correct day. That keeps the day attribution correct even in the week
+      // a clock change happens.
+      // (The bucket's contents are then shifted by an hour - unavoidable with a fixed
+      // durationMillis, short of making seven separate API requests.)
       const bucketStartMs = Number(bucket.startTimeMillis);
       const bucketEndMs = Number(bucket.endTimeMillis) || (bucketStartMs + 86400000);
       const bucketMidpointMs = bucketStartMs + (bucketEndMs - bucketStartMs) / 2;
@@ -562,10 +556,10 @@ async function syncGoogleFit(userId) {
       distance = Math.round(distance);
 
       if (steps > 0 || calories > 0 || distance > 0) {
-        // Ten sam wzorzec ochrony kolumn co w syncOura, z jednej wspólnej hierarchii
-        // (utils/activitySources.js): apple > google_fit > oura. Google Fit stoi wyżej
-        // od Oury, bo jak Apple Health raportuje na bieżąco z telefonu, a Oura domyka
-        // dobę dopiero następnego ranka.
+        // The same column-protection pattern as syncOura, from the one shared hierarchy in
+        // utils/activitySources.js: apple > google_fit > oura. Google Fit ranks above Oura
+        // because, like Apple Health, it reports continuously from the phone, whereas Oura
+        // only finalises a day the following morning.
         await db.run(`
           INSERT INTO health_metrics (user_id, date, steps, active_calories, distance_meters, activity_source, last_sync)
           VALUES (?, ?, ?, ?, ?, 'google_fit', ?)
@@ -577,62 +571,62 @@ async function syncGoogleFit(userId) {
             last_sync = excluded.last_sync
         `, [
           userId, dateStr,
-          // Runda 12 (audyt): usunięto "|| null". Te wartości startują od 0 i są zliczane
-          // przez sumowanie punktów z Google Fit - 0 jest tu legalną, realną wartością
-          // dnia (np. faktycznie 0 kroków), a nie "brakiem danych". Konwersja na null
-          // psuła wzorzec ON CONFLICT (COALESCE(excluded.x, x)): null powodował, że
-          // SQLite zachowywał STARĄ wartość z bazy, więc dzień z realnym zerem nigdy nie
-          // nadpisywał błędnych/nieaktualnych danych z wcześniejszej synchronizacji.
+          // Round 12 (audit): the "|| null" was removed. These values start at 0 and are
+          // accumulated by summing Google Fit points - 0 is a legitimate, real value for a
+          // day (genuinely zero steps) rather than "no data". Converting it to null broke
+          // the ON CONFLICT pattern COALESCE(excluded.x, x): null made SQLite keep the OLD
+          // value, so a day with a real zero never overwrote wrong or stale data from an
+          // earlier sync.
           steps, calories, distance, lastSyncTime
         ]);
       }
     }
     return { success: true };
   } catch (err) {
-    console.error(`[SYNC GOOGLE FIT ERROR] Użytkownik ${userId}:`, err);
+    console.error(`[SYNC GOOGLE FIT ERROR] User ${userId}:`, err);
     return { success: false, error: err.message };
   }
 }
 
-// Synchronizacja Oura dla wszystkich użytkowników (wywoływana przez wspólny harmonogram godzinowy, 5:00-22:00)
+// Oura sync for every user (invoked by the shared hourly scheduler, 05:00-22:00)
 async function syncAllOura() {
-  console.log('[CRON OURA] Synchronizacja danych Oura Ring...');
+  console.log('[CRON OURA] Syncing data...');
   try {
     const tokens = await db.all(`SELECT DISTINCT user_id FROM oauth_tokens WHERE service = 'oura'`);
     for (const t of tokens) {
       await syncOura(t.user_id);
     }
-    console.log(`[CRON OURA] Zsynchronizowano ${tokens.length} użytkownik(ów).`);
+    console.log(`[CRON OURA] Synced ${tokens.length} user(s).`);
   } catch (err) {
-    console.error('[CRON ERROR] Błąd synchronizacji Oura:', err);
+    console.error('[CRON ERROR] Oura sync failed:', err);
   }
 }
 
-// Synchronizacja Withings dla wszystkich użytkowników (wywoływana przez wspólny harmonogram godzinowy, 5:00-22:00)
+// Withings sync for every user (invoked by the shared hourly scheduler, 05:00-22:00)
 async function syncAllWithings() {
-  console.log('[CRON WITHINGS] Synchronizacja danych Withings...');
+  console.log('[CRON WITHINGS] Syncing data...');
   try {
     const tokens = await db.all(`SELECT DISTINCT user_id FROM oauth_tokens WHERE service = 'withings'`);
     for (const t of tokens) {
       await syncWithings(t.user_id);
     }
-    console.log(`[CRON WITHINGS] Zsynchronizowano ${tokens.length} użytkownik(ów).`);
+    console.log(`[CRON WITHINGS] Synced ${tokens.length} user(s).`);
   } catch (err) {
-    console.error('[CRON ERROR] Błąd synchronizacji Withings:', err);
+    console.error('[CRON ERROR] Withings sync failed:', err);
   }
 }
 
-// Synchronizacja Google Fit dla wszystkich użytkowników (wywoływana przez wspólny harmonogram godzinowy, 5:00-22:00)
+// Google Fit sync for every user (invoked by the shared hourly scheduler, 05:00-22:00)
 async function syncAllGoogleFit() {
-  console.log('[CRON GOOGLE FIT] Synchronizacja danych Google Fit...');
+  console.log('[CRON GOOGLE FIT] Syncing data...');
   try {
     const tokens = await db.all(`SELECT DISTINCT user_id FROM oauth_tokens WHERE service = 'google_fit'`);
     for (const t of tokens) {
       await syncGoogleFit(t.user_id);
     }
-    console.log(`[CRON GOOGLE FIT] Zsynchronizowano ${tokens.length} użytkownik(ów).`);
+    console.log(`[CRON GOOGLE FIT] Synced ${tokens.length} user(s).`);
   } catch (err) {
-    console.error('[CRON ERROR] Błąd synchronizacji Google Fit:', err);
+    console.error('[CRON ERROR] Google Fit sync failed:', err);
   }
 }
 

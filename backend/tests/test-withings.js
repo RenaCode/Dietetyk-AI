@@ -7,11 +7,11 @@ async function testWithingsConnection() {
   console.log('\n--- TEST ZINTEGROWANIA WITHINGS ---');
   await db.initDb();
 
-  // 1. Sprawdzanie zmiennych w .env
+  // 1. Checking the variables in .env
   const envClientId = process.env.WITHINGS_CLIENT_ID;
   const envClientSecret = process.env.WITHINGS_CLIENT_SECRET;
 
-  // 2. Sprawdzanie w bazie danych
+  // 2. Checking in the database
   const adminRow = await db.get(`SELECT id FROM users WHERE username = 'admin'`);
   let dbClientId = null;
   let dbClientSecret = null;

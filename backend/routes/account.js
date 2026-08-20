@@ -30,7 +30,7 @@ const TIME_REGEX = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const SYNC_TOKEN_REGEX = /^[A-Za-z0-9_-]{16,128}$/;
 // Length limit for the physique goal description - without it nothing bounded the size of
 // the text that later goes into the Gemini prompt (see dashboard.js and chat.js),
-// analogicznie do MAX_CHAT_MESSAGE_LENGTH w chat.js.
+// mirroring MAX_CHAT_MESSAGE_LENGTH in chat.js.
 const MAX_BODY_GOAL_TEXT_LENGTH = 1000;
 // Size limit for the physique goal photo as base64 (about 3 MB encoded, roughly 2.2 MB of
 // real file) - the photo is compressed and scaled on the frontend (see Settings.jsx), but
@@ -99,7 +99,7 @@ router.post('/api/settings', async (req, res) => {
       if (CREDENTIAL_KEYS.includes(key) && (val === '' || val === null || val === undefined || val === 0)) {
         continue; // never store an empty/zero credential value - see the comment above
       }
-      // Sekrety (gemini_api_key, oura/withings_client_secret) trzymamy w bazie
+      // Secrets (gemini_api_key, oura/withings_client_secret) are stored in the database
       // encrypted (see utils/encryption.js) - encrypt() is a no-op for the remaining,
       // non-secret settings keys.
       const storedValue = USER_SECRET_SETTING_KEYS.includes(key) ? encrypt(String(val)) : String(val);
@@ -260,7 +260,7 @@ router.post('/api/user/profile', async (req, res) => {
       }
     }
 
-    // Cel sylwetki - opis tekstowy. Pusty string/null = czyszczenie pola, tak jak
+    // Body goal - a text description. An empty string or null clears the field, exactly
     // as with the first and last name above. The AI (dashboard.js, chat.js) reads this value
     // every time it generates advice or a chat reply.
     if (body_goal_text !== undefined) {
@@ -647,7 +647,7 @@ router.get('/api/user/export', async (req, res) => {
 // above: this document is a concise, readable summary (targets, period averages, sleep and
 // body composition, circumferences, supplements) rather than a raw dump of every database
 // row. The days parameter is bounded in
-// buildHealthReportPdf (services/pdfReport.js) do maks. PDF_REPORT_MAX_DAYS dni.
+// buildHealthReportPdf (services/pdfReport.js) to at most PDF_REPORT_MAX_DAYS days.
 router.get('/api/user/export-pdf-report', async (req, res) => {
   try {
     const pdfBuffer = await buildHealthReportPdf(req.user.id, req.query.days);
@@ -665,7 +665,7 @@ router.get('/api/user/export-pdf-report', async (req, res) => {
 // alternative to downloading the file above. Instead of sending the file to their doctor or
 // dietician themselves, the user sends a link the recipient can open without an account in
 // the app (see routes/sharedReport.js, the public
-// endpoint zamontowany w server.js przed requireAuth).
+// endpoint mounted in server.js before requireAuth).
 router.post('/api/user/shared-reports', async (req, res) => {
   try {
     const validityKey = Object.prototype.hasOwnProperty.call(VALIDITY_OPTIONS_HOURS, req.body.validityKey)

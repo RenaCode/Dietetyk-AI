@@ -1,7 +1,7 @@
 const db = require('../db');
 const { sendMailgunEmail } = require('./mailgun');
 
-// Prosta walidacja formatu adresu e-mail (Runda 17, naprawa z audytu) - przed
+// Simple email address format validation (round 17, an audit fix) - before
 // sending, we filter out addresses that do not even look like an email (a typo saved earlier
 // in an admin profile, say), so we do not attempt delivery to an obviously broken address and
 // do not clutter the logs with Mailgun errors for obvious cases.
@@ -99,7 +99,7 @@ async function sendWeeklyAdminReport() {
 }
 
 /**
- * Pomocnicza funkcja do formatowania HTML raportu
+ * Helper for formatting the report HTML
  */
 function generateReportHtml(stats, topErrors, topSecurity, recentLogs) {
   const totalLogs = stats.INFO + stats.WARN + stats.ERROR + stats.SECURITY;
@@ -272,7 +272,7 @@ function generateReportHtml(stats, topErrors, topSecurity, recentLogs) {
 }
 
 /**
- * Zabezpieczenie przed atakami XSS w raportach HTML
+ * Protection against XSS attacks in the HTML reports
  */
 function escapeHtml(text) {
   if (!text) return '';

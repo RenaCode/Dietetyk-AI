@@ -39,7 +39,7 @@ router.post('/api/admin/config', requireAdmin, async (req, res) => {
       if (!key.startsWith('mailgun_') && key !== 'app_url' && key !== 'force_2fa' && key !== 'allow_public_registration' && !GOOGLE_CONFIG_KEYS.includes(key)) {
         continue;
       }
-      // Sekrety (mailgun_api_key, google_client_secret) trzymamy w bazie zaszyfrowane
+      // Secrets (mailgun_api_key, google_client_secret) are stored encrypted in the database
       // (see utils/encryption.js) - encrypt() is a no-op for the remaining keys.
       const storedValue = APP_SECRET_CONFIG_KEYS.includes(key) ? encrypt(String(val)) : String(val);
       await db.run(`

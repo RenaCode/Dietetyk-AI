@@ -105,7 +105,7 @@ router.get('/api/auth/google/link', async (req, res) => {
   }
 });
 
-// Krok 2: callback - wymiana kodu na token, pobranie profilu, znalezienie/utworzenie konta
+// Step 2: the callback - exchanging the code for a token, fetching the profile, finding or creating the account
 // (or, when `state` indicates the account-linking flow above, simply assigning google_id to
 // the already logged-in user).
 router.get('/api/auth/google/callback', async (req, res) => {
@@ -338,7 +338,7 @@ router.post('/api/login', async (req, res) => {
   }
 });
 
-// Endpoint weryfikacji konfiguracji 2FA - Krok 2a
+// 2FA configuration verification endpoint - step 2a
 router.post('/api/verify-2fa-setup', async (req, res) => {
   const { tempToken, code } = req.body;
   if (!tempToken || !code) {
@@ -393,7 +393,7 @@ router.post('/api/verify-2fa-setup', async (req, res) => {
   }
 });
 
-// Endpoint logowania 2FA - Krok 2b
+// 2FA login endpoint - step 2b
 router.post('/api/login-2fa', async (req, res) => {
   const { tempToken, code } = req.body;
   if (!tempToken || !code) {
@@ -551,7 +551,7 @@ router.get('/api/invitation-status', async (req, res) => {
   }
 });
 
-// 6f. Rejestracja z zaproszenia
+// 6f. Registration from an invitation
 router.post('/api/register-invitation', async (req, res) => {
   const { token, username, password } = req.body;
   if (!token || !username || !password) {

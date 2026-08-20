@@ -27,7 +27,7 @@ async function testDatabaseSchema() {
   if (ok) {
     console.log('✅ The database schema and tables are correct.');
   } else {
-    throw new Error('Test schematu bazy danych zakończył się niepowodzeniem.');
+    throw new Error('The database schema test failed.');
   }
 }
 
@@ -45,7 +45,7 @@ async function testUserMfaForcedFlow() {
   `, [testUsername, testHash, syncToken]);
   
   const userId = userResult.id;
-  console.log(`Zarejestrowano użytkownika testowego: ${testUsername} (ID: ${userId})`);
+  console.log(`Registered the test user: ${testUsername} (ID: ${userId})`);
 
   // Check that the backend issues setup_2fa for this user
   const user = await db.get(`SELECT * FROM users WHERE id = ?`, [userId]);
@@ -58,7 +58,7 @@ async function testUserMfaForcedFlow() {
 
   if (user.totp_enabled === 0 && user.username !== 'admin') {
     const secret = user.totp_secret || authenticator.generateSecret();
-    console.log(`✅ Sukces: Użytkownik ${user.username} ma wyłączone 2FA, generujemy klucz tajny: ${secret}`);
+    console.log(`✅ Success: user ${user.username} has 2FA disabled, generating a secret key: ${secret}`);
   } else {
     console.error('❌ Error: login did not enforce 2FA for a standard user.');
   }
@@ -71,7 +71,7 @@ async function testUserMfaForcedFlow() {
 async function testMailgunConfigurationMasking() {
   console.log('\n--- TEST 3: Weryfikacja maskowania klucza Mailgun API ---');
   
-  // Zapisz klucz API
+  // Save the API key
   const testApiKey = 'key-test12345abcdef';
   await db.run(`
     INSERT INTO app_config (key, value)

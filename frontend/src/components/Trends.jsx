@@ -503,7 +503,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
               />
             )}
 
-        {/* Interactive points - hover or click shows a tooltip with the exact value and day
+            {/* Interactive points - hover or click shows a tooltip with the exact value and day */}
             {points.map((p, idx) => {
               if (!p) return null;
               const isActive = hoverInfo && hoverInfo.chartKey === key && hoverInfo.idx === idx;
@@ -657,7 +657,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
             {hasData && sysPath && <path d={sysPath} stroke="#ffffff" strokeWidth="2" fill="none" strokeLinecap="round" />}
             {hasData && diaPath && <path d={diaPath} stroke="#38bdf8" strokeWidth="2" fill="none" strokeLinecap="round" />}
 
-        {/* Interactive points - hover or click shows a tooltip with the exact value and day
+            {/* Interactive points - hover or click shows a tooltip with the exact value and day */}
             {sysPoints.map((p, idx) => {
               const isActive = hoverInfo && hoverInfo.chartKey === chartKey && hoverInfo.idx === idx;
               const diaP = diaPoints.find(dp => dp.day === p.day);

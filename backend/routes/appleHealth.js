@@ -20,12 +20,18 @@ const { parseHealthAutoExportDate, dateObjToLocalDateString, getWarsawWallClock 
 // (Oura potrafi dawać dane z opóźnieniem - dobowe dane finalizują się zwykle następnego
 // ranka, patrz wcześniejsza diagnoza przez scripts/check-oura-api.sh). Priorytet
 // odwrócony: Apple Health jest teraz źródłem AUTORYTATYWNYM dla aktywności.
-// Kolumna health_metrics.activity_source ('oura' | 'apple') pamięta, kto ostatnio
-// zapisał dane aktywności dla danej daty:
-//   - Ten webhook ZAWSZE nadpisuje dane aktywności i ustawia activity_source='apple'.
-//   - syncOura (services/sync.js) NIE nadpisuje wiersza, który już ma
-//     activity_source='apple' (patrz warunek CASE w tamtym zapytaniu UPDATE) - więc
-//     gdy Apple Health już dostarczyło dane dla danej daty, Oura ich nie nadpisze.
+// Kolumna health_metrics.activity_source ('apple' | 'google_fit' | 'oura') pamięta,
+// kto ostatnio zapisał dane aktywności dla danej daty. Hierarchia źródeł jest jedna
+// dla całej aplikacji i mieszka w utils/activitySources.js:
+//   apple (3) > google_fit (2) > oura (1)
+//   - Ten webhook stoi na szczycie hierarchii, więc ZAWSZE nadpisuje dane aktywności
+//     i ustawia activity_source='apple'. Nie potrzebuje żadnej klauzuli ochronnej.
+//   - syncOura i syncGoogleFit (services/sync.js) budują swoje klauzule ON CONFLICT
+//     przez preserveHigherPriority()/preserveSourceLabel() z tej samej hierarchii,
+//     więc nie nadpiszą kolumny, w której siedzą realne dane z wyżej notowanego
+//     źródła. Wcześniej bronił się przed nadpisaniem wyłącznie 'apple', a Google Fit
+//     i Oura nadpisywały się nawzajem - wynik dla tej samej doby zależał wtedy od
+//     kolejności synchronizacji.
 //
 // FORMAT PAYLOADU (Health Auto Export, "Automatyzacja typu REST API"):
 //   { "data": { "metrics": [ { "name": "step_count", "units": "steps",

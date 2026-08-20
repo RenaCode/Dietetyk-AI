@@ -1,3 +1,17 @@
+// Słownik tłumaczeń: polskie zdanie źródłowe -> angielskie.
+//
+// ZNANE OGRANICZENIE tego podejścia: kluczem jest sam polski tekst, więc każda
+// korekta polskiego copy (nawet literówki albo kropki) zrywa tłumaczenie po cichu -
+// t() zwraca wtedy polski string również w trybie angielskim, bez błędu i bez
+// ostrzeżenia. Tak właśnie powstał commit 6538e08: zmiana nazwy zakładki wyszła na
+// jaw dopiero przez przypadkowo powiązany test e2e.
+//
+// Docelowo klucze powinny być semantyczne ("nav.mealLogger"), ale to przepisanie
+// ~280 miejsc wywołania. Do tego czasu zamykamy samą klasę błędu dwoma tanimi
+// zabezpieczeniami:
+//   1. t() krzyczy w konsoli przy braku tłumaczenia (tylko w dev, raz na klucz),
+//   2. `npm run check-i18n` skanuje wszystkie wywołania t('...') w kodzie i wykrywa
+//      rozjazd ze słownikiem, zanim trafi on na produkcję (patrz scripts/check-i18n.js).
 const TRANSLATIONS = {
   // Navigation / Tabs
   "Dashboard": "Dashboard",
@@ -232,9 +246,50 @@ export function getLanguage() {
   return currentLang;
 }
 
-export function t(text) {
+// Ostrzegamy o brakującym tłumaczeniu tylko RAZ na klucz - inaczej komponent
+// renderowany w pętli zalałby konsolę i ostrzeżenie przestałoby być czytelne.
+const warnedMissing = new Set();
+
+/**
+ * Tłumaczy tekst i podstawia zmienne.
+ *
+ * @param {string} text polskie zdanie źródłowe (klucz)
+ * @param {Object} [vars] wartości do podstawienia pod {nazwa}
+ *
+ * Interpolacja istnieje po to, żeby nie sklejać zdań z kawałków
+ * (`t('Zostało') + n + t('dni')`) - taka konstrukcja jest nieprzetłumaczalna,
+ * bo szyk zdania różni się między językami.
+ */
+export function t(text, vars) {
+  let result = text;
+
   if (currentLang === "en") {
-    return TRANSLATIONS[text] || text;
+    const translated = TRANSLATIONS[text];
+    if (translated === undefined) {
+      // import.meta.env.DEV jest podmieniane przez Vite na stałą przy budowaniu,
+      // więc cały ten blok znika z bundla produkcyjnego.
+      if (import.meta.env.DEV && !warnedMissing.has(text)) {
+        warnedMissing.add(text);
+        console.warn(
+          `[i18n] Brak tłumaczenia EN dla: "${text}"\n` +
+          `       Prawdopodobnie zmieniono polskie copy bez aktualizacji utils/i18n.js. ` +
+          `Uruchom "npm run check-i18n", żeby zobaczyć pełną listę.`
+        );
+      }
+    } else {
+      result = translated;
+    }
   }
-  return text;
+
+  if (vars) {
+    result = result.replace(/\{(\w+)\}/g, (match, key) => (
+      Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key]) : match
+    ));
+  }
+
+  return result;
 }
+
+// Eksport słownika wyłącznie na potrzeby skryptu kontrolnego (scripts/check-i18n.js).
+// Nie używać w komponentach - do tłumaczenia służy t().
+export const __TRANSLATIONS_FOR_CHECK = TRANSLATIONS;

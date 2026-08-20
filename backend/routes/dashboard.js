@@ -12,6 +12,31 @@ const { getDayEventsInRange, formatDayEventsForPrompt } = require('../utils/dayE
 const { decrypt } = require('../utils/encryption');
 const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 
+// --- REJESTR INSIGHTÓW (obsługa zbiorczego /api/dashboard/insights) ---
+//
+// Dashboard renderuje kilkadziesiąt niezależnych kart, z których każda miała
+// własny useEffect i własny fetch - jedno wejście na ekran to było ~60 round-tripów
+// HTTP i tyle samo osobnych serii zapytań do SQLite. Zamiast dopisywać ręcznie
+// utrzymywaną listę tras (która natychmiast rozjechałaby się z rzeczywistością),
+// przechwytujemy rejestracje router.get() i zapisujemy handler pod jego
+// identyfikatorem. Dzięki temu każdy NOWY insight dodany w przyszłości trafia do
+// wsadu automatycznie, bez pamiętania o drugim miejscu do aktualizacji.
+const insightHandlers = new Map();
+const INSIGHT_PATH_PREFIX = '/api/dashboard/';
+const registerRoute = router.get.bind(router);
+
+router.get = function registerAndIndex(path, ...handlers) {
+  if (typeof path === 'string' && path.startsWith(INSIGHT_PATH_PREFIX)) {
+    const id = path.slice(INSIGHT_PATH_PREFIX.length);
+    // Pomijamy trasy parametryzowane i zagnieżdżone - wsad obsługuje wyłącznie
+    // proste, bezparametrowe endpointy odczytowe.
+    if (id && !id.includes('/') && !id.includes(':')) {
+      insightHandlers.set(id, handlers[handlers.length - 1]);
+    }
+  }
+  return registerRoute(path, ...handlers);
+};
+
 // Blokada równoległego generowania porady AI dla tej samej (user, data) - bez tego
 // kilka odświeżeń dashboardu w krótkim czasie (np. otwarcie kilku zakładek albo
 // szybkie odświeżanie po nieudanym ładowaniu) odpalałoby N równoległych zapytań
@@ -44,6 +69,136 @@ const resolveQueryDate = (req) => {
   const raw = req.query.date;
   return typeof raw === 'string' && DATE_STRING_RE.test(raw) ? raw : getLocalDateString();
 };
+
+// --- ZBIORCZE POBRANIE INSIGHTÓW ---
+//
+// GET /api/dashboard/insights?ids=sleep-insight,recovery-insight&date=YYYY-MM-DD
+//
+// Uruchamia handlery zarejestrowanych insightów w jednym żądaniu i zwraca mapę
+// wyników. Każdy insight jest izolowany: błąd, timeout albo nieznany identyfikator
+// jednego nie przewraca całej odpowiedzi - klient dostaje status per pozycja i
+// renderuje resztę kart normalnie.
+//
+// Rejestrujemy tę trasę przez registerRoute (a nie przez opakowany router.get),
+// żeby nie wpisała samej siebie do rejestru insightów.
+
+// Ile handlerów wykonujemy równolegle. SQLite obsługuje jedno połączenie zapisu,
+// a insighty to głównie odczyty na tych samych tabelach - pełna równoległość
+// kilkudziesięciu handlerów wysyca pulę i wydłuża najwolniejsze zapytania zamiast
+// je przyspieszać. 6 to kompromis wybrany tak, żeby nie zamienić jednego wąskiego
+// gardła (sieć) na drugie (baza).
+const INSIGHT_BATCH_CONCURRENCY = 6;
+
+// Górny limit pozycji we wsadzie - dashboard prosi dziś o ~48. Zapas jest po to,
+// żeby nowe insighty nie wymagały ruszania tej stałej, ale limit istnieje, bo bez
+// niego jedno żądanie mogłoby wymusić dowolnie długą pracę serwera.
+const INSIGHT_BATCH_MAX_IDS = 100;
+
+// Pojedynczy insight nie może zablokować całego wsadu. Większość to czyste
+// zapytania SQL (milisekundy), ale ai-explanation-insight potrafi wywołać Gemini -
+// wtedy klient dostaje status 'timeout' dla tej jednej karty i może dociągnąć ją
+// osobnym żądaniem, zamiast czekać na całość.
+const INSIGHT_BATCH_TIMEOUT_MS = 15000;
+
+// Wykonuje handler Express poza cyklem żądania, przechwytując to, co zapisałby do
+// odpowiedzi. Handlery insightów używają wyłącznie res.json() i res.status().json(),
+// więc atrapa obsługuje dokładnie ten kontrakt - gdyby ktoś dodał insight
+// używający res.send()/res.end(), dostanie czytelny błąd zamiast cichego zwisu.
+function runInsightHandler(handler, req, dateParam) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+
+    const timer = setTimeout(
+      () => finish({ status: 'timeout' }),
+      INSIGHT_BATCH_TIMEOUT_MS
+    );
+
+    // Prototypowe dziedziczenie po prawdziwym req - handlery czytają req.user,
+    // req.ip i nagłówki, a my podmieniamy wyłącznie query.date. Kopiowanie tylko
+    // wybranych pól groziłoby cichym rozjazdem, gdyby handler sięgnął po coś jeszcze.
+    const scopedReq = Object.create(req);
+    scopedReq.query = dateParam ? { date: dateParam } : {};
+
+    let statusCode = 200;
+    const scopedRes = {
+      status(code) { statusCode = code; return scopedRes; },
+      json(payload) {
+        finish(statusCode >= 400
+          ? { status: 'error', statusCode, data: payload }
+          : { status: 'ok', data: payload });
+      },
+      send() { finish({ status: 'error', statusCode: 500, data: { error: 'Insight użył res.send() - wsad obsługuje tylko res.json().' } }); },
+      end() { finish({ status: 'error', statusCode: 500, data: { error: 'Insight użył res.end() - wsad obsługuje tylko res.json().' } }); }
+    };
+
+    Promise.resolve()
+      .then(() => handler(scopedReq, scopedRes))
+      .catch((err) => {
+        console.error('[INSIGHTS BATCH] Handler rzucił wyjątkiem:', err);
+        finish({ status: 'error', statusCode: 500, data: { error: 'Błąd insightu.' } });
+      });
+  });
+}
+
+registerRoute('/api/dashboard/insights', async (req, res) => {
+  try {
+    const raw = typeof req.query.ids === 'string' ? req.query.ids : '';
+    const requestedIds = [...new Set(
+      raw.split(',').map(s => s.trim()).filter(Boolean)
+    )];
+
+    if (requestedIds.length === 0) {
+      return res.status(400).json({
+        error: 'Brak parametru ids.',
+        available: [...insightHandlers.keys()].sort()
+      });
+    }
+    if (requestedIds.length > INSIGHT_BATCH_MAX_IDS) {
+      return res.status(400).json({
+        error: `Zbyt wiele insightów w jednym żądaniu (limit ${INSIGHT_BATCH_MAX_IDS}).`
+      });
+    }
+
+    const dateParam = typeof req.query.date === 'string' && DATE_STRING_RE.test(req.query.date)
+      ? req.query.date
+      : null;
+
+    const results = {};
+    // Prosta pula robocza: N równoległych "pracowników" zdejmuje kolejne pozycje
+    // ze wspólnego kursora. Bez tego Promise.all na 48 pozycjach odpaliłby wszystkie
+    // handlery naraz.
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < requestedIds.length) {
+        const id = requestedIds[cursor++];
+        const handler = insightHandlers.get(id);
+        if (!handler) {
+          results[id] = { status: 'unknown' };
+          continue;
+        }
+        results[id] = await runInsightHandler(handler, req, dateParam);
+      }
+    };
+
+    await Promise.all(
+      Array.from(
+        { length: Math.min(INSIGHT_BATCH_CONCURRENCY, requestedIds.length) },
+        worker
+      )
+    );
+
+    res.json({ date: dateParam || getLocalDateString(), results });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Błąd zbiorczego pobierania insightów.' });
+  }
+});
 
 // Agregacja odżywiania (kalorie/makro) dla zakresu dat - używana do porównań
 // tydzień/miesiąc (punkt 10 z analizy dashboardu). Średnie liczone WYŁĄCZNIE
@@ -3301,6 +3456,268 @@ router.get('/api/dashboard/wellness-score', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Błąd pobierania Wellness Score.' });
+  }
+});
+
+// --- BATERIA ENERGII ---
+//
+// Jedna liczba 0-100 na górze dashboardu, odpowiadająca na pytanie "ile mam dziś
+// paliwa", zamiast kilkudziesięciu osobnych kart, w których ta odpowiedź się gubi.
+//
+// Czym różni się od Wellness Score: Wellness Score ocenia, jak DOBRY był dzień
+// (sen, gotowość, trzymanie się celu kalorycznego, nawodnienie) - to ocena
+// zachowania. Bateria odpowiada na inne pytanie: ile zasobu ZOSTAŁO na teraz.
+// Ładuje się nocą, rozładowuje w ciągu dnia proporcjonalnie do obciążenia i pory
+// dnia, i pamięta skumulowany dług snu. Dlatego dzień z idealną dietą, ale po
+// trzech krótkich nocach, ma wysoki Wellness Score i niską baterię - i to jest
+// zamierzone, bo to dwie różne informacje.
+//
+// UWAGA co do skali: wagi i przeliczniki poniżej są EMPIRYCZNE, dobrane tak, by
+// typowy dzień wypadał sensownie na skali 0-100. To nie jest miara kliniczna ani
+// odtworzenie algorytmu Garmina/Whoop - to model opisowy na własnych danych
+// użytkownika, budowany w tej samej konwencji co pozostałe insighty w tym pliku
+// (porównanie do WŁASNEGO baseline, a nie do norm populacyjnych).
+
+const BATTERY_SLEEP_DEBT_DAYS = 14;
+const BATTERY_STRAIN_BASELINE_DAYS = 30;
+const MIN_DAYS_FOR_BATTERY_STRAIN_BASELINE = 7;
+
+// Ile punktów baterii zabiera pełny, typowy dzień (przy obciążeniu równym własnemu
+// baseline). 45 pkt oznacza, że po zwykłym dniu z pełnego naładowania zostaje ok.
+// połowy - a dzień wyraźnie cięższy niż zwykle potrafi zejść znacznie niżej.
+const BATTERY_FULL_DAY_DRAIN = 45;
+
+// Podział zużycia na dwie niezależne części.
+//
+// Dlaczego nie jedna, skalowana zegarem: pierwsza wersja liczyła zużycie jako
+// "część doby, która minęła" razy "obciążenie względem baseline przeskalowanego
+// tą samą częścią doby". To zakładało, że aktywność rozkłada się równomiernie
+// przez całą dobę - a o 8:00 rano nikt nie ma za sobą jednej trzeciej dziennych
+// kalorii. Efekt: poranny trening zjadał połowę baterii, a spokojny wieczór
+// zaniżał obciążenie.
+//
+// Teraz zużycie to suma:
+//   - część AKTYWNOŚCIOWA, proporcjonalna do realnie wykonanej pracy względem
+//     typowego pełnego dnia (bez odnoszenia do zegara),
+//   - część CZASOWA, proporcjonalna do tego, jak długo użytkownik nie śpi
+//     (samo funkcjonowanie kosztuje energię, nawet w dniu bez treningu).
+// Dzięki temu dzień odpoczynku kończy się z wysoką baterią, a ciężki trening
+// obniża ją od razu, niezależnie od tego, o której się odbył.
+const BATTERY_ACTIVITY_DRAIN_SHARE = 0.7;
+const BATTERY_TIME_DRAIN_SHARE = 0.3;
+
+// Okno czuwania używane do części czasowej (godziny zegara warszawskiego).
+// Przybliżenie, nie ustawienie użytkownika - dla części zużycia wartej 13 punktów
+// dokładniejszy model (np. z pory pobudki z Oury) nie zmieniłby wyniku na tyle,
+// żeby uzasadnić dodatkową złożoność i kolejne źródło "brak danych".
+const BATTERY_WAKING_START_MINUTE = 7 * 60;
+const BATTERY_WAKING_END_MINUTE = 23 * 60;
+
+// Kara za skumulowany dług snu. 2 pkt za każdą brakującą godzinę z ostatnich 14 nocy,
+// ale nie więcej niż 15 pkt - dług snu ma obniżać sufit baterii, a nie sam z siebie
+// sprowadzać ją do zera.
+const BATTERY_DEBT_PENALTY_PER_HOUR = 2;
+const BATTERY_MAX_DEBT_PENALTY = 15;
+
+const BATTERY_MAX_STRESS_DRAIN = 15;
+const BATTERY_MAX_STRESS_RECOVERY = 10;
+
+// Wagi ładowania nocnego. sleep_score jest najbliżej "jak dobrze się zregenerowałem",
+// readiness_score to gotowość wg Oury, a czas snu względem własnego celu domyka obraz
+// (można mieć wysoki wynik jakości na zbyt krótkiej nocy).
+const BATTERY_CHARGE_WEIGHTS = {
+  sleepScore: 0.45,
+  readiness: 0.35,
+  sleepDuration: 0.20
+};
+
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+// Jaka część okna czuwania już minęła (0-1) w strefie Europe/Warsaw. Używane
+// WYŁĄCZNIE do czasowej części zużycia. Dla dat historycznych zwracamy 1, bo tamte
+// doby są już domknięte.
+function getWakingProgress(dateStr) {
+  if (dateStr !== getLocalDateString()) return 1;
+  const wall = getWarsawWallClock();
+  const minutes = wall.getUTCHours() * 60 + wall.getUTCMinutes();
+  const span = BATTERY_WAKING_END_MINUTE - BATTERY_WAKING_START_MINUTE;
+  return clamp((minutes - BATTERY_WAKING_START_MINUTE) / span, 0, 1);
+}
+
+router.get('/api/dashboard/energy-battery', async (req, res) => {
+  try {
+    const today = resolveQueryDate(req);
+
+    const settingsRows = await db.all(`SELECT key, value FROM settings WHERE user_id = ?`, [req.user.id]);
+    const settings = {};
+    settingsRows.forEach(r => { settings[r.key] = r.value; });
+    const targetSleep = settings.target_sleep_duration === undefined
+      || isNaN(Number(settings.target_sleep_duration))
+      ? 7.2
+      : Number(settings.target_sleep_duration);
+
+    const health = await db.get(
+      `SELECT sleep_score, sleep_duration, readiness_score, hrv, rhr,
+              active_calories, active_minutes, steps,
+              stress_high_minutes, stress_recovery_minutes
+       FROM health_metrics WHERE user_id = ? AND date = ?`,
+      [req.user.id, today]
+    );
+
+    // Bez danych o nocy nie ma z czego policzyć naładowania - lepiej powiedzieć
+    // wprost "brak danych" niż pokazać liczbę zbudowaną z niczego.
+    const hasSleepSignal = health && (
+      (health.sleep_score != null && health.sleep_score > 0) ||
+      (health.sleep_duration != null && health.sleep_duration > 0) ||
+      (health.readiness_score != null && health.readiness_score > 0)
+    );
+    if (!hasSleepSignal) {
+      return res.json({ hasEnoughData: false, reason: 'no_sleep_data', date: today });
+    }
+
+    // --- 1. Ładowanie nocne ---
+    const chargeParts = {};
+    if (health.sleep_score != null && health.sleep_score > 0) {
+      chargeParts.sleepScore = clamp(health.sleep_score, 0, 100);
+    }
+    if (health.readiness_score != null && health.readiness_score > 0) {
+      chargeParts.readiness = clamp(health.readiness_score, 0, 100);
+    }
+    if (health.sleep_duration != null && health.sleep_duration > 0 && targetSleep > 0) {
+      chargeParts.sleepDuration = clamp((health.sleep_duration / targetSleep) * 100, 0, 100);
+    }
+    const chargeKeys = Object.keys(chargeParts);
+    const chargeWeightSum = chargeKeys.reduce((s, k) => s + BATTERY_CHARGE_WEIGHTS[k], 0);
+    const nightCharge = chargeKeys.reduce(
+      (s, k) => s + chargeParts[k] * (BATTERY_CHARGE_WEIGHTS[k] / chargeWeightSum), 0
+    );
+
+    // --- 2. Dług snu z ostatnich 14 nocy ---
+    const debtRows = await db.all(
+      `SELECT date, sleep_duration FROM health_metrics
+       WHERE user_id = ? AND date > ? AND date <= ? AND sleep_duration IS NOT NULL AND sleep_duration > 0`,
+      [req.user.id, shiftDate(today, -BATTERY_SLEEP_DEBT_DAYS), today]
+    );
+    // Liczymy WYŁĄCZNIE niedobory. Dłuższy sen jednej nocy nie "spłaca" długu
+    // liniowo - to założenie upraszczające, ale ostrożniejsze niż sumowanie
+    // nadwyżek, które potrafiłoby wyzerować realny, wielodniowy deficyt.
+    const sleepDebtHours = debtRows.reduce(
+      (sum, row) => sum + Math.max(0, targetSleep - row.sleep_duration), 0
+    );
+    const debtPenalty = Math.min(
+      BATTERY_MAX_DEBT_PENALTY,
+      sleepDebtHours * BATTERY_DEBT_PENALTY_PER_HOUR
+    );
+
+    // --- 3. Zużycie dzienne względem WŁASNEGO baseline obciążenia ---
+    // Kolejność metryk to kolejność wiarygodności: kalorie aktywne najlepiej
+    // oddają obciążenie, minuty aktywności są zamiennikiem, kroki ostatecznością.
+    const strainRows = await db.all(
+      `SELECT active_calories, active_minutes, steps FROM health_metrics
+       WHERE user_id = ? AND date >= ? AND date < ?`,
+      [req.user.id, shiftDate(today, -BATTERY_STRAIN_BASELINE_DAYS), today]
+    );
+
+    const strainMetric = ['active_calories', 'active_minutes', 'steps'].find(key => {
+      const todayValue = health[key];
+      const history = strainRows.filter(r => r[key] != null && r[key] > 0);
+      return todayValue != null && todayValue > 0 && history.length >= MIN_DAYS_FOR_BATTERY_STRAIN_BASELINE;
+    });
+
+    let strainRatio = 1;
+    let strainBaseline = null;
+    if (strainMetric) {
+      const values = strainRows.map(r => r[strainMetric]).filter(v => v != null && v > 0);
+      strainBaseline = median(values);
+      if (strainBaseline > 0) {
+        // Porównanie do CAŁEGO typowego dnia, bez skalowania zegarem - ta liczba
+        // znaczy "ile typowego dnia pracy mam już za sobą", więc rano jest po prostu
+        // niska, zamiast sztucznie zawyżana przez krótkie okno odniesienia.
+        strainRatio = health[strainMetric] / strainBaseline;
+      }
+    }
+    // Górne ograniczenie: dzień skrajnie ciężki nie zeruje baterii natychmiast.
+    // Dolnego ograniczenia nie ma - zero aktywności ma znaczyć zero zużycia
+    // aktywnościowego, bo od "samego istnienia" jest osobna część czasowa.
+    const boundedStrainRatio = clamp(strainRatio, 0, 2);
+    const activityDrain = boundedStrainRatio * BATTERY_FULL_DAY_DRAIN * BATTERY_ACTIVITY_DRAIN_SHARE;
+    const timeDrain = getWakingProgress(today) * BATTERY_FULL_DAY_DRAIN * BATTERY_TIME_DRAIN_SHARE;
+    const dayDrain = activityDrain + timeDrain;
+
+    // --- 4. Stres: obciążenie i regeneracja w ciągu dnia (dane z Oury) ---
+    const stressDrain = health.stress_high_minutes != null && health.stress_high_minutes > 0
+      ? Math.min(BATTERY_MAX_STRESS_DRAIN, health.stress_high_minutes / 10)
+      : 0;
+    const stressRecovery = health.stress_recovery_minutes != null && health.stress_recovery_minutes > 0
+      ? Math.min(BATTERY_MAX_STRESS_RECOVERY, health.stress_recovery_minutes / 20)
+      : 0;
+
+    const battery = Math.round(
+      clamp(nightCharge - debtPenalty - dayDrain - stressDrain + stressRecovery, 0, 100)
+    );
+
+    // Progi etykiet. Zalecenie niżej korzysta z TYCH SAMYCH progów - inaczej karta
+    // potrafiła pokazać etykietę "Niska" obok zdania "Bateria w normie" (przy
+    // wartościach tuż pod granicą), co brzmi jak dwie sprzeczne diagnozy.
+    const BATTERY_LABEL_BANDS = [
+      { min: 75, label: 'Naładowana' },
+      { min: 50, label: 'Dobra' },
+      { min: 30, label: 'Niska' },
+      { min: 0, label: 'Na rezerwie' }
+    ];
+    const label = BATTERY_LABEL_BANDS.find(b => battery >= b.min).label;
+
+    // Jedno konkretne zalecenie zamiast samego opisu stanu. Kolejność warunków to
+    // kolejność ważności: najpierw to, co najmocniej ciągnie baterię w dół.
+    let recommendation;
+    if (debtPenalty >= BATTERY_MAX_DEBT_PENALTY * 0.6) {
+      recommendation = `Dług snu z ostatnich ${BATTERY_SLEEP_DEBT_DAYS} dni to ok. ${sleepDebtHours.toFixed(1)} h. Dziś połóż się o godzinę wcześniej niż zwykle.`;
+    } else if (boundedStrainRatio >= 1.6) {
+      recommendation = 'Obciążenie wyraźnie powyżej Twojej normy. Zaplanuj lżejszy wieczór i nie dokładaj treningu.';
+    } else if (battery < 30) {
+      recommendation = 'Bateria na rezerwie. Dziś priorytetem jest sen i jedzenie w okolicach celu, nie trening.';
+    } else if (battery < 50) {
+      recommendation = 'Bateria niska. Zejdź z intensywności i pilnuj wcześniejszego wieczoru.';
+    } else if (battery >= 75 && boundedStrainRatio <= 1) {
+      recommendation = 'Zapas energii jest wysoki, a obciążenie poniżej normy - dobry dzień na mocniejszy trening.';
+    } else {
+      recommendation = 'Bateria w normie. Trzymaj zwykły plan dnia.';
+    }
+
+    res.json({
+      hasEnoughData: true,
+      date: today,
+      battery,
+      label,
+      recommendation,
+      components: {
+        nightCharge: Math.round(nightCharge),
+        debtPenalty: Math.round(debtPenalty * 10) / 10,
+        dayDrain: Math.round(dayDrain * 10) / 10,
+        activityDrain: Math.round(activityDrain * 10) / 10,
+        timeDrain: Math.round(timeDrain * 10) / 10,
+        stressDrain: Math.round(stressDrain * 10) / 10,
+        stressRecovery: Math.round(stressRecovery * 10) / 10
+      },
+      sleepDebt: {
+        hours: Math.round(sleepDebtHours * 10) / 10,
+        nights: debtRows.length,
+        windowDays: BATTERY_SLEEP_DEBT_DAYS,
+        targetSleepHours: targetSleep
+      },
+      strain: {
+        metric: strainMetric || null,
+        today: strainMetric ? health[strainMetric] : null,
+        baselineMedian: strainBaseline != null ? Math.round(strainBaseline) : null,
+        ratioToBaseline: strainMetric ? Math.round(boundedStrainRatio * 100) / 100 : null
+      },
+      // Klient rysuje wskaźnik "na teraz", więc musi wiedzieć, że dla dnia
+      // historycznego wartość jest końcem doby, a nie stanem bieżącym.
+      isLive: today === getLocalDateString()
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Błąd pobierania baterii energii.' });
   }
 });
 

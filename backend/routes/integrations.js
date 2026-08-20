@@ -129,10 +129,10 @@ router.get('/api/auth/oura/callback', async (req, res) => {
     }
 
     const data = await response.json();
-    // UWAGA: nie logujemy tu access_token/refresh_token, nawet częściowo zamaskowanych -
-    // pierwsze znaki sekretu w logach kontenera to wciąż niepotrzebna ekspozycja danych
-    // uwierzytelniających. Dla konsystencji z callbackami Withings/Google Fit (które tego
-    // nie robiły) logujemy tylko fakt powodzenia, bez żadnego fragmentu tokenu.
+      // NOTE: we do not log access_token/refresh_token here, not even partially masked - the
+      // first characters of a secret in container logs are still an unnecessary exposure of
+      // credentials. For consistency with the Withings and Google Fit callbacks (which never
+      // did this) we log only that it succeeded, with no fragment of the token.
     console.log(`[OAUTH OURA CALLBACK SUCCESS] Token wymieniony pomyślnie dla użytkownika ${userId}.`);
     const expiresAt = new Date(Date.now() + data.expires_in * 1000).toISOString();
 
@@ -153,7 +153,7 @@ router.get('/api/auth/oura/callback', async (req, res) => {
   }
 });
 
-// Trasa OAuth: Odłączenie Oura
+// OAuth route: disconnect Oura
 router.post('/api/auth/oura/disconnect', requireAuth, async (req, res) => {
   try {
     await db.run(`DELETE FROM oauth_tokens WHERE user_id = ? AND service = 'oura'`, [req.user.id]);
@@ -261,7 +261,7 @@ router.get('/api/auth/withings/callback', async (req, res) => {
   }
 });
 
-// Trasa OAuth: Odłączenie Withings
+// OAuth route: disconnect Withings
 router.post('/api/auth/withings/disconnect', requireAuth, async (req, res) => {
   try {
     await db.run(`DELETE FROM oauth_tokens WHERE user_id = ? AND service = 'withings'`, [req.user.id]);
@@ -272,10 +272,9 @@ router.post('/api/auth/withings/disconnect', requireAuth, async (req, res) => {
   }
 });
 
-// ===== Google Fit (źródło danych: kroki, kalorie aktywne) =====
-// W przeciwieństwie do Oura/Withings, Google Fit korzysta z GLOBALNEJ konfiguracji
-// Google (Panel Admina - google_client_id/google_client_secret), tej samej co logowanie
-// Google, więc nie wymaga od użytkownika własnych poświadczeń dewelopera.
+// ===== Google Fit (data source: steps, active calories) =====
+// Unlike Oura and Withings, Google Fit uses the GLOBAL Google configuration, so it does not
+// require the user to supply their own developer credentials.
 router.get('/api/auth/google-fit', async (req, res) => {
   const { token } = req.query;
   if (!token) return res.status(401).send('Brak tokenu autoryzacji.');
@@ -296,9 +295,9 @@ router.get('/api/auth/google-fit', async (req, res) => {
     const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
     const redirectUri = `${base}/api/auth/google-fit/callback`;
 
-    // access_type=offline + prompt=consent są wymagane, by Google zwrócił refresh_token
-    // (bez prompt=consent, kolejne logowania tym samym kontem nie dostają nowego
-    // refresh_token, jeśli użytkownik już raz udzielił zgody).
+  // access_type=offline and prompt=consent are required for Google to return a refresh_token
+  // (without prompt=consent, subsequent sign-ins with the same account receive no new
+  // refresh_token once the user has already granted consent).
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('https://www.googleapis.com/auth/fitness.activity.read')}&state=${state}&access_type=offline&prompt=consent`;
     res.redirect(authUrl);
   } catch (err) {
@@ -349,10 +348,10 @@ router.get('/api/auth/google-fit/callback', async (req, res) => {
 
     const data = await response.json();
     if (!data.refresh_token) {
-      // Może się zdarzyć, jeśli użytkownik już wcześniej połączył to konto Google z
-      // jakąkolwiek aplikacją OAuth i Google nie wydaje refresh_token ponownie bez
-      // wymuszenia ekranu zgody - prompt=consent powyżej powinien temu zapobiegać,
-      // ale zostawiamy jasny komunikat na wypadek wyjątków.
+        // This can happen if the user previously connected this Google account to any OAuth
+        // application and Google does not reissue a refresh_token without forcing the consent
+        // screen - prompt=consent above should prevent it, but we leave a clear message in
+        // case of exceptions.
       console.warn(`[OAUTH GOOGLE FIT] Brak refresh_token w odpowiedzi dla użytkownika ${userId} - synchronizacja przestanie działać po wygaśnięciu access_token.`);
     }
     const expiresAt = new Date(Date.now() + data.expires_in * 1000).toISOString();
@@ -384,7 +383,7 @@ router.post('/api/auth/google-fit/disconnect', requireAuth, async (req, res) => 
   }
 });
 
-// Ręczna synchronizacja danych Oura, Withings i Google Fit dla zalogowanego użytkownika
+// Manual sync of Oura, Withings and Google Fit data for the logged-in user
 router.post('/api/sync/manual', requireAuth, async (req, res) => {
   const userId = req.user.id;
   let ouraSuccess = false;

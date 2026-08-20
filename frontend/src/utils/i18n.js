@@ -1,17 +1,16 @@
-// Słownik tłumaczeń: polskie zdanie źródłowe -> angielskie.
+// Translation dictionary: Polish source sentence -> English.
 //
-// ZNANE OGRANICZENIE tego podejścia: kluczem jest sam polski tekst, więc każda
-// korekta polskiego copy (nawet literówki albo kropki) zrywa tłumaczenie po cichu -
-// t() zwraca wtedy polski string również w trybie angielskim, bez błędu i bez
-// ostrzeżenia. Tak właśnie powstał commit 6538e08: zmiana nazwy zakładki wyszła na
-// jaw dopiero przez przypadkowo powiązany test e2e.
+// A KNOWN LIMITATION of this approach: the key is the Polish text itself, so any edit to the
+// Polish copy - even a typo or a full stop - breaks the translation silently. t() then
+// returns the Polish string in English mode too, with no error and no warning. That is
+// exactly how commit 6538e08 came about: a tab rename only surfaced through an incidentally
+// related e2e test.
 //
-// Docelowo klucze powinny być semantyczne ("nav.mealLogger"), ale to przepisanie
-// ~280 miejsc wywołania. Do tego czasu zamykamy samą klasę błędu dwoma tanimi
-// zabezpieczeniami:
-//   1. t() krzyczy w konsoli przy braku tłumaczenia (tylko w dev, raz na klucz),
-//   2. `npm run check-i18n` skanuje wszystkie wywołania t('...') w kodzie i wykrywa
-//      rozjazd ze słownikiem, zanim trafi on na produkcję (patrz scripts/check-i18n.js).
+// Keys should eventually be semantic ("nav.mealLogger"), but that means rewriting ~280 call
+// sites. Until then we close the failure mode itself with two cheap safeguards:
+//   1. t() warns in the console when a translation is missing (dev only, once per key),
+//   2. `npm run check-i18n` scans every t('...') call in the code and detects drift from the
+//      dictionary before it reaches production (see scripts/check-i18n.js).
 const TRANSLATIONS = {
   // Navigation / Tabs
   "Dashboard": "Dashboard",
@@ -639,19 +638,19 @@ export function getLanguage() {
   return currentLang;
 }
 
-// Ostrzegamy o brakującym tłumaczeniu tylko RAZ na klucz - inaczej komponent
-// renderowany w pętli zalałby konsolę i ostrzeżenie przestałoby być czytelne.
+// We warn about a missing translation only ONCE per key - otherwise a component rendered in
+// a loop would flood the console and the warning would stop being readable.
 const warnedMissing = new Set();
 
 /**
- * Tłumaczy tekst i podstawia zmienne.
+ * Translates a text and substitutes variables.
  *
- * @param {string} text polskie zdanie źródłowe (klucz)
- * @param {Object} [vars] wartości do podstawienia pod {nazwa}
+ * @param {string} text the Polish source sentence (the key)
+ * @param {Object} [vars] values to substitute into {name} placeholders
  *
- * Interpolacja istnieje po to, żeby nie sklejać zdań z kawałków
- * (`t('Zostało') + n + t('dni')`) - taka konstrukcja jest nieprzetłumaczalna,
- * bo szyk zdania różni się między językami.
+ * Interpolation exists so sentences are not assembled from fragments
+ * (`t('Remaining') + n + t('days')`) - such a construction is untranslatable, because word
+ * order differs between languages.
  */
 export function t(text, vars) {
   let result = text;
@@ -659,8 +658,8 @@ export function t(text, vars) {
   if (currentLang === "en") {
     const translated = TRANSLATIONS[text];
     if (translated === undefined) {
-      // import.meta.env.DEV jest podmieniane przez Vite na stałą przy budowaniu,
-      // więc cały ten blok znika z bundla produkcyjnego.
+      // import.meta.env.DEV is replaced by Vite with a constant at build time, so this whole
+      // block disappears from the production bundle.
       if (import.meta.env.DEV && !warnedMissing.has(text)) {
         warnedMissing.add(text);
         console.warn(
@@ -683,6 +682,6 @@ export function t(text, vars) {
   return result;
 }
 
-// Eksport słownika wyłącznie na potrzeby skryptu kontrolnego (scripts/check-i18n.js).
-// Nie używać w komponentach - do tłumaczenia służy t().
+// The dictionary is exported solely for the checking script (scripts/check-i18n.js).
+// Do not use it in components - t() is what translates.
 export const __TRANSLATIONS_FOR_CHECK = TRANSLATIONS;

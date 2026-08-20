@@ -1,21 +1,21 @@
 #!/bin/bash
 # scripts/deploy_sync.sh
 #
-# Bezpieczna synchronizacja produkcji: przejście ze starego folderu (uruchomiony,
-# zawiera prawdziwe .env i data/) na nowy folder (świeżo sklonowany z gita,
-# najnowszy kod), bez utraty bazy danych / certyfikatów / konfiguracji.
+# Safe production migration: moving from the old folder (running, holding the real .env and
+# data/) to a new folder (freshly cloned from git, with the latest code), without losing the
+# database, certificates or configuration.
 #
-# Uruchamiać NA SERWERZE (np. po `ssh root@185.201.112.104`):
+# Run ON THE SERVER (after `ssh root@<vps>`, for example):
 #   chmod +x scripts/deploy_sync.sh
 #   ./scripts/deploy_sync.sh
 #
-# Skrypt zatrzymuje się (set -e) na pierwszym błędzie, więc nic nie "rozjedzie się"
-# w połowie. Cutover (krok 4) wymaga potwierdzenia [y/N] - do tego momentu stary
-# kontener nadal działa, więc strona pozostaje online.
+# The script stops (set -e) at the first error, so nothing ends up half-migrated. The cutover
+# (step 4) requires a [y/N] confirmation - until that point the old container keeps running,
+# so the site stays online.
 
 set -e
 
-# --- DOSTOSUJ TUTAJ, jeśli nazwy folderów się różnią ---
+# --- ADJUST HERE if the folder names differ ---
 OLD_DIR="/root/dietetyk-ai"
 NEW_DIR="/root/Dietetyk-AI"
 # --------------------------------------------------------

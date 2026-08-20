@@ -2,19 +2,19 @@ const db = require('../db');
 const { sendMailgunEmail } = require('./mailgun');
 
 // Prosta walidacja formatu adresu e-mail (Runda 17, naprawa z audytu) - przed
-// wysyłką odfiltrowujemy adresy, które nawet nie wyglądają jak e-mail (np. literówka
-// zapisana wcześniej w profilu admina), żeby nie próbować wysyłki na ewidentnie
-// zepsuty adres i nie zaśmiecać logów błędami Mailgun dla oczywistych przypadków.
+// sending, we filter out addresses that do not even look like an email (a typo saved earlier
+// in an admin profile, say), so we do not attempt delivery to an obviously broken address and
+// do not clutter the logs with Mailgun errors for obvious cases.
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * Generuje i wysyła tygodniowy raport bezpieczeństwa i błędów dla administratorów.
+ * Generates and sends the weekly security and error report to administrators.
  */
 async function sendWeeklyAdminReport() {
-  console.log('[ADMIN REPORT] Uruchamianie procedury generowania raportu logów...');
+  console.log('[ADMIN REPORT] Starting the log report generation...');
 
   try {
-    // 1. Pobierz wszystkich aktywnych adminów z e-mailem
+    // 1. Fetch every active admin who has an email address
     const admins = await db.all(`SELECT id, username, email FROM users WHERE role = 'admin' AND status = 'active'`);
     const adminEmails = admins
       .map(a => a.email)
@@ -28,11 +28,11 @@ async function sendWeeklyAdminReport() {
       });
 
     if (adminEmails.length === 0) {
-      console.warn('[ADMIN REPORT] Brak aktywnych administratorów z poprawnym adresem e-mail. Pomijam wysyłkę.');
+      console.warn('[ADMIN REPORT] No active administrators with a valid email address. Skipping delivery.');
       return;
     }
 
-    // 2. Pobierz statystyki ogólne (liczba logów po level z ostatnich 7 dni)
+    // 2. Fetch overall statistics (log counts by level over the last 7 days)
     const counts = await db.all(`
       SELECT level, COUNT(*) as count 
       FROM app_logs 
@@ -47,7 +47,7 @@ async function sendWeeklyAdminReport() {
       }
     });
 
-    // 3. Pobierz TOP 10 najczęstszych błędów (ERROR) z ostatnich 7 dni
+    // 3. Fetch the top 10 most frequent errors (ERROR) from the last 7 days
     const topErrors = await db.all(`
       SELECT message, category, COUNT(*) as count 
       FROM app_logs 
@@ -57,7 +57,7 @@ async function sendWeeklyAdminReport() {
       LIMIT 10
     `);
 
-    // 4. Pobierz TOP 10 najczęstszych incydentów bezpieczeństwa (SECURITY) z ostatnich 7 dni
+    // 4. Fetch the top 10 most frequent security incidents (SECURITY) from the last 7 days
     const topSecurity = await db.all(`
       SELECT message, category, COUNT(*) as count 
       FROM app_logs 
@@ -67,7 +67,7 @@ async function sendWeeklyAdminReport() {
       LIMIT 10
     `);
 
-    // 5. Pobierz 20 ostatnich logów typu WARN, ERROR lub SECURITY
+    // 5. Fetch the 20 most recent WARN, ERROR or SECURITY log entries
     const recentLogs = await db.all(`
       SELECT timestamp, level, category, message, ip, details 
       FROM app_logs 
@@ -79,7 +79,7 @@ async function sendWeeklyAdminReport() {
     // 6. Wygeneruj szablon HTML
     const html = generateReportHtml(stats, topErrors, topSecurity, recentLogs);
 
-    // 7. Wyślij e-mail do każdego admina
+    // 7. Send the email to each admin
     for (const email of adminEmails) {
       try {
         await sendMailgunEmail({
@@ -93,7 +93,7 @@ async function sendWeeklyAdminReport() {
       }
     }
   } catch (err) {
-    console.error('[ADMIN REPORT ERROR] Błąd generowania raportu logów:', err.message);
+    console.error('[ADMIN REPORT ERROR] Failed to generate the log report:', err.message);
     throw err;
   }
 }
@@ -104,7 +104,7 @@ async function sendWeeklyAdminReport() {
 function generateReportHtml(stats, topErrors, topSecurity, recentLogs) {
   const totalLogs = stats.INFO + stats.WARN + stats.ERROR + stats.SECURITY;
   
-  // Formatowanie wierszy dla tabel
+// Row formatting for the tables
   const topErrorsRows = topErrors.length > 0 
     ? topErrors.map(e => `
         <tr>

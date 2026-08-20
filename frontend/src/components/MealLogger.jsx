@@ -5,24 +5,24 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
   const [mealText, setMealText] = useState('');
   const [imageSrc, setImageSrc] = useState(null);
   const [isCompressing, setIsCompressing] = useState(false);
-  // Komunikat potwierdzający zapisanie posiłku - wcześniej formularz po zapisie
-  // tylko czyścił pola, bez żadnego wyraźnego potwierdzenia sukcesu (jedynym
-  // sygnałem była nowa pozycja na liście posiłków poniżej, łatwa do przeoczenia).
+  // Confirmation message after saving a meal - the form used to just clear its fields with no
+  // clear success signal at all (the only cue was a new row in the meal list below, easy to
+  // miss).
   const [successMessage, setSuccessMessage] = useState('');
   const fileInputRef = useRef(null);
   const successTimeoutRef = useRef(null);
 
-  // Runda 12 (audyt): setTimeout w handleSubmit/handleRepeatClick nie był czyszczony
-  // przy odmontowaniu komponentu (np. przełączenie zakładki tuż po zapisaniu posiłku) -
-  // po 4s próbował wywołać setSuccessMessage na już odmontowanym komponencie.
+  // Round 12 (audit): the setTimeout in handleSubmit/handleRepeatClick was not cleared when
+  // the component unmounted (switching tabs right after saving a meal, say), so after 4s it
+  // tried to call setSuccessMessage on an already-unmounted component.
   useEffect(() => {
     return () => {
       if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
     };
   }, []);
-  // ID posiłku aktualnie powtarzanego przez chip "częste posiłki" (Runda 9) - blokuje
-  // tylko ten jeden chip podczas zapisu, nie cały formularz (w przeciwieństwie do
-  // isAnalyzing, które dotyczy analizy AI nowego posiłku).
+  // Id of the meal currently being repeated from a 'frequent meals' chip (round 9) - it
+  // disables only that one chip while saving, not the whole form (unlike isAnalyzing, which
+  // covers the AI analysis of a new meal).
   const [repeatingMealId, setRepeatingMealId] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -75,7 +75,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
 
-        // Kompresja do JPEG (jakość 0.7) - znacząco redukuje wagę bazy SQLite
+        // Compress to JPEG (quality 0.7) - significantly reduces the size of the SQLite database
         const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
         setImageSrc(compressedBase64);
         setIsCompressing(false);
@@ -109,8 +109,8 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
   };
 
   const getScoreClass = (score) => {
-    // score == null (brak oceny AI) nie powinien wyglądać jak "low" (źle oceniony
-    // posiłek) - to dwie różne sytuacje, więc dostają osobną klasę CSS.
+    // score == null (no AI rating) should not look like 'low' (a badly rated meal) - these are
+    // two different situations, so they get their own CSS class.
     if (score == null) return 'unrated';
     if (score >= 8) return 'high';
     if (score >= 5) return 'med';
@@ -139,7 +139,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
           Wpisz posiłek w języku naturalnym lub <strong>{t("dodaj zdjęcie swojego talerza")}</strong>. Sztuczna inteligencja automatycznie wyliczy kalorie i makro.
         </p>
 
-        {/* Częste posiłki (Runda 9): chipy z najczęściej powtarzanymi posiłkami
+        {/* Frequent meals (round 9): chips with the user's most repeated meals
             użytkownika - jedno kliknięcie zapisuje "to samo co ostatnio" bez
             ponownego wywołania AI (patrz POST /api/meals/repeat). */}
         {frequentMeals && frequentMeals.length > 0 && (
@@ -175,10 +175,10 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <div className="textarea-wrapper">
-            {/* aria-labelledby wiąże textarea z nagłówkiem sekcji (id="meal-logger-heading")
+            {/* aria-labelledby ties the textarea to the section heading (id="meal-logger-heading")
                 zamiast dublować widoczny tekst w dodatkowym, wizualnie zbędnym <label> -
                 wcześniej pole nie miało żadnej programowej etykiety dla czytników ekranu. */}
-            {/* Podpowiedź zmienia się po dodaniu zdjęcia. Wcześniej brzmiała
+            {/* The hint changes once a photo is added. It used to read
                 "...lub zostaw puste, jeśli wgrywasz tylko zdjęcie", co sugerowało, że
                 przy zdjęciu opis jest zbędny - a to właśnie wtedy jest najbardziej
                 przydatny: AI szacuje gramaturę i sposób obróbki ze zdjęcia, a opis
@@ -206,7 +206,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
             </p>
           )}
 
-          {/* Upload Zdjęcia */}
+          {/* Photo upload */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <button
@@ -335,7 +335,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                     <span className="nutrition-chip protein">B: {meal.protein != null ? Math.round(meal.protein) : '-'}g</span>
                     <span className="nutrition-chip carbs">W: {meal.carbs != null ? Math.round(meal.carbs) : '-'}g</span>
                     <span className="nutrition-chip fat">T: {meal.fat != null ? Math.round(meal.fat) : '-'}g</span>
-                    {/* health_rating == null (np. starszy wpis bez oceny AI) pokazuje
+                    {/* health_rating == null (an older entry with no AI rating) shows
                         "Brak oceny" - poprzednio || 5 fałszywie udawało ocenę 5/10
                         zarówno dla null, jak i dla realnej, najniższej oceny 0. */}
                     <span className={`meal-score ${getScoreClass(meal.health_rating)}`}>
@@ -369,7 +369,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                     </p>
                   )}
 
-                  {/* Detektor anomalii: niezgodność makro/kalorii lub statystyczny odstrój
+                  {/* Anomaly detector: macro/calorie inconsistency or a statistical outlier
                       względem własnej historii posiłków użytkownika (patrz detectMealAnomalies
                       w backend/routes/meals.js). To opisowe sygnały, nie diagnoza - dlatego
                       neutralny ton i brak czerwieni "błędu", a kolor ostrzegawczy. */}
@@ -407,7 +407,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                   )}
                 </div>
 
-                {/* Miniatura Zdjęcia z Posiłku */}
+                {/* Meal photo thumbnail */}
                 {meal.image_base64 && (
                   <div style={{
                     width: '120px',

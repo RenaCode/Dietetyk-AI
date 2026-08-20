@@ -3,18 +3,17 @@ const db = require('../db');
 const path = require('path');
 const { getUserSettings, aggregateNutritionAndHealth } = require('./summaries');
 
-// Eksport PDF dla lekarza/dietetyka - dokument do samodzielnego pobrania i pokazania
-// profesjonaliście. Świadomie BEZ tekstu generowanego przez Gemini (w przeciwieństwie
-// do maili podsumowujących w tym samym module) - to dokument o charakterze quasi-
-// medycznym, więc zawiera wyłącznie surowe, policzone dane z aplikacji (te same
-// źródła co raporty e-mail), bez ryzyka, że model językowy "doda" coś, czego
-// użytkownik nie zalogował. Wykorzystuje wyłącznie dane już zbierane przez aplikację -
-// żadnych nowych pól/formularzy, żadnego kopiowania funkcji z konkurencji.
+// PDF export for a doctor or dietician - a document the user downloads themselves and shows
+// to a professional. Deliberately WITHOUT any Gemini-generated text (unlike the summary
+// emails in the same module): this is a quasi-medical document, so it contains only raw,
+// computed data from the application (the same sources as the email reports), with no risk
+// of the language model 'adding' something the user never logged. It uses only data the app
+// already collects - no new fields or forms.
 const PDF_REPORT_MAX_DAYS = 180;
 const PDF_REPORT_DEFAULT_DAYS = 30;
 
-// Etykiety obwodów ciała - identyczne jak w ActivityTracker.jsx (getMeasureLabel),
-// żeby raport PDF nazywał te same pomiary tak samo jak frontend.
+// Body circumference labels - identical to ActivityTracker.jsx (getMeasureLabel), so the
+// PDF report names the same measurements the same way the frontend does.
 const MEASUREMENT_FIELDS = [
   ['chest', 'Klatka piersiowa'],
   ['shoulders', 'Barki'],
@@ -43,8 +42,8 @@ async function buildHealthReportPdf(userId, requestedDays) {
   const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const today = new Date().toISOString().slice(0, 10);
 
-  // Te same tabele/kolumny co w raportach e-mail (summaries.js) - bez image_base64/
-  // analysis_json, które ten raport nigdy nie wyświetla.
+    // The same tables and columns as the email reports (summaries.js) - without image_base64
+    // or analysis_json, which this report never displays.
   const [meals, healthMetrics, bodyMeasurements] = await Promise.all([
     db.all(
       `SELECT calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ?`,
@@ -59,8 +58,8 @@ async function buildHealthReportPdf(userId, requestedDays) {
   const lastMeasurement = bodyMeasurements.length > 0 ? bodyMeasurements[bodyMeasurements.length - 1] : null;
 
   return new Promise((resolve, reject) => {
-    // Zadeklarowane przed try, żeby catch mógł posprzątać (doc.destroy()),
-    // jeśli błąd wystąpi już PO utworzeniu dokumentu (np. w trakcie .text()).
+  // Declared before the try so the catch can clean up (doc.destroy()) if an error occurs
+  // AFTER the document was created - inside .text(), for instance.
     let doc;
     try {
       doc = new PDFDocument({ margin: 50, size: 'A4' });
@@ -83,7 +82,7 @@ async function buildHealthReportPdf(userId, requestedDays) {
         doc.text(`${label}: ${value}`);
       };
 
-      // --- Nagłówek ---
+    // --- Header ---
       doc.fontSize(20).fillColor('#1e293b').font('Roboto-Bold').text('Dietetyk AI - Raport zdrowotno-żywieniowy');
       doc.moveDown(0.4);
       doc.fontSize(10).fillColor('#64748b').font('Roboto');
@@ -101,7 +100,7 @@ async function buildHealthReportPdf(userId, requestedDays) {
         row('Docelowa waga', `${settings.targetWeightKg} kg`);
       }
 
-      // --- Średnie z okresu ---
+    // --- Period averages ---
       sectionTitle(`Średnie dzienne z okresu (${days} dni, wyłącznie dni z zalogowanymi danymi)`);
       row('Energia', `${stats.avgEatenCalories} kcal`);
       row('Białko / Węglowodany / Tłuszcz', `${stats.avgProtein} g / ${stats.avgCarbs} g / ${stats.avgFat} g`);
@@ -111,7 +110,7 @@ async function buildHealthReportPdf(userId, requestedDays) {
       row('Nawodnienie', `${stats.avgWaterMl} ml`);
       row('Liczba dni z treningiem', `${stats.workoutsCount}`);
 
-      // --- Sen, regeneracja, skład ciała ---
+    // --- Sleep, recovery, body composition ---
       sectionTitle('Sen, regeneracja i skład ciała (Oura / Withings)');
       row('Średni wynik snu', stats.avgSleepScore !== null ? `${stats.avgSleepScore}/100` : 'brak danych');
       row('Średni wynik gotowości', stats.avgReadinessScore !== null ? `${stats.avgReadinessScore}/100` : 'brak danych');
@@ -132,7 +131,7 @@ async function buildHealthReportPdf(userId, requestedDays) {
         stats.avgBpSystolic !== null ? `${stats.avgBpSystolic}/${stats.avgBpDiastolic} mmHg` : 'brak danych'
       );
 
-      // --- Pomiary obwodów ciała ---
+    // --- Body circumference measurements ---
       if (firstMeasurement && lastMeasurement) {
         sectionTitle('Pomiary obwodów ciała (pierwszy vs ostatni pomiar w okresie)');
         row('Data pierwszego / ostatniego pomiaru', `${firstMeasurement.date} / ${lastMeasurement.date}`);
@@ -149,8 +148,8 @@ async function buildHealthReportPdf(userId, requestedDays) {
       // --- Suplementy ---
       if (stats.supplementsLogged.length > 0) {
         sectionTitle('Suplementy zapisane w okresie');
-        // Limit 30 wpisów - przy maksymalnym oknie 180 dni lista mogłaby być
-        // bardzo długa, a to wciąż ma być zwięzły dokument do pokazania lekarzowi.
+      // Capped at 30 entries - with the maximum 180-day window the list could get very long,
+      // and this is still meant to be a concise document to show a doctor.
         stats.supplementsLogged.slice(0, 30).forEach((s) => doc.text(`- ${s}`));
         if (stats.supplementsLogged.length > 30) {
           doc.text(`... oraz ${stats.supplementsLogged.length - 30} kolejnych wpisów.`);
@@ -163,7 +162,7 @@ async function buildHealthReportPdf(userId, requestedDays) {
         doc.text(user.body_goal_text, { width: 495 });
       }
 
-      // --- Zastrzeżenie ---
+    // --- Disclaimer ---
       doc.moveDown(1.5);
       doc.fontSize(8).fillColor('#94a3b8').text(
         'Dokument wygenerowany automatycznie przez aplikację Dietetyk AI na podstawie danych samodzielnie wprowadzanych i synchronizowanych przez użytkownika (m.in. Oura, Withings, Apple Health). Nie stanowi diagnozy medycznej ani porady lekarskiej - ma charakter wyłącznie informacyjny, jako materiał pomocniczy do rozmowy z lekarzem lub dietetykiem.',
@@ -172,9 +171,9 @@ async function buildHealthReportPdf(userId, requestedDays) {
 
       doc.end();
     } catch (err) {
-      // Strumień pisze do bufora w pamięci (nie do pliku), więc nic tu realnie
-      // nie "wycieka" bez destroy() - to tylko porządkowe domknięcie strumienia,
-      // żeby nie został w niezdefiniowanym stanie po błędzie w trakcie budowania PDF.
+    // The stream writes to an in-memory buffer rather than a file, so nothing really 'leaks'
+    // without destroy() - this is just a tidy close of the stream, so it is not left in an
+    // undefined state after an error while building the PDF.
       if (doc) doc.destroy();
       reject(err);
     }

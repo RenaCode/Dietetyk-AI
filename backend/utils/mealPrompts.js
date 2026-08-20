@@ -1,20 +1,19 @@
-// Budowanie promptów do analizy posiłku (routes/meals.js).
+// Building the meal analysis prompts (routes/meals.js).
 //
-// Wydzielone z trasy do osobnego modułu z dwóch powodów: prompty to najbardziej
-// wrażliwa i najczęściej korygowana część tej funkcji, a wcześniej siedziały jako
-// 150 linii szablonów wewnątrz handlera, gdzie nie dało się ich sprawdzić inaczej
-// niż realnym wywołaniem Gemini (czyli płatnym i niedeterministycznym).
+// Extracted from the route into its own module for two reasons: the prompts are the most
+// sensitive and most frequently adjusted part of this feature, and they used to sit as 150
+// lines of templates inside the handler, where the only way to check them was a real Gemini
+// call - billable and non-deterministic.
 //
-// KLUCZOWA ZASADA przy zdjęciu + opisie: opis użytkownika jest ŹRÓDŁEM FAKTÓW,
-// zdjęcie jest poszlaką. Wcześniej opis był podawany modelowi jako "dodatkowy
-// kontekst", co przy sprzeczności (użytkownik: "200 g kurczaka", zdjęcie: wygląda
-// na 150 g) pozwalało modelowi po prostu zignorować tekst i policzyć to, co widzi.
-// Teraz pierwszeństwo jest rozstrzygnięte wprost, a model ma obowiązek odnotować
-// w komentarzu dietetyka, że skorzystał z opisu zamiast z własnego oszacowania -
-// dzięki temu widać, skąd wzięła się liczba.
+// THE KEY RULE for photo + description: the user's description is the SOURCE OF FACTS and
+// the photo is supporting evidence. The description used to be handed to the model as
+// "additional context", which on a conflict (user: "200 g of chicken"; photo: looks like
+// 150 g) let the model simply ignore the text and count what it saw. Precedence is now
+// stated outright, and the model is required to note in the dietician comment that it used
+// the description instead of its own estimate - so it is visible where the number came from.
 
-// Wspólny opis struktury pojedynczego posiłku. Trzymany w jednym miejscu, żeby
-// wersja polska i angielska nie rozjechały się przy kolejnej zmianie pól.
+// Shared description of a single meal's structure. Kept in one place so the Polish and
+// English variants cannot drift apart the next time a field changes.
 function mealFieldsSchema(lang, { portionHint, commentHint }) {
   if (lang === 'en') {
     return `      "calories": (integer - kcal for THIS meal),
@@ -58,9 +57,9 @@ function mealFieldsSchema(lang, { portionHint, commentHint }) {
       "health_rating": (liczba całkowita od 1 do 10, gdzie 1 to bardzo niezdrowe, a 10 to super zdrowe i zbilansowane)`;
 }
 
-// Instrukcja pierwszeństwa opisu nad zdjęciem. Wstawiana TYLKO gdy użytkownik
-// faktycznie coś napisał - bez tego model dostawałby regułę rozstrzygania sporu,
-// którego nie ma, co niepotrzebnie rozprasza go przy samym zdjęciu.
+// The instruction giving the description precedence over the photo. Inserted ONLY when the
+// user actually wrote something - otherwise the model would receive a rule for resolving a
+// conflict that does not exist, which needlessly distracts it on a photo-only request.
 function descriptionPrecedenceBlock(lang, userText) {
   if (lang === 'en') {
     return `The user attached this photo AND wrote a description. Treat the description as a
@@ -253,11 +252,11 @@ Struktura JSON:
 }
 
 /**
- * Buduje prompt analizy posiłku.
+ * Builds the meal analysis prompt.
  *
  * @param {Object} opts
- * @param {boolean} opts.hasImage czy do żądania dołączono zdjęcie
- * @param {string}  opts.userText tekst wpisany przez użytkownika (już zsanityzowany)
+ * @param {boolean} opts.hasImage whether a photo was attached to the request
+ * @param {string}  opts.userText the text the user typed (already sanitised)
  * @param {string}  opts.language 'pl' | 'en'
  */
 function buildMealPrompt({ hasImage, userText, language }) {

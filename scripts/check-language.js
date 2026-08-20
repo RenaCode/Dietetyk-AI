@@ -101,6 +101,10 @@ function classify(line, inBlockComment, opts) {
   // Polish PROMPT, so the Polish in it is data, not prose. Translating it would break the
   // assertion rather than change any wording a person reads.
   if (/\/.*\/\s*\.test\(/.test(line)) return 'content';
+  // A Polish literal on a line that also builds a template literal is prompt text being
+  // assembled (a fallback label interpolated into a Gemini prompt, for example). Those stay
+  // Polish by the same rule as the prompt bodies themselves.
+  if (line.includes('`')) return 'content';
   if (LOG_CALL.test(line)) return 'log';
   if (API_ERROR.test(line)) return 'content';
 

@@ -17,6 +17,7 @@ spec:
         {{- include "dietetyk.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: frontend
     spec:
+      {{- include "dietetyk.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: frontend
           image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}"

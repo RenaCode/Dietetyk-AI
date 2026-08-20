@@ -193,6 +193,44 @@ Exit code 0 means the file opens, passes an integrity check, and its core tables
 
 ---
 
+## ☸️ Kubernetes (Helm chart)
+
+The chart in `charts/dietetyk` deploys the backend, frontend and the sqlite-web browser. CI keeps the image tags in `values.yaml` pointing at the latest built `sha-<commit>`.
+
+### Registry credentials — required
+
+The `ghcr.io/renacode/*` packages are **private**. A private GHCR package issues no anonymous pull token, so without credentials the kubelet gets HTTP 401 and both pods sit in **`ImagePullBackOff`**.
+
+This is easy to misdiagnose as a wrong or missing image tag — the symptom looks identical. To tell them apart, check whether the registry answers at all:
+
+```bash
+curl -s "https://ghcr.io/token?scope=repository:renacode/dietetyk-ai-backend:pull&service=ghcr.io"
+```
+
+`{"errors":[{"code":"UNAUTHORIZED"...}]}` means the package is private (credentials problem). A response containing a `token` means the package is public and the problem is the tag instead.
+
+Docker Compose on the VPS does not hit this, because a one-off `docker login ghcr.io` leaves credentials in `~/.docker/config.json`. Kubernetes has no equivalent ambient login — every namespace needs its own pull secret:
+
+```bash
+kubectl create secret docker-registry ghcr-pull \
+  --docker-server=ghcr.io \
+  --docker-username=<github-username> \
+  --docker-password=<PAT with read:packages scope> \
+  --namespace=<release namespace>
+```
+
+The secret name is referenced by `imagePullSecrets` in `values.yaml`. If you would rather not manage a secret, make both packages public at `https://github.com/users/renacode/packages` and set `imagePullSecrets: null` — the images hold application code but no secrets, so this is a deliberate trade-off rather than a workaround.
+
+### Verifying a deploy
+
+```bash
+helm upgrade --install dietetyk charts/dietetyk -n <namespace>
+kubectl get pods -n <namespace> -w
+kubectl describe pod <pod> -n <namespace> | grep -A5 Events   # shows the real pull error
+```
+
+---
+
 ## 🔐 GUI Login and Admin Access
 
 User accounts and default credentials are defined locally (saved in the database). On first run, the backend generates a random admin password and prints it once to the container log (see `[DB INIT]` in `db.js`) — you will be asked to change it on first login.

@@ -40,7 +40,7 @@ backend:
 frontend:
   image:
     repository: ghcr.io/renacode/dietetyk-ai-frontend
-    tag: "sha-40664fb"
+    tag: "sha-b2ad7ef"
     pullPolicy: Always
   resources:
     limits:

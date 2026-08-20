@@ -26,7 +26,17 @@ backend/public/
 .env.development.local
 .env.test.local
 .env.production.local
+# Credential files must never be committed. The entries below are a backstop,
+# not a place to put secrets: a git-ignored plaintext file still ends up in
+# directory backups, rsync copies and editor workspace indexes. Server
+# credentials belong in a password manager; integration secrets belong in the
+# Settings tab, where they are encrypted at rest (backend/utils/encryption.js).
 passwords.txt
+passwords*.txt
+credentials.txt
+secrets.txt
+*.pem
+*.key
 
 # OS files
 .DS_Store

@@ -47,3 +47,28 @@ Selector labels
 app.kubernetes.io/name: {{ include "dietetyk.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Image pull secrets.
+
+The backend and frontend images live in GitHub Container Registry under
+ghcr.io/renacode/*, and those packages are PRIVATE. A private GHCR package
+issues no anonymous pull token, so without credentials the kubelet gets HTTP 401
+and the pod sits in ImagePullBackOff. This is easy to misdiagnose as a missing
+or mistyped image tag, because the error surfaces the same way.
+
+Docker Compose on the VPS does not hit this, because a one-off `docker login
+ghcr.io` there leaves credentials in ~/.docker/config.json. Kubernetes has no
+equivalent ambient login - every node needs an explicit pull secret.
+
+Renders nothing when the list is empty, so a deployment using public images (or
+a cluster with registry credentials wired in at node level) stays unaffected.
+*/}}
+{{- define "dietetyk.imagePullSecrets" -}}
+{{- with .Values.imagePullSecrets }}
+imagePullSecrets:
+{{- range . }}
+  - name: {{ .name }}
+{{- end }}
+{{- end }}
+{{- end }}

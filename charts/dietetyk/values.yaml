@@ -1,5 +1,28 @@
 replicaCount: 1
 
+# Credentials for pulling the backend/frontend images.
+#
+# The ghcr.io/renacode/* packages are private, and a private GHCR package issues
+# no anonymous pull token - without this secret the kubelet gets HTTP 401 and the
+# pods stay in ImagePullBackOff.
+#
+# Create the secret once per namespace, using a GitHub Personal Access Token that
+# has the read:packages scope:
+#
+#   kubectl create secret docker-registry ghcr-pull \
+#     --docker-server=ghcr.io \
+#     --docker-username=<github-username> \
+#     --docker-password=<PAT with read:packages> \
+#     --namespace=<release namespace>
+#
+# Alternative, if you would rather not manage a secret at all: make both packages
+# public at https://github.com/users/renacode/packages, then leave this list empty.
+# That publishes the built images to anyone, so it is a deliberate trade-off, not
+# a shortcut - the images contain the application code but no secrets (those come
+# from the environment and the database at runtime).
+imagePullSecrets:
+  - name: ghcr-pull
+
 backend:
   image:
     repository: ghcr.io/renacode/dietetyk-ai-backend

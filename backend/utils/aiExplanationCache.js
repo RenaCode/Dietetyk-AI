@@ -22,10 +22,10 @@ async function invalidateAiExplanationCache(userId, date) {
       [userId, date]
     );
   } catch (err) {
-    // Nieudana invalidacja cache nie powinna psuć głównej operacji (zapis posiłku/wody/
-    // suplementów) - w najgorszym przypadku użytkownik zobaczy nieaktualne wyjaśnienie
-    // do najbliższego naturalnego odświeżenia (30 min) lub przejścia dnia.
-    console.error('[AI EXPLANATION CACHE] Błąd invalidacji cache:', err);
+    // A failed cache invalidation must not break the main operation (saving a meal,
+    // water or supplements) - at worst the user sees a stale explanation until the next
+    // natural refresh (30 min) or until the day rolls over.
+    console.error('[AI EXPLANATION CACHE] Cache invalidation failed:', err);
   }
 }
 

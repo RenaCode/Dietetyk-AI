@@ -65,6 +65,10 @@ const CONTENT_FILES = [
   'backend/utils/mealPrompts.js'   // prompt body drives Gemini's output language
 ];
 
+// Replaces the contents of string literals with spaces, preserving the line's length so that
+// indices computed on the result still address the original line.
+const blankStrings = (line) => line.replace(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g, (m) => ' '.repeat(m.length));
+
 const LOG_CALL = /(console\.(log|warn|error|info|debug)|logger\.(info|warn|error|debug))\s*\(/;
 const API_ERROR = /res\.(status\(\d+\)\.)?json\(\s*\{\s*error|throw new Error|error:\s*['"]/;
 // A line that is part of a JSON schema description inside an AI prompt, e.g.
@@ -106,8 +110,12 @@ function classify(line, inBlockComment, opts) {
   if (/^\/\*/.test(trimmed)) return 'comment';
   if (/\{\s*\/\*/.test(line)) return 'comment';
 
-  // Trailing comment carrying all the Polish on the line.
-  const slash = line.indexOf('//');
+  // Trailing comment carrying all the Polish on the line. The search runs on a copy with the
+  // string literals blanked out, because a URL inside a string contains `//` too - the footer
+  // in App.jsx (`href="https://renacode.com"` followed by Polish link captions) was reported
+  // as a Polish COMMENT for exactly that reason, and the only way to "fix" it would have been
+  // translating product copy.
+  const slash = blankStrings(line).indexOf('//');
   if (slash > -1 && PL.test(line.slice(slash)) && !PL.test(line.slice(0, slash))) return 'comment';
 
   if (opts.isContentFile) return 'content';

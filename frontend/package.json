@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "check-i18n": "node scripts/check-i18n.js"
   },
   "dependencies": {
     "react": "^18.3.1",

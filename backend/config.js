@@ -7,6 +7,37 @@ dotenv.config({ path: path.join(__dirname, '.env') });
 
 const PORT = process.env.PORT || 3000;
 
+// --- WYBÓR MODELU GEMINI ---
+//
+// Jedno miejsce, w którym rozstrzyga się, jaki model faktycznie leci do API.
+// Wcześniej ta sama logika ("jeśli ustawiono gemini-1.5-flash, użyj mimo to 2.5")
+// była zduplikowana w dwóch miejscach tego pliku - działała, ale każda zmiana
+// wymagała pamiętania o obu, a lektura kodu sugerowała, że gdzieś naprawdę
+// używamy 1.5.
+//
+// Dlaczego 1.5 jest podmieniane, a nie po prostu odrzucane: README przez długi
+// czas podawał GEMINI_MODEL=gemini-1.5-flash jako zalecaną konfigurację
+// produkcyjną, więc istniejące pliki .env na serwerach mają tam tę wartość.
+// Model zwraca 404 w tym SDK, a twarde odrzucenie zatrzymałoby analizy AI po
+// aktualizacji. Podmiana jest cicha, ale logowana przy starcie.
+const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
+const DEPRECATED_GEMINI_MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro'];
+
+function resolveGeminiModel() {
+  const configured = process.env.GEMINI_MODEL;
+  if (!configured) return DEFAULT_GEMINI_MODEL;
+  if (DEPRECATED_GEMINI_MODELS.includes(configured)) {
+    console.warn(
+      `[AI] GEMINI_MODEL=${configured} jest wycofany i zwraca 404 w tym SDK - używam ${DEFAULT_GEMINI_MODEL}. ` +
+      `Zaktualizuj backend/.env, żeby ten komunikat zniknął.`
+    );
+    return DEFAULT_GEMINI_MODEL;
+  }
+  return configured;
+}
+
+const ACTIVE_GEMINI_MODEL = resolveGeminiModel();
+
 // Inicjalizacja Gemini API
 const geminiApiKey = process.env.GEMINI_API_KEY;
 let genAI = null;
@@ -15,14 +46,10 @@ let model = null;
 if (geminiApiKey) {
   try {
     genAI = new GoogleGenerativeAI(geminiApiKey);
-    // Używamy modelu gemini-2.5-flash jako standardu i stabilnej wersji (gemini-1.5-flash zwraca błędy 404 w SDK)
-    const activeModel = (process.env.GEMINI_MODEL === 'gemini-1.5-flash' || !process.env.GEMINI_MODEL) 
-      ? 'gemini-2.5-flash' 
-      : process.env.GEMINI_MODEL;
     model = genAI.getGenerativeModel({
-      model: activeModel
+      model: ACTIVE_GEMINI_MODEL
     });
-    console.log(`Zainicjalizowano Gemini API z modelem: ${activeModel}`);
+    console.log(`Zainicjalizowano Gemini API z modelem: ${ACTIVE_GEMINI_MODEL}`);
   } catch (err) {
     console.error('Błąd inicjalizacji Gemini API:', err.message);
   }
@@ -39,10 +66,9 @@ async function generateContentWithFallback(promptText, isJson = false, imagePart
 
   const localGenAI = new GoogleGenerativeAI(apiKeyToUse);
 
-  const modelsToTry = [
-    (process.env.GEMINI_MODEL === 'gemini-1.5-flash' ? 'gemini-2.5-flash' : process.env.GEMINI_MODEL),
-    'gemini-2.5-flash'
-  ].filter(Boolean);
+  // Model skonfigurowany (po podmianie wycofanych wersji) plus domyślny jako
+  // zapasowy - jeśli oba są takie same, uniqueModels sprowadzi to do jednej próby.
+  const modelsToTry = [ACTIVE_GEMINI_MODEL, DEFAULT_GEMINI_MODEL].filter(Boolean);
 
   const uniqueModels = [...new Set(modelsToTry)];
   let lastError = null;
@@ -103,5 +129,9 @@ module.exports = {
   PORT,
   genAI,
   model,
-  generateContentWithFallback
+  generateContentWithFallback,
+  // Eksportowane do testów i diagnostyki - pozwala sprawdzić, jaki model realnie
+  // zostanie użyty, bez czytania logów startowych.
+  ACTIVE_GEMINI_MODEL,
+  DEFAULT_GEMINI_MODEL
 };

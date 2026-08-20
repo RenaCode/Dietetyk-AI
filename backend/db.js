@@ -779,6 +779,50 @@ const cleanupOldLogs = async () => {
 const backupDir = path.join(dbDir, 'backups');
 const BACKUP_RETENTION_COUNT = 14;
 
+// Weryfikacja świeżo utworzonej kopii: otwieramy ją jako OSOBNĄ bazę tylko do
+// odczytu i sprawdzamy, czy w ogóle da się z niej czytać.
+//
+// Po co, skoro VACUUM INTO tworzy spójny plik: bo "spójny w momencie zapisu" i
+// "nadający się do odtworzenia" to nie to samo. Zapis może zostać ucięty przy braku
+// miejsca na dysku, wolumen może odrzucić część zapisu, plik może zostać uszkodzony
+// po fakcie. Bez tej kontroli rotacja poniżej z czasem usuwa wszystkie DOBRE kopie,
+// zostawiając 14 uszkodzonych - a dowiadujemy się o tym dopiero przy odtwarzaniu,
+// czyli w najgorszym możliwym momencie.
+const verifyBackupFile = (backupPath) => new Promise((resolve) => {
+  const probe = new sqlite3.Database(backupPath, sqlite3.OPEN_READONLY, (openErr) => {
+    if (openErr) {
+      resolve({ ok: false, reason: `nie można otworzyć: ${openErr.message}` });
+      return;
+    }
+    // quick_check zamiast integrity_check: wykrywa te same uszkodzenia struktury,
+    // ale nie przechodzi całej bazy strona po stronie - przy kopii robionej co 24h
+    // pełny skan niepotrzebnie obciążałby dysk na produkcji.
+    probe.get('PRAGMA quick_check', (checkErr, row) => {
+      const verdict = row && (row.quick_check || row['quick_check']);
+      if (checkErr || verdict !== 'ok') {
+        probe.close();
+        resolve({ ok: false, reason: checkErr ? checkErr.message : `quick_check = ${verdict}` });
+        return;
+      }
+      // Druga kontrola: czy kluczowe tabele są na miejscu i czy są w nich dane.
+      // Plik strukturalnie poprawny, ale pusty (np. kopia zrobiona zanim migracja
+      // dobiegła końca) przeszedłby quick_check bez zastrzeżeń.
+      probe.get('SELECT COUNT(*) AS n FROM users', (countErr, countRow) => {
+        probe.close();
+        if (countErr) {
+          resolve({ ok: false, reason: `brak tabeli users: ${countErr.message}` });
+          return;
+        }
+        if (!countRow || countRow.n === 0) {
+          resolve({ ok: false, reason: 'kopia nie zawiera żadnych użytkowników' });
+          return;
+        }
+        resolve({ ok: true, users: countRow.n });
+      });
+    });
+  });
+});
+
 const backupDatabase = async () => {
   try {
     if (!fs.existsSync(backupDir)) {
@@ -793,9 +837,20 @@ const backupDatabase = async () => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const backupPath = path.join(backupDir, `dietetyk-${timestamp}.db`);
     await run('VACUUM INTO ?', [backupPath]);
-    console.log(`[BACKUP] Zapisano spójną kopię zapasową bazy danych: ${backupPath}`);
 
-    // Rotacja - usuń najstarsze kopie powyżej limitu
+    const verdict = await verifyBackupFile(backupPath);
+    if (!verdict.ok) {
+      // Uszkodzonej kopii nie zostawiamy w katalogu - inaczej trafiłaby do rotacji
+      // i wypchnęła stamtąd sprawną. Stare kopie zostają nietknięte, bo w tej
+      // sytuacji są jedynym, co mamy.
+      console.error(`[BACKUP ERROR] Kopia nie przeszła weryfikacji (${verdict.reason}) - usuwam plik i ZACHOWUJĘ poprzednie kopie.`);
+      await fs.promises.unlink(backupPath).catch(() => {});
+      return;
+    }
+    console.log(`[BACKUP] Zapisano i zweryfikowano kopię zapasową: ${backupPath} (${verdict.users} użytkowników)`);
+
+    // Rotacja - usuń najstarsze kopie powyżej limitu. Wykonywana WYŁĄCZNIE po
+    // udanej weryfikacji powyżej, żeby nieudany backup nigdy nie kasował dobrych.
     const files = (await fs.promises.readdir(backupDir))
       .filter(f => f.startsWith('dietetyk-') && f.endsWith('.db'))
       .sort();

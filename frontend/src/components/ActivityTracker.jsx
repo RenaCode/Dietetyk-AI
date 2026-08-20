@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { t } from '../utils/i18n';
 
 export default function ActivityTracker({ summary = {}, userProfile, sessionToken, onGoalsUpdate, onLogout }) {
   const [historyData, setHistoryData] = useState([]);
@@ -58,7 +59,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
         body: JSON.stringify(goals)
       });
       if (res.ok) {
-        setGoalsMessage({ type: 'success', text: 'Cele zostały zaktualizowane!' });
+        setGoalsMessage({ type: 'success', text: t('Cele zostały zaktualizowane!') });
         setGoalsDirty(false);
         if (onGoalsUpdate) {
           onGoalsUpdate();
@@ -67,10 +68,10 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
       } else {
         // F-S6: Obsługa 401 — wygasła sesja
         if (res.status === 401) { if (onLogout) onLogout(); return; }
-        setGoalsMessage({ type: 'error', text: 'Błąd zapisu celów.' });
+        setGoalsMessage({ type: 'error', text: t('Błąd zapisu celów.') });
       }
     } catch (err) {
-      setGoalsMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setGoalsMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     } finally {
       setIsSavingGoals(false);
     }
@@ -180,7 +181,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
         body: JSON.stringify(measurementPayload)
       });
       if (res.ok) {
-        setMeasurementMessage({ type: 'success', text: 'Zapisano pomiary pomyślnie!' });
+        setMeasurementMessage({ type: 'success', text: t('Zapisano pomiary pomyślnie!') });
         setFormMeasurement({
           date: new Date().toISOString().split('T')[0],
           chest: '',
@@ -198,17 +199,17 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
         setTimeout(() => setMeasurementMessage({ type: '', text: '' }), 5000);
       } else {
         const errData = await res.json();
-        setMeasurementMessage({ type: 'error', text: errData.error || 'Błąd zapisu pomiarów.' });
+        setMeasurementMessage({ type: 'error', text: errData.error || t('Błąd zapisu pomiarów.') });
       }
     } catch (err) {
-      setMeasurementMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setMeasurementMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     } finally {
       setIsSavingMeasurement(false);
     }
   };
 
   const handleDeleteMeasurement = async (id) => {
-    if (!window.confirm('Czy na pewno chcesz usunąć ten pomiar?')) return;
+    if (!window.confirm(t('Czy na pewno chcesz usunąć ten pomiar?'))) return;
     try {
       const res = await fetch(`/api/body-measurements/${id}`, {
         method: 'DELETE',
@@ -220,27 +221,27 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
         setMeasurementMessage({ type: '', text: '' });
         fetchMeasurements();
       } else {
-        setMeasurementMessage({ type: 'error', text: 'Nie udało się usunąć pomiaru.' });
+        setMeasurementMessage({ type: 'error', text: t('Nie udało się usunąć pomiaru.') });
       }
     } catch (err) {
       console.error('Błąd usuwania pomiaru:', err);
-      setMeasurementMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setMeasurementMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     }
   };
 
   const getMeasureLabel = (key) => {
     switch(key) {
       case 'waist': return 'Talia / Pas (cm)';
-      case 'waist_above': return 'Pas +2cm (cm)';
-      case 'waist_below': return 'Pas -2cm (cm)';
-      case 'chest': return 'Klatka piersiowa (cm)';
-      case 'shoulders': return 'Barki (cm)';
-      case 'hips': return 'Biodra (cm)';
-      case 'biceps': return 'Biceps (cm)';
-      case 'biceps_left': return 'Biceps lewy (cm)';
-      case 'biceps_right': return 'Biceps prawy (cm)';
-      case 'thigh': return 'Udo (cm)';
-      default: return 'Obwód (cm)';
+      case 'waist_above': return t('Pas +2cm (cm)');
+      case 'waist_below': return t('Pas -2cm (cm)');
+      case 'chest': return t('Klatka piersiowa (cm)');
+      case 'shoulders': return t('Barki (cm)');
+      case 'hips': return t('Biodra (cm)');
+      case 'biceps': return t('Biceps (cm)');
+      case 'biceps_left': return t('Biceps lewy (cm)');
+      case 'biceps_right': return t('Biceps prawy (cm)');
+      case 'thigh': return t('Udo (cm)');
+      default: return t('Obwód (cm)');
     }
   };
 
@@ -611,7 +612,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                 <span>💍</span> Oura Ring Status
               </h3>
               <span style={{ fontSize: '0.8rem', padding: '2px 8px', borderRadius: '12px', background: userProfile?.has_oura ? 'rgba(52, 211, 153, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: userProfile?.has_oura ? 'var(--success-light)' : 'var(--danger-light)' }}>
-                {userProfile?.has_oura ? 'Połączono' : 'Rozłączono'}
+                {userProfile?.has_oura ? t('Połączono') : t('Rozłączono')}
               </span>
             </div>
 
@@ -623,7 +624,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '12px' }}>
                   <div style={{ background: 'rgba(255,255,255,0.02)', padding: '10px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.03)' }}>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>Gotowość (Readiness)</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', display: 'block' }}>{t("Gotowość (Readiness)")}</span>
                     <strong style={{ fontSize: '1.4rem', color: '#c084fc' }}>
                       {summary.readiness_score != null ? `${summary.readiness_score}/100` : '--'}
                     </strong>
@@ -638,25 +639,25 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Długość snu:</span>
+                    <span>{t("Długość snu:")}</span>
                     <span style={{ color: '#fff', fontWeight: 600 }}>
                       {summary.sleep_duration != null ? `${Number(summary.sleep_duration).toFixed(1)}h` : '--'}
                     </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Faza głęboka / REM:</span>
+                    <span>{t("Faza głęboka / REM:")}</span>
                     <span style={{ color: '#fff', fontWeight: 600 }}>
                       {summary.sleep_deep != null ? `${Number(summary.sleep_deep).toFixed(1)}h` : '--'} / {summary.sleep_rem != null ? `${Number(summary.sleep_rem).toFixed(1)}h` : '--'}
                     </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>HRV (Zmienność tętna):</span>
+                    <span>{t("HRV (Zmienność tętna):")}</span>
                     <span style={{ color: '#fff', fontWeight: 600 }}>
                       {summary.hrv != null ? `${Number(summary.hrv).toFixed(0)} ms` : '--'}
                     </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Tętno spoczynkowe (RHR):</span>
+                    <span>{t("Tętno spoczynkowe (RHR):")}</span>
                     <span style={{ color: '#fff', fontWeight: 600 }}>
                       {summary.rhr != null ? `${Number(summary.rhr).toFixed(0)} bpm` : '--'}
                     </span>
@@ -690,7 +691,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <span style={{ fontSize: '1.2rem' }}>👣</span>
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>Kroki</div>
+                    <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{t("Kroki")}</div>
                     <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Wykonane dzisiaj</span>
                   </div>
                 </div>
@@ -728,7 +729,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                 <span>⚖️</span> Withings Status
               </h3>
               <span style={{ fontSize: '0.8rem', padding: '2px 8px', borderRadius: '12px', background: userProfile?.has_withings ? 'rgba(52, 211, 153, 0.15)' : 'rgba(239, 68, 68, 0.15)', color: userProfile?.has_withings ? 'var(--success-light)' : 'var(--danger-light)' }}>
-                {userProfile?.has_withings ? 'Połączono' : 'Rozłączono'}
+                {userProfile?.has_withings ? t('Połączono') : t('Rozłączono')}
               </span>
             </div>
 
@@ -740,7 +741,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
               <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '12px' }}>
                   <div style={{ background: 'rgba(255,255,255,0.02)', padding: '12px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.03)', textAlign: 'center' }}>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', display: 'block' }}>Aktualna Waga Ciała</span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', display: 'block' }}>{t("Aktualna Waga Ciała")}</span>
                     <strong style={{ fontSize: '1.8rem', color: '#fbbf24' }}>
                       {summary.weight != null ? `${Number(summary.weight).toFixed(1)} kg` : '--'}
                     </strong>
@@ -749,19 +750,19 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '6px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Procent tkanki tłuszczowej (Fat %):</span>
+                    <span>{t("Procent tkanki tłuszczowej (Fat %):")}</span>
                     <span style={{ color: '#fff', fontWeight: 600 }}>
                       {summary.fat_ratio != null ? `${Number(summary.fat_ratio).toFixed(1)}%` : '--'}
                     </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Szacowana masa tłuszczu:</span>
+                    <span>{t("Szacowana masa tłuszczu:")}</span>
                     <span style={{ color: '#fff', fontWeight: 600 }}>
                       {summary.weight != null && summary.fat_ratio != null ? `${((Number(summary.weight) * Number(summary.fat_ratio)) / 100).toFixed(1)} kg` : '--'}
                     </span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Masa mięśniowa (Muscle mass):</span>
+                    <span>{t("Masa mięśniowa (Muscle mass):")}</span>
                     <span style={{ color: 'var(--success-light)', fontWeight: 600 }}>
                       {summary.muscle_mass != null ? `${Number(summary.muscle_mass).toFixed(1)} kg` : '--'}
                     </span>
@@ -787,7 +788,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                   <span>🎯</span> Cele Aktywności
                 </h3>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-dim)' }}>
-                  {isGoalsOpen ? 'Zwiń ▲' : 'Pokaż ▼'}
+                  {isGoalsOpen ? t('Zwiń ▲') : t('Pokaż ▼')}
                 </span>
               </div>
             </div>
@@ -826,7 +827,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                     />
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Czas snu (godziny)</label>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{t("Czas snu (godziny)")}</label>
                     <input
                       type="number"
                       step="0.1"
@@ -839,7 +840,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                     />
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Minuty ćwiczeń (min)</label>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>{t("Minuty ćwiczeń (min)")}</label>
                     <input
                       type="number"
                       className="input-field"
@@ -851,7 +852,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                     />
                   </div>
                   <button type="submit" className="btn-primary" style={{ padding: '6px 12px', fontSize: '0.85rem', marginTop: '6px', height: '34px' }} disabled={isSavingGoals}>
-                    {isSavingGoals ? 'Zapisywanie...' : 'Zapisz cele'}
+                    {isSavingGoals ? t('Zapisywanie...') : t('Zapisz cele')}
                   </button>
                   {goalsMessage.text && (
                     <div style={{ fontSize: '0.8rem', color: goalsMessage.type === 'success' ? 'var(--success-light)' : 'var(--danger-light)', textAlign: 'center', marginTop: '4px' }}>
@@ -871,14 +872,14 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
         
         {/* Wykres 1: Spalanie Tłuszczu (Waga i Fat %) */}
         <div className="glass-card">
-          <h3 className="card-title" style={{ marginBottom: '4px' }}>📉 Wykres 1: Spalanie Tłuszczu</h3>
+          <h3 className="card-title" style={{ marginBottom: '4px' }}>{t("📉 Wykres 1: Spalanie Tłuszczu")}</h3>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '16px' }}>
             Zależność wagi ciała w kg (linia ciągła) do procentu tkanki tłuszczowej (linia przerywana).
           </p>
           {isLoadingHistory ? (
             <div className="shimmer-placeholder" style={{ height: '180px', width: '100%' }} />
           ) : (
-            renderDualAxisChart(historyData, 'weight', 'fat_ratio', '#38bdf8', '#fbbf24', 'Waga ciała', 'Tkanka tłuszczowa')
+            renderDualAxisChart(historyData, 'weight', 'fat_ratio', '#38bdf8', '#fbbf24', t('Waga ciała'), t('Tkanka tłuszczowa'))
           )}
           {!isLoadingHistory && weightForecast && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
@@ -926,14 +927,14 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
         {/* Wykres 2: Przyrost Mięśni (Masa mięśniowa w kg) */}
         <div className="glass-card">
-          <h3 className="card-title" style={{ marginBottom: '4px' }}>📈 Wykres 2: Rozwój Masy Mięśniowej</h3>
+          <h3 className="card-title" style={{ marginBottom: '4px' }}>{t("📈 Wykres 2: Rozwój Masy Mięśniowej")}</h3>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '16px' }}>
             Trend beztłuszczowej masy mięśniowej w kg z ostatnich 30 dni.
           </p>
           {isLoadingHistory ? (
             <div className="shimmer-placeholder" style={{ height: '180px', width: '100%' }} />
           ) : (
-            renderLineChart(historyData, 'muscle_mass', 'var(--success-light)', 'Masa mięśniowa (kg)')
+            renderLineChart(historyData, 'muscle_mass', 'var(--success-light)', t('Masa mięśniowa (kg)'))
           )}
         </div>
 
@@ -947,7 +948,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
             <div className="shimmer-placeholder" style={{ height: '180px', width: '100%' }} />
           ) : hasSleepPhaseData ? (
             renderMultiLineChart(sleepPhaseData, [
-              { key: 'sleep_deep', color: '#7c3aed', label: 'Głęboki' },
+              { key: 'sleep_deep', color: '#7c3aed', label: t('Głęboki') },
               { key: 'sleep_rem', color: '#38bdf8', label: 'REM' },
               { key: 'sleep_light', color: '#fbbf24', label: 'Lekki' }
             ])
@@ -960,14 +961,14 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
         {/* Wykres 4: Aktywność (Aktywne kalorie i aktywne minuty) */}
         <div className="glass-card">
-          <h3 className="card-title" style={{ marginBottom: '4px' }}>🔥 Wykres 4: Aktywność</h3>
+          <h3 className="card-title" style={{ marginBottom: '4px' }}>{t("🔥 Wykres 4: Aktywność")}</h3>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '16px' }}>
             Zależność spalonych aktywnych kalorii (linia ciągła) do aktywnych minut (linia przerywana) z ostatnich 30 dni.
           </p>
           {isLoadingHistory ? (
             <div className="shimmer-placeholder" style={{ height: '180px', width: '100%' }} />
           ) : (
-            renderDualAxisChart(historyData, 'active_calories', 'active_minutes', '#fb923c', '#a78bfa', 'Aktywne kalorie', 'Aktywne minuty', 'kcal', 'min')
+            renderDualAxisChart(historyData, 'active_calories', 'active_minutes', '#fb923c', '#a78bfa', 'Aktywne kalorie', t('Aktywne minuty'), 'kcal', 'min')
           )}
         </div>
 
@@ -978,7 +979,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
         
         {/* Formularz wprowadzania pomiarów i Wykres trendu obwodów */}
         <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <h3 className="card-title">📐 Pomiary Obwodów Ciała</h3>
+          <h3 className="card-title">{t("📐 Pomiary Obwodów Ciała")}</h3>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)' }}>
             Wprowadzaj regularnie pomiary obwodów swojego ciała, aby monitorować rozwój sylwetki.
           </p>
@@ -1014,7 +1015,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '12px' }}>
               <div className="input-group" style={{ marginBottom: 0 }}>
-                <label className="input-label" style={{ fontSize: '0.75rem' }}>Pas +2cm (powyżej pępka)</label>
+                <label className="input-label" style={{ fontSize: '0.75rem' }}>{t("Pas +2cm (powyżej pępka)")}</label>
                 <input
                   type="number"
                   step="0.1"
@@ -1027,7 +1028,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                 />
               </div>
               <div className="input-group" style={{ marginBottom: 0 }}>
-                <label className="input-label" style={{ fontSize: '0.75rem' }}>Pas -2cm (poniżej pępka)</label>
+                <label className="input-label" style={{ fontSize: '0.75rem' }}>{t("Pas -2cm (poniżej pępka)")}</label>
                 <input
                   type="number"
                   step="0.1"
@@ -1056,7 +1057,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                 />
               </div>
               <div className="input-group" style={{ marginBottom: 0 }}>
-                <label className="input-label" style={{ fontSize: '0.75rem' }}>Barki (cm)</label>
+                <label className="input-label" style={{ fontSize: '0.75rem' }}>{t("Barki (cm)")}</label>
                 <input
                   type="number"
                   step="0.1"
@@ -1069,7 +1070,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                 />
               </div>
               <div className="input-group" style={{ marginBottom: 0 }}>
-                <label className="input-label" style={{ fontSize: '0.75rem' }}>Biodra (cm)</label>
+                <label className="input-label" style={{ fontSize: '0.75rem' }}>{t("Biodra (cm)")}</label>
                 <input
                   type="number"
                   step="0.1"
@@ -1085,7 +1086,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: '10px' }}>
               <div className="input-group" style={{ marginBottom: 0 }}>
-                <label className="input-label" style={{ fontSize: '0.75rem' }}>Biceps (ogólny)</label>
+                <label className="input-label" style={{ fontSize: '0.75rem' }}>{t("Biceps (ogólny)")}</label>
                 <input
                   type="number"
                   step="0.1"
@@ -1098,7 +1099,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                 />
               </div>
               <div className="input-group" style={{ marginBottom: 0 }}>
-                <label className="input-label" style={{ fontSize: '0.75rem' }}>Biceps lewy (cm)</label>
+                <label className="input-label" style={{ fontSize: '0.75rem' }}>{t("Biceps lewy (cm)")}</label>
                 <input
                   type="number"
                   step="0.1"
@@ -1111,7 +1112,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                 />
               </div>
               <div className="input-group" style={{ marginBottom: 0 }}>
-                <label className="input-label" style={{ fontSize: '0.75rem' }}>Biceps prawy (cm)</label>
+                <label className="input-label" style={{ fontSize: '0.75rem' }}>{t("Biceps prawy (cm)")}</label>
                 <input
                   type="number"
                   step="0.1"
@@ -1127,7 +1128,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
             <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr)', gap: '12px', alignItems: 'flex-end' }}>
               <div className="input-group" style={{ marginBottom: 0 }}>
-                <label className="input-label" style={{ fontSize: '0.75rem' }}>Udo (cm)</label>
+                <label className="input-label" style={{ fontSize: '0.75rem' }}>{t("Udo (cm)")}</label>
                 <input
                   type="number"
                   step="0.1"
@@ -1140,7 +1141,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                 />
               </div>
               <button type="submit" className="btn-primary" style={{ padding: '8px 12px', fontSize: '0.85rem', height: '38px' }} disabled={isSavingMeasurement}>
-                {isSavingMeasurement ? 'Zapisywanie...' : 'Zapisz pomiar'}
+                {isSavingMeasurement ? t('Zapisywanie...') : 'Zapisz pomiar'}
               </button>
             </div>
             {measurementMessage.text && (
@@ -1153,10 +1154,10 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
           {/* Wykres trendu obwodów */}
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-              <strong style={{ fontSize: '0.9rem', color: '#fff' }}>📉 Wykres Trendów Obwodów</strong>
+              <strong style={{ fontSize: '0.9rem', color: '#fff' }}>{t("📉 Wykres Trendów Obwodów")}</strong>
               <select
                 className="input-field"
-                aria-label="Wybierz obwód do wykresu trendu"
+                aria-label={t("Wybierz obwód do wykresu trendu")}
                 style={{ width: 'auto', padding: '4px 10px', fontSize: '0.8rem', height: '30px', background: 'var(--bg-glass)', border: '1px solid var(--border-glass)', borderRadius: '6px', color: '#fff' }}
                 value={selectedMeasure}
                 onChange={(e) => setSelectedMeasure(e.target.value)}
@@ -1183,7 +1184,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
         {/* Historia pomiarów obwodów */}
         <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <h3 className="card-title">📜 Historia Pomiarów Obwodów</h3>
+          <h3 className="card-title">{t("📜 Historia Pomiarów Obwodów")}</h3>
           {isLoadingMeasurements ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px 0' }}>
               <div className="shimmer-placeholder" style={{ height: '14px', width: '100%' }} />
@@ -1237,7 +1238,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                             fontSize: '1rem'
                           }}
                           onClick={() => handleDeleteMeasurement(m.id)}
-                          title="Usuń pomiar"
+                          title={t("Usuń pomiar")}
                           aria-label={`Usuń pomiar z dnia ${m.date}`}
                         >
                           🗑️

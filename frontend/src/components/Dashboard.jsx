@@ -363,11 +363,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
       } else {
         // F-S4: Obsługa 401 — wygasła sesja
         if (res.status === 401) { onLogout(); return; }
-        setSupplementsMessage({ type: 'error', text: 'Błąd zapisu.' });
+        setSupplementsMessage({ type: 'error', text: t('Błąd zapisu.') });
       }
     } catch (err) {
       console.error(err);
-      setSupplementsMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setSupplementsMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     } finally {
       setIsSavingSupplements(false);
     }
@@ -391,7 +391,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const handleSaveFeeling = async () => {
     if (!sessionToken) return;
     if (energyLevel === null && moodLevel === null) {
-      setFeelingMessage({ type: 'error', text: 'Kliknij co najmniej jedną ocenę przed zapisaniem.' });
+      setFeelingMessage({ type: 'error', text: t('Kliknij co najmniej jedną ocenę przed zapisaniem.') });
       return;
     }
     setIsSavingFeeling(true);
@@ -415,11 +415,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         setTimeout(() => setFeelingMessage({ type: '', text: '' }), 4000);
       } else {
         if (res.status === 401) { onLogout(); return; }
-        setFeelingMessage({ type: 'error', text: 'Błąd zapisu.' });
+        setFeelingMessage({ type: 'error', text: t('Błąd zapisu.') });
       }
     } catch (err) {
       console.error(err);
-      setFeelingMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setFeelingMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     } finally {
       setIsSavingFeeling(false);
     }
@@ -694,7 +694,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const DAY_EVENT_TYPES = [
     { value: 'illness', label: 'Choroba' },
     { value: 'vacation', label: 'Wakacje / urlop' },
-    { value: 'late_sleep', label: 'Późne zaśnięcie' }
+    { value: 'late_sleep', label: t('Późne zaśnięcie') }
   ];
   const DAY_EVENT_TYPE_LABELS = Object.fromEntries(DAY_EVENT_TYPES.map(t => [t.value, t.label]));
   const DAY_EVENT_ICONS = {
@@ -740,7 +740,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const handleAddDayEvent = async () => {
     if (!sessionToken || !newEventType || !newEventStart || !newEventEnd) return;
     if (newEventEnd < newEventStart) {
-      setDayEventMessage({ type: 'error', text: 'Data końcowa nie może być wcześniejsza niż data początkowa.' });
+      setDayEventMessage({ type: 'error', text: t('Data końcowa nie może być wcześniejsza niż data początkowa.') });
       return;
     }
     setIsSavingDayEvent(true);
@@ -768,11 +768,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         setTimeout(() => setDayEventMessage({ type: '', text: '' }), 4000);
       } else {
         const data = await res.json().catch(() => ({}));
-        setDayEventMessage({ type: 'error', text: data.error || 'Błąd zapisu zdarzenia.' });
+        setDayEventMessage({ type: 'error', text: data.error || t('Błąd zapisu zdarzenia.') });
       }
     } catch (err) {
       console.error(err);
-      setDayEventMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setDayEventMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     } finally {
       setIsSavingDayEvent(false);
     }
@@ -973,7 +973,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '10px', marginTop: '10px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>
-          <span>📈 Trend składu ciała (30 dni)</span>
+          <span>{t("📈 Trend składu ciała (30 dni)")}</span>
           <div style={{ display: 'flex', gap: '8px' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
               <span style={{ width: '6px', height: '6px', background: '#38bdf8', borderRadius: '50%' }}></span> Waga
@@ -1077,7 +1077,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     : bmiValue < 18.5 ? 'Niedowaga'
     : bmiValue < 25 ? 'W normie'
     : bmiValue < 30 ? 'Nadwaga'
-    : 'Otyłość';
+    : t('Otyłość');
 
   // Kalkulacja stref tętna (Karvonen) na bazie RHR z Oura.
   // userMaxHr: realne HRmax (220 - wiek) liczone przez backend z roku urodzenia
@@ -1175,7 +1175,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const formatRelativeSync = (date) => {
     if (!date || isNaN(date.getTime())) return null;
     const diffMin = Math.round((Date.now() - date.getTime()) / 60000);
-    if (diffMin < 1) return 'przed chwilą';
+    if (diffMin < 1) return t('przed chwilą');
     if (diffMin < 60) return `${diffMin} min temu`;
     const diffHours = Math.round(diffMin / 60);
     if (diffHours < 24) return `${diffHours} godz. temu`;
@@ -1200,7 +1200,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const stressRecoveryMinutes = summary.stress_recovery_minutes;
   const stressSummary = summary.stress_summary;
   const hasStressData = stressHighMinutes != null || stressRecoveryMinutes != null || stressSummary != null;
-  const stressSummaryLabels = { restored: 'Zregenerowany', normal: 'Normalny', stressful: 'Stresujący' };
+  const stressSummaryLabels = { restored: 'Zregenerowany', normal: 'Normalny', stressful: t('Stresujący') };
 
   // Ostatni zapisany pomiar obwodów ciała - pełny CRUD i wykres trendu jest już w
   // ActivityTracker, tu tylko skrót najnowszej wartości na głównym Dashboardzie.
@@ -1298,10 +1298,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         const data = await res.json();
         setChatMessages(prev => [...prev, { sender: 'ai', text: data.response }]);
       } else {
-        setChatMessages(prev => [...prev, { sender: 'ai', text: 'Przepraszam, wystąpił problem z połączeniem. Upewnij się, że masz skonfigurowany Gemini API Key w Ustawieniach.' }]);
+        setChatMessages(prev => [...prev, { sender: 'ai', text: t('Przepraszam, wystąpił problem z połączeniem. Upewnij się, że masz skonfigurowany Gemini API Key w Ustawieniach.') }]);
       }
     } catch (err) {
-      setChatMessages(prev => [...prev, { sender: 'ai', text: 'Błąd sieciowy. Nie można połączyć się z asystentem Dietetyk AI.' }]);
+      setChatMessages(prev => [...prev, { sender: 'ai', text: t('Błąd sieciowy. Nie można połączyć się z asystentem Dietetyk AI.') }]);
     } finally {
       setIsSendingChat(false);
     }
@@ -1327,10 +1327,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         if (onRefresh) onRefresh();
       } else {
         const data = await res.json().catch(() => ({}));
-        setWaterMessage(data.error || 'Nie udało się zapisać wody.');
+        setWaterMessage(data.error || t('Nie udało się zapisać wody.'));
       }
     } catch (err) {
-      setWaterMessage('Błąd sieciowy. Nie udało się zapisać wody.');
+      setWaterMessage(t('Błąd sieciowy. Nie udało się zapisać wody.'));
     } finally {
       setIsAddingWater(false);
     }
@@ -1339,7 +1339,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const handleResetWater = async () => {
     if (isAddingWater) return;
     // F-N1: Potwierdzenie przed resetem licznika wody
-    if (!window.confirm('Zresetować licznik wody do 0?')) return;
+    if (!window.confirm(t('Zresetować licznik wody do 0?'))) return;
     setIsAddingWater(true);
     setWaterMessage('');
     try {
@@ -1355,10 +1355,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         if (onRefresh) onRefresh();
       } else {
         const data = await res.json().catch(() => ({}));
-        setWaterMessage(data.error || 'Nie udało się zresetować licznika wody.');
+        setWaterMessage(data.error || t('Nie udało się zresetować licznika wody.'));
       }
     } catch (err) {
-      setWaterMessage('Błąd sieciowy. Nie udało się zresetować licznika wody.');
+      setWaterMessage(t('Błąd sieciowy. Nie udało się zresetować licznika wody.'));
     } finally {
       setIsAddingWater(false);
     }
@@ -1443,8 +1443,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                   ? `Gotowy na pełne obciążenie, ${userProfile.first_name}!`
                   : `Gotowy na lżejszą pracę, ${userProfile.first_name}!`)
               : (readinessScore >= 80
-                  ? "Dzisiaj wyglądasz na gotowego na pełne obciążenie"
-                  : "Dzisiaj wyglądasz na gotowego do lżejszej pracy")
+                  ? t("Dzisiaj wyglądasz na gotowego na pełne obciążenie")
+                  : t("Dzisiaj wyglądasz na gotowego do lżejszej pracy"))
             }
           </span>
         </div>
@@ -1515,7 +1515,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                   {effortScore}%
                 </div>
               </div>
-              <span className="ring-item-label">🔥 Wysiłek</span>
+              <span className="ring-item-label">{t("🔥 Wysiłek")}</span>
             </div>
           </div>
         </div>
@@ -1538,19 +1538,19 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div style={{ display: 'flex', gap: '8px', padding: '0 4px', flexWrap: 'wrap' }}>
               {calorieStreakDays > 0 && (
                 <span style={{ fontSize: '0.75rem', fontWeight: '700', color: '#fbbf24', background: 'rgba(251,191,36,0.1)', padding: '4px 10px', borderRadius: '999px' }}>
-                  🔥 {calorieStreakDays} {calorieStreakDays === 1 ? 'dzień' : 'dni'} z rzędu w celu kalorycznym
+                  🔥 {calorieStreakDays} {calorieStreakDays === 1 ? t('dzień') : 'dni'} z rzędu w celu kalorycznym
                 </span>
               )}
               {sleepStreakDays > 0 && (
                 <span style={{ fontSize: '0.75rem', fontWeight: '700', color: '#38bdf8', background: 'rgba(56,189,248,0.1)', padding: '4px 10px', borderRadius: '999px' }}>
-                  😴 {sleepStreakDays} {sleepStreakDays === 1 ? 'dzień' : 'dni'} z rzędu z celem snu
+                  😴 {sleepStreakDays} {sleepStreakDays === 1 ? t('dzień') : 'dni'} z rzędu z celem snu
                 </span>
               )}
             </div>
           )}
           <div className="premium-grid-2">
             <DailyGoalCard
-              title="Kroki"
+              title={t("Kroki")}
               val1={steps.toLocaleString('pl-PL')}
               unit1="kroki"
               percentage={goalProgressPct(steps, summary?.target_steps ?? 10000)}
@@ -1573,7 +1573,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               barType="gradient"
             />
             <DailyGoalCard
-              title="Minuty ćwiczeń"
+              title={t("Minuty ćwiczeń")}
               val1={String(activeMinutes)}
               unit1="min"
               percentage={goalProgressPct(activeMinutes, summary?.target_active_minutes ?? 30)}
@@ -1594,7 +1594,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && trainingReadiness && trainingReadiness.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🏋️ Gotowość do treningu</span>
+              <span className="premium-title">{t("🏋️ Gotowość do treningu")}</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '10px' }}>
               <span style={{ fontSize: '2.2rem' }}>{trainingReadiness.emoji}</span>
@@ -1628,7 +1628,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && trainingReadiness && !trainingReadiness.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🏋️ Gotowość do treningu</span>
+              <span className="premium-title">{t("🏋️ Gotowość do treningu")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)', marginTop: '4px', marginBottom: 0 }}>
               Potrzeba co najmniej 14 dni danych z Oury (gotowość lub HRV) aby ocenić gotowość do treningu.
@@ -1639,7 +1639,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {/* PORÓWNANIE TYDZIEŃ/MIESIĄC I BILANS KALORYCZNY NARASTAJĄCO */}
         <div className="premium-card">
           <div className="premium-title-row">
-            <span className="premium-title">📊 Porównanie i bilans</span>
+            <span className="premium-title">{t("📊 Porównanie i bilans")}</span>
           </div>
           {isLoadingComparison ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '10px 0' }}>
@@ -1651,8 +1651,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               {nutritionComparison && (nutritionComparison.week.current.avg || nutritionComparison.month.current.avg) ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
                   {[
-                    { label: 'Tydzień', data: nutritionComparison.week },
-                    { label: 'Miesiąc', data: nutritionComparison.month }
+                    { label: t('Tydzień'), data: nutritionComparison.week },
+                    { label: t('Miesiąc'), data: nutritionComparison.month }
                   ].map(({ label, data }) => (
                     data.current.avg && (
                       <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
@@ -1663,7 +1663,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                           fontWeight: '700',
                           color: data.calories_change_pct == null ? 'rgba(255,255,255,0.4)' : data.calories_change_pct > 0 ? 'var(--danger-light)' : data.calories_change_pct < 0 ? 'var(--success-light)' : '#fff'
                         }}>
-                          {data.calories_change_pct == null ? 'brak danych do porównania' : `${data.calories_change_pct > 0 ? '+' : ''}${data.calories_change_pct}% vs poprzedni okres`}
+                          {data.calories_change_pct == null ? t('brak danych do porównania') : `${data.calories_change_pct > 0 ? '+' : ''}${data.calories_change_pct}% vs poprzedni okres`}
                         </span>
                       </div>
                     )
@@ -1684,7 +1684,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                     data.days_with_data > 0 && (
                       <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
                         <span style={{ color: 'rgba(255,255,255,0.6)' }}>
-                          Bilans {label} vs cel ({data.days_with_data} {data.days_with_data === 1 ? 'dzień' : 'dni'} z danymi)
+                          Bilans {label} vs cel ({data.days_with_data} {data.days_with_data === 1 ? t('dzień') : 'dni'} z danymi)
                         </span>
                         <span style={{ fontWeight: '700', color: data.balance_vs_target > 0 ? 'var(--danger-light)' : data.balance_vs_target < 0 ? 'var(--success-light)' : '#fff' }}>
                           {data.balance_vs_target > 0 ? '+' : ''}{Math.round(data.balance_vs_target)} kcal
@@ -1817,7 +1817,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         )}
 
         {/* ANALIZA PLANU TRENINGOWEGO AI (Gemini, cache 7 dni). Ocenia, czy Twój plan
-            jest optymalny pod cel sylwetki. "Odśwież" → ?refresh=1 → nowa analiza. */}
+            jest optymalny pod cel sylwetki. t("Odśwież") → ?refresh=1 → nowa analiza. */}
         {(trainingPlanInsight || isLoadingTrainingPlan) && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -1826,9 +1826,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 onClick={() => fetchTrainingPlanInsight(true)}
                 disabled={isLoadingTrainingPlan}
                 style={{ fontSize: '0.72rem', padding: '3px 10px', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.7)', cursor: isLoadingTrainingPlan ? 'not-allowed' : 'pointer', opacity: isLoadingTrainingPlan ? 0.5 : 1 }}
-                aria-label="Odśwież analizę planu treningowego"
+                aria-label={t("Odśwież analizę planu treningowego")}
               >
-                {isLoadingTrainingPlan ? 'Generuję…' : 'Odśwież'}
+                {isLoadingTrainingPlan ? t('Generuję…') : t('Odśwież')}
               </button>
             </div>
             {isLoadingTrainingPlan && !trainingPlanInsight && (
@@ -1907,7 +1907,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           <div className="premium-title-row" style={{ marginBottom: 0 }}>
             <span className="premium-title">🏷️ Tag dnia</span>
             <span style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>
-              {isDayEventsOpen ? 'Zwiń ▲' : 'Pokaż ▼'}
+              {isDayEventsOpen ? t('Zwiń ▲') : t('Pokaż ▼')}
             </span>
           </div>
         </div>
@@ -1964,7 +1964,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               onClick={handleAddDayEvent}
               disabled={isSavingDayEvent || !newEventStart || !newEventEnd}
             >
-              {isSavingDayEvent ? 'Zapisywanie...' : 'Dodaj'}
+              {isSavingDayEvent ? t('Zapisywanie...') : 'Dodaj'}
             </button>
             {dayEventMessage.text && (
               <p style={{ fontSize: '0.78rem', marginTop: '8px', color: dayEventMessage.type === 'error' ? 'var(--danger-light)' : 'var(--success-light)' }}>
@@ -2024,7 +2024,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           <div className="premium-title-row" style={{ marginBottom: 0 }}>
             <span className="premium-title">📊 Analizy</span>
             <span style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>
-              {isAnalizyOpen ? 'Zwiń ▲' : 'Pokaż ▼'}
+              {isAnalizyOpen ? t('Zwiń ▲') : t('Pokaż ▼')}
             </span>
           </div>
         </div>
@@ -2035,7 +2035,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && !isLoadingSleepInsight && sleepInsight && sleepInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">😴 Sen → następny dzień</span>
+              <span className="premium-title">{t("😴 Sen → następny dzień")}</span>
             </div>
             {getDayEventLabelForDate(selectedDate, ['late_sleep']) && (
               <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
@@ -2072,7 +2072,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && !isLoadingSleepInsight && sleepInsight && !sleepInsight.hasEnoughData && sleepInsight.reason === 'not_enough_nights' && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">😴 Sen → następny dzień</span>
+              <span className="premium-title">{t("😴 Sen → następny dzień")}</span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '8px 0', marginBottom: 0 }}>
               Za mało dni z danymi o śnie i posiłkach (min. {sleepInsight.minNightsRequired} w każdej grupie - krótki/wystarczający sen).
@@ -2088,7 +2088,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {sodiumBpInsight && (sodiumBpInsight.today?.isHigh || sodiumBpInsight.insight?.hasEnoughData) && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🧂 Sód → ciśnienie</span>
+              <span className="premium-title">{t("🧂 Sód → ciśnienie")}</span>
             </div>
             {sodiumBpInsight.today?.isHigh && (
               <p style={{ fontSize: '0.78rem', color: 'var(--danger-light)', marginTop: '2px', marginBottom: sodiumBpInsight.insight?.hasEnoughData ? '10px' : 0, fontWeight: 600 }}>
@@ -2252,7 +2252,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && fiberSleepInsight && fiberSleepInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🌾 Błonnik → sen</span>
+              <span className="premium-title">{t("🌾 Błonnik → sen")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Dni ze spożyciem błonnika ≥ Twojej mediany ({fiberSleepInsight.medianFiberGrams} g) vs poniżej mediany, ten sam dzień - ostatnie 90 dni
@@ -2290,20 +2290,20 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {bodyRecompInsight && bodyRecompInsight.hasEnoughData && bodyRecompInsight.divergentTrend && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">📐 Rekompozycja ciała</span>
+              <span className="premium-title">{t("📐 Rekompozycja ciała")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Trend obwodu pasa i trend wagi idą w różnych kierunkach - możliwy sygnał zmiany składu ciała (np. przyrost mięśni przy redukcji tkanki tłuszczowej), nie tylko samej wagi.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
-                <span style={{ color: 'rgba(255,255,255,0.6)' }}>Pas (trend/tydzień)</span>
+                <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("Pas (trend/tydzień)")}</span>
                 <span style={{ fontWeight: '700', color: bodyRecompInsight.waistSlopeCmPerWeek < 0 ? 'var(--success-light)' : bodyRecompInsight.waistSlopeCmPerWeek > 0 ? 'var(--danger-light)' : '#fff' }}>
                   {bodyRecompInsight.waistSlopeCmPerWeek > 0 ? '+' : ''}{bodyRecompInsight.waistSlopeCmPerWeek} cm
                 </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
-                <span style={{ color: 'rgba(255,255,255,0.6)' }}>Waga (trend/tydzień)</span>
+                <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("Waga (trend/tydzień)")}</span>
                 <span style={{ fontWeight: '700', color: '#fff' }}>
                   {bodyRecompInsight.weightSlopeKgPerWeek > 0 ? '+' : ''}{bodyRecompInsight.weightSlopeKgPerWeek} kg
                 </span>
@@ -2319,14 +2319,14 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {strainAlert && strainAlert.hasEnoughData && strainAlert.alert && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">⚠️ Sygnały przeciążenia</span>
+              <span className="premium-title">{t("⚠️ Sygnały przeciążenia")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'var(--danger-light)', marginTop: '2px', marginBottom: '10px', fontWeight: 600 }}>
               Dziś częstość oddechów, odchylenie temperatury i gotowość naraz odbiegają od Twojej średniej z ostatnich {strainAlert.baselineDays} dni - możliwy sygnał przetrenowania lub początku infekcji.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
-                <span style={{ color: 'rgba(255,255,255,0.6)' }}>Częstość oddechów</span>
+                <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("Częstość oddechów")}</span>
                 <span style={{ fontWeight: '700', color: '#fff' }}>{strainAlert.today.respiratoryRate} vs śr. {strainAlert.baseline.avgRespiratoryRate}</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
@@ -2334,7 +2334,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 <span style={{ fontWeight: '700', color: '#fff' }}>{strainAlert.today.temperatureDeviation}°C vs śr. {strainAlert.baseline.avgTemperatureDeviation}°C</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
-                <span style={{ color: 'rgba(255,255,255,0.6)' }}>Gotowość</span>
+                <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("Gotowość")}</span>
                 <span style={{ fontWeight: '700', color: '#fff' }}>{strainAlert.today.readinessScore} vs śr. {strainAlert.baseline.avgReadinessScore}</span>
               </div>
             </div>
@@ -2348,7 +2348,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && stressNutritionInsight && stressNutritionInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">😰 Stres → odżywianie</span>
+              <span className="premium-title">{t("😰 Stres → odżywianie")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Dni z minutami wysokiego stresu ≥ Twojej mediany ({stressNutritionInsight.medianStressMinutes} min) vs poniżej mediany, ten sam dzień - ostatnie 90 dni
@@ -2386,7 +2386,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {mealFreqInsight && mealFreqInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🍽️ Częstość posiłków → cel</span>
+              <span className="premium-title">{t("🍽️ Częstość posiłków → cel")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Dni, w których trafiłeś w cel kaloryczny (±15%) vs dni, w których nie - ostatnie 90 dni
@@ -2448,7 +2448,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && rhrDriftInsight && rhrDriftInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">❤️ Trend tętna spoczynkowego</span>
+              <span className="premium-title">{t("❤️ Trend tętna spoczynkowego")}</span>
             </div>
             {getDayEventLabelForDate(selectedDate, ['illness']) && (
               <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
@@ -2483,7 +2483,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && mealTimingSleepInsight && mealTimingSleepInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🍽️ Godzina posiłku → sen</span>
+              <span className="premium-title">{t("🍽️ Godzina posiłku → sen")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Twoja mediana godziny ostatniego posiłku to {mealTimingSleepInsight.medianLastMealHour}. Porównanie snu w dniach z późniejszym ({mealTimingSleepInsight.laterEatingDays} dni) vs wcześniejszym ({mealTimingSleepInsight.earlierEatingDays} dni) ostatnim posiłkiem.
@@ -2520,7 +2520,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {bpTrendInsight && bpTrendInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🩺 Trend ciśnienia krwi</span>
+              <span className="premium-title">{t("🩺 Trend ciśnienia krwi")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Średnie ciśnienie z ostatnich {bpTrendInsight.recentDays} dni vs Twoja własna baseline z poprzedzających {bpTrendInsight.baselineDays} dni.
@@ -2665,7 +2665,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Energia</span>
               <div style={{ display: 'flex', gap: '8px' }}>
-                {[['😴','Bardzo niska'],['😕','Niska'],['😐','Średnia'],['😊','Wysoka'],['⚡','Bardzo wysoka']].map(([emoji, label], i) => {
+                {[['😴',t('Bardzo niska')],['😕',t('Niska')],['😐',t('Średnia')],['😊',t('Wysoka')],['⚡',t('Bardzo wysoka')]].map(([emoji, label], i) => {
                   const val = i + 1;
                   const isActive = energyLevel === val;
                   return (
@@ -2683,9 +2683,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </div>
             {/* Wiersz: Nastrój */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Nastrój</span>
+              <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{t("Nastrój")}</span>
               <div style={{ display: 'flex', gap: '8px' }}>
-                {[['😞','Bardzo zły'],['😔','Zły'],['😐','Neutralny'],['🙂','Dobry'],['😄','Świetny']].map(([emoji, label], i) => {
+                {[['😞',t('Bardzo zły')],['😔',t('Zły')],['😐',t('Neutralny')],['🙂',t('Dobry')],['😄',t('Świetny')]].map(([emoji, label], i) => {
                   const val = i + 1;
                   const isActive = moodLevel === val;
                   return (
@@ -2703,11 +2703,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </div>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '2px' }}>
               <span style={{ fontSize: '0.75rem', color: feelingMessage.type === 'success' ? 'var(--color-secondary)' : feelingMessage.type === 'error' ? 'var(--danger)' : 'rgba(255,255,255,0.3)' }}>
-                {feelingMessage.text || 'Dane pomogą AI w analizie Twojego samopoczucia'}
+                {feelingMessage.text || t('Dane pomogą AI w analizie Twojego samopoczucia')}
               </span>
               <button className="btn-primary" disabled={isSavingFeeling} onClick={handleSaveFeeling}
                 style={{ padding: '6px 18px', fontSize: '0.8rem' }}>
-                {isSavingFeeling ? 'Zapisywanie...' : 'Zapisz'}
+                {isSavingFeeling ? t('Zapisywanie...') : 'Zapisz'}
               </button>
             </div>
           </div>
@@ -2717,7 +2717,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {hrZonesInsight && hrZonesInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🔥 Realne strefy kardio z treningów</span>
+              <span className="premium-title">{t("🔥 Realne strefy kardio z treningów")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Suma minut w strefach tętna zmierzonych podczas {hrZonesInsight.workoutsWithZoneData} treningów z ostatnich {hrZonesInsight.windowDays} dni (zegarek, nie szacowanie).
@@ -2753,7 +2753,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {mealQualityTrendInsight && mealQualityTrendInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🥗 Trend jakości posiłków</span>
+              <span className="premium-title">{t("🥗 Trend jakości posiłków")}</span>
             </div>
             {getDayEventLabelForDate(selectedDate, ['vacation']) && (
               <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
@@ -2839,7 +2839,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {workoutEfficiencyInsight && workoutEfficiencyInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">⚡ Efektywność kalorii per trening</span>
+              <span className="premium-title">{t("⚡ Efektywność kalorii per trening")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Średnie spalanie kcal/min wg typu treningu - ostatnie {workoutEfficiencyInsight.windowDays} dni.
@@ -2859,7 +2859,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {favoriteMealDriftInsight && favoriteMealDriftInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🔁 Stabilność ulubionych posiłków</span>
+              <span className="premium-title">{t("🔁 Stabilność ulubionych posiłków")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Posiłki zapisywane pod tym samym opisem - porównanie starszych i nowszych wystąpień (ostatnie 180 dni,
@@ -2945,7 +2945,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {isLoadingSelfBenchmark && !selfBenchmarkInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">📊 Ty dziś vs Ty w przeszłości</span>
+              <span className="premium-title">{t("📊 Ty dziś vs Ty w przeszłości")}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' }}>
               <div className="shimmer-placeholder" style={{ height: '14px', width: '80%' }} />
@@ -2956,7 +2956,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && selfBenchmarkInsight && selfBenchmarkInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">📊 Ty dziś vs Ty w przeszłości</span>
+              <span className="premium-title">{t("📊 Ty dziś vs Ty w przeszłości")}</span>
             </div>
             {getDayEventLabelForDate(selectedDate, ['illness']) && (
               <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
@@ -2970,7 +2970,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               <span style={{ color: 'rgba(255,255,255,0.6)' }}>
                 {selfBenchmarkInsight.best.label}
                 {selfBenchmarkInsight.best.higherIsBetter === false && (
-                  <span style={{ color: 'rgba(255,255,255,0.35)' }}> (niżej = lepiej)</span>
+                  <span style={{ color: 'rgba(255,255,255,0.35)' }}>{t("(niżej = lepiej)")}</span>
                 )}
                 {selfBenchmarkInsight.best.todayValue != null && (
                   <span style={{ color: 'rgba(255,255,255,0.35)' }}> · {selfBenchmarkInsight.best.todayValue}{selfBenchmarkInsight.best.unit ? ` ${selfBenchmarkInsight.best.unit}` : ''}</span>
@@ -2985,7 +2985,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 <span style={{ color: 'rgba(255,255,255,0.6)' }}>
                   {selfBenchmarkInsight.worst.label}
                   {selfBenchmarkInsight.worst.higherIsBetter === false && (
-                    <span style={{ color: 'rgba(255,255,255,0.35)' }}> (niżej = lepiej)</span>
+                    <span style={{ color: 'rgba(255,255,255,0.35)' }}>{t("(niżej = lepiej)")}</span>
                   )}
                   {selfBenchmarkInsight.worst.todayValue != null && (
                     <span style={{ color: 'rgba(255,255,255,0.35)' }}> · {selfBenchmarkInsight.worst.todayValue}{selfBenchmarkInsight.worst.unit ? ` ${selfBenchmarkInsight.worst.unit}` : ''}</span>
@@ -3004,11 +3004,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {!isLoadingSelfBenchmark && selfBenchmarkInsight && !selfBenchmarkInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">📊 Ty dziś vs Ty w przeszłości</span>
+              <span className="premium-title">{t("📊 Ty dziś vs Ty w przeszłości")}</span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '8px 0', marginBottom: 0 }}>
               {selfBenchmarkInsight.reason === 'no_data_for_date'
-                ? 'Brak danych zdrowia/posiłków dla tego dnia.'
+                ? t('Brak danych zdrowia/posiłków dla tego dnia.')
                 : `Za mało dni z historią do porównania (min. ${selfBenchmarkInsight.minDaysRequired || 14}).`}
             </p>
           </div>
@@ -3051,7 +3051,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {whrInsight && whrInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">📏 Wskaźnik WHR (pas/biodra)</span>
+              <span className="premium-title">{t("📏 Wskaźnik WHR (pas/biodra)")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Z {whrInsight.measurements} pomiarów obwodów z ostatniego roku (najnowszy: {whrInsight.latestDate}).
@@ -3077,13 +3077,13 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {bodySymmetryInsight && bodySymmetryInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">💪 Symetria bicepsów</span>
+              <span className="premium-title">{t("💪 Symetria bicepsów")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Z {bodySymmetryInsight.measurements} pomiarów (lewy vs prawy biceps), najnowszy: {bodySymmetryInsight.latestDate}.
             </p>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
-              <span style={{ color: 'rgba(255,255,255,0.6)' }}>Średnia różnica (L - P)</span>
+              <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("Średnia różnica (L - P)")}</span>
               <span style={{ fontWeight: '700', color: bodySymmetryInsight.isAsymmetric ? 'var(--danger-light)' : 'var(--success-light)' }}>
                 {bodySymmetryInsight.avgDiffCm > 0 ? '+' : ''}{bodySymmetryInsight.avgDiffCm} cm
               </span>
@@ -3126,7 +3126,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {workoutVarietyInsight && workoutVarietyInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🎲 Różnorodność treningów</span>
+              <span className="premium-title">{t("🎲 Różnorodność treningów")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Rozkład typów treningów z ostatnich 60 dni ({workoutVarietyInsight.totalWorkouts} treningów, {workoutVarietyInsight.distinctTypes} dyscyplin).
@@ -3210,7 +3210,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {isLoadingMuscleProtein && !muscleProteinInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">💪🥩 Masa mięśniowa vs białko</span>
+              <span className="premium-title">{t("💪🥩 Masa mięśniowa vs białko")}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' }}>
               <div className="shimmer-placeholder" style={{ height: '14px', width: '80%' }} />
@@ -3221,13 +3221,13 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {muscleProteinInsight && muscleProteinInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">💪🥩 Masa mięśniowa vs białko</span>
+              <span className="premium-title">{t("💪🥩 Masa mięśniowa vs białko")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Trend masy mięśniowej z ostatnich {muscleProteinInsight.muscleSpanDays} dni ({muscleProteinInsight.muscleMeasurements} pomiarów) i Twoje śr. spożycie białka ({muscleProteinInsight.proteinLoggedDays} dni z logiem).
             </p>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem', marginBottom: '8px' }}>
-              <span style={{ color: 'rgba(255,255,255,0.6)' }}>Trend masy mięśniowej</span>
+              <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("Trend masy mięśniowej")}</span>
               <span style={{ fontWeight: '700', color: muscleProteinInsight.muscleTrend === 'up' ? 'var(--success-light)' : muscleProteinInsight.muscleTrend === 'down' ? 'var(--danger-light)' : '#fff' }}>
                 {muscleProteinInsight.muscleSlopeKgPerWeek > 0 ? '+' : ''}{muscleProteinInsight.muscleSlopeKgPerWeek} kg/tydz.
               </span>
@@ -3239,7 +3239,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               </span>
               {muscleProteinInsight.proteinAdequate !== null && (
                 <span style={{ fontWeight: '700', color: muscleProteinInsight.proteinAdequate ? 'var(--success-light)' : 'var(--danger-light)' }}>
-                  {muscleProteinInsight.proteinAdequate ? 'wystarczające' : `poniżej ${muscleProteinInsight.adequateProteinThresholdGPerKg} g/kg`}
+                  {muscleProteinInsight.proteinAdequate ? t('wystarczające') : `poniżej ${muscleProteinInsight.adequateProteinThresholdGPerKg} g/kg`}
                 </span>
               )}
             </div>
@@ -3248,14 +3248,14 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {!isLoadingMuscleProtein && muscleProteinInsight && !muscleProteinInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">💪🥩 Masa mięśniowa vs białko</span>
+              <span className="premium-title">{t("💪🥩 Masa mięśniowa vs białko")}</span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '8px 0', marginBottom: 0 }}>
               {muscleProteinInsight.reason === 'not_enough_data'
-                ? 'Za mało pomiarów masy mięśniowej lub dni z zalogowanym białkiem.'
+                ? t('Za mało pomiarów masy mięśniowej lub dni z zalogowanym białkiem.')
                 : muscleProteinInsight.reason === 'span_too_short'
-                ? 'Pomiary masy mięśniowej obejmują za krótki okres.'
-                : 'Brak wyraźnego trendu masy mięśniowej w tym okresie.'}
+                ? t('Pomiary masy mięśniowej obejmują za krótki okres.')
+                : t('Brak wyraźnego trendu masy mięśniowej w tym okresie.')}
             </p>
           </div>
         )}
@@ -3304,8 +3304,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               {temperatureDivergenceInsight.reason === 'no_wrist_temperature_data'
                 ? 'Brak danych z czujnika temperatury Apple Watch (Series 8+/Ultra).'
                 : temperatureDivergenceInsight.reason === 'not_enough_decisive_days'
-                ? 'Odczyty z obu źródeł są zbyt blisko własnej średniej (szum pomiaru), by ocenić zgodność kierunku wychylenia.'
-                : 'Za mało dni z odczytami temperatury z obu źródeł jednocześnie.'}
+                ? t('Odczyty z obu źródeł są zbyt blisko własnej średniej (szum pomiaru), by ocenić zgodność kierunku wychylenia.')
+                : t('Za mało dni z odczytami temperatury z obu źródeł jednocześnie.')}
             </p>
           </div>
         )}
@@ -3314,7 +3314,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {isLoadingBodyProportions && !bodyProportionsInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">📐 Proporcje obwodów ciała</span>
+              <span className="premium-title">{t("📐 Proporcje obwodów ciała")}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' }}>
               <div className="shimmer-placeholder" style={{ height: '14px', width: '80%' }} />
@@ -3325,7 +3325,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {bodyProportionsInsight && bodyProportionsInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">📐 Proporcje obwodów ciała</span>
+              <span className="premium-title">{t("📐 Proporcje obwodów ciała")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Zmiana proporcji obwodów między pierwszym i ostatnim pomiarem z ostatniego roku. Punkt odniesienia z fizjologii sportu (Adonis Index): ~{bodyProportionsInsight.referenceGoldenRatio}.
@@ -3355,7 +3355,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {!isLoadingBodyProportions && bodyProportionsInsight && !bodyProportionsInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">📐 Proporcje obwodów ciała</span>
+              <span className="premium-title">{t("📐 Proporcje obwodów ciała")}</span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '8px 0', marginBottom: 0 }}>
               Za mało pomiarów obwodów (barki/klatka i talia), by ocenić zmianę proporcji w czasie.
@@ -3367,7 +3367,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {isLoadingActivityAppetite && !activityAppetiteInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🔥🍽️ Aktywność dnia vs apetyt</span>
+              <span className="premium-title">{t("🔥🍽️ Aktywność dnia vs apetyt")}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' }}>
               <div className="shimmer-placeholder" style={{ height: '14px', width: '80%' }} />
@@ -3378,7 +3378,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {activityAppetiteInsight && activityAppetiteInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🔥🍽️ Aktywność dnia vs apetyt</span>
+              <span className="premium-title">{t("🔥🍽️ Aktywność dnia vs apetyt")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Śr. kalorie z posiłków w dniach bardziej aktywnych ({activityAppetiteInsight.moreActiveDays} dni, ≥{activityAppetiteInsight.medianActiveCalories} kcal aktywności) vs mniej aktywnych ({activityAppetiteInsight.lessActiveDays} dni).
@@ -3396,7 +3396,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {!isLoadingActivityAppetite && activityAppetiteInsight && !activityAppetiteInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🔥🍽️ Aktywność dnia vs apetyt</span>
+              <span className="premium-title">{t("🔥🍽️ Aktywność dnia vs apetyt")}</span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '8px 0', marginBottom: 0 }}>
               Za mało dni z danymi o aktywności i posiłkach do porównania.
@@ -3408,7 +3408,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {isLoadingDietQualityWeightPace && !dietQualityWeightPaceInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🥗⚖️ Jakość diety i tempo zmiany wagi</span>
+              <span className="premium-title">{t("🥗⚖️ Jakość diety i tempo zmiany wagi")}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' }}>
               <div className="shimmer-placeholder" style={{ height: '14px', width: '80%' }} />
@@ -3419,13 +3419,13 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {dietQualityWeightPaceInsight && dietQualityWeightPaceInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🥗⚖️ Jakość diety i tempo zmiany wagi</span>
+              <span className="premium-title">{t("🥗⚖️ Jakość diety i tempo zmiany wagi")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Śr. ocena jakości {dietQualityWeightPaceInsight.ratedMeals} posiłków i tempo zmiany wagi z ostatnich {dietQualityWeightPaceInsight.weightSpanDays} dni ({dietQualityWeightPaceInsight.weightMeasurements} pomiarów) - dwa niezależne fakty z tego okresu.
             </p>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem', marginBottom: '8px' }}>
-              <span style={{ color: 'rgba(255,255,255,0.6)' }}>Śr. ocena posiłków</span>
+              <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("Śr. ocena posiłków")}</span>
               <span style={{ fontWeight: '700', color: dietQualityWeightPaceInsight.dietQuality === 'high' ? 'var(--success-light)' : dietQualityWeightPaceInsight.dietQuality === 'low' ? 'var(--danger-light)' : '#fff' }}>
                 {dietQualityWeightPaceInsight.avgMealRating}/10
               </span>
@@ -3441,14 +3441,14 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {!isLoadingDietQualityWeightPace && dietQualityWeightPaceInsight && !dietQualityWeightPaceInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🥗⚖️ Jakość diety i tempo zmiany wagi</span>
+              <span className="premium-title">{t("🥗⚖️ Jakość diety i tempo zmiany wagi")}</span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '8px 0', marginBottom: 0 }}>
               {dietQualityWeightPaceInsight.reason === 'not_enough_data'
-                ? 'Za mało ocenionych posiłków lub pomiarów wagi.'
+                ? t('Za mało ocenionych posiłków lub pomiarów wagi.')
                 : dietQualityWeightPaceInsight.reason === 'span_too_short'
-                ? 'Pomiary wagi obejmują za krótki okres.'
-                : 'Brak wyraźnego trendu wagi w tym okresie.'}
+                ? t('Pomiary wagi obejmują za krótki okres.')
+                : t('Brak wyraźnego trendu wagi w tym okresie.')}
             </p>
           </div>
         )}
@@ -3502,8 +3502,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </div>
             <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '8px 0', marginBottom: 0 }}>
               {streakWeightEffectInsight.reason === 'not_enough_data_per_group'
-                ? 'Za mało pomiarów wagi w grupie z passą lub bez passy do porównania.'
-                : 'Brak wyraźnego trendu wagi w jednej z grup.'}
+                ? t('Za mało pomiarów wagi w grupie z passą lub bez passy do porównania.')
+                : t('Brak wyraźnego trendu wagi w jednej z grup.')}
             </p>
           </div>
         )}
@@ -3512,7 +3512,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {isLoadingSedentaryPerformance && !sedentaryPerformanceInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🪑🏋️ Siedzenie vs wydajność treningu</span>
+              <span className="premium-title">{t("🪑🏋️ Siedzenie vs wydajność treningu")}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' }}>
               <div className="shimmer-placeholder" style={{ height: '14px', width: '80%' }} />
@@ -3523,7 +3523,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {sedentaryPerformanceInsight && sedentaryPerformanceInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🪑🏋️ Siedzenie vs wydajność treningu</span>
+              <span className="premium-title">{t("🪑🏋️ Siedzenie vs wydajność treningu")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Wydajność treningu (kcal/min) w dniach z większą ilością siedzenia (≥{sedentaryPerformanceInsight.medianSedentaryMinutes} min, {sedentaryPerformanceInsight.moreSittingWorkoutDays} dni treningowych) vs mniejszą ({sedentaryPerformanceInsight.lessSittingWorkoutDays} dni).
@@ -3541,7 +3541,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {!isLoadingSedentaryPerformance && sedentaryPerformanceInsight && !sedentaryPerformanceInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🪑🏋️ Siedzenie vs wydajność treningu</span>
+              <span className="premium-title">{t("🪑🏋️ Siedzenie vs wydajność treningu")}</span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '8px 0', marginBottom: 0 }}>
               Za mało dni treningowych z danymi o siedzeniu do porównania.
@@ -3553,7 +3553,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && isLoadingWaterSleep && !waterSleepInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">💧😴 Woda a jakość snu</span>
+              <span className="premium-title">{t("💧😴 Woda a jakość snu")}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' }}>
               <div className="shimmer-placeholder" style={{ height: '14px', width: '80%' }} />
@@ -3564,7 +3564,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && waterSleepInsight && waterSleepInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">💧😴 Woda a jakość snu</span>
+              <span className="premium-title">{t("💧😴 Woda a jakość snu")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.55)', marginBottom: '8px' }}>
               Dni z hydratacją ≥{waterSleepInsight.medianWaterMl} ml ({waterSleepInsight.wellHydratedDays} dni) vs &lt;{waterSleepInsight.medianWaterMl} ml ({waterSleepInsight.lessHydratedDays} dni). Ostatnie {waterSleepInsight.totalDays} dni.
@@ -3593,9 +3593,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                   {waterSleepInsight.sleepScoreDiff > 0 ? '+' : ''}{waterSleepInsight.sleepScoreDiff} pkt
                 </span>
                 {waterSleepInsight.sleepScoreDiff > 2
-                  ? ' — lepsze nawodnienie wyraźnie poprawia sen.'
+                  ? t(' — lepsze nawodnienie wyraźnie poprawia sen.')
                   : waterSleepInsight.sleepScoreDiff < -2
-                    ? ' — brak wyraźnego efektu nawodnienia na sen.'
+                    ? t(' — brak wyraźnego efektu nawodnienia na sen.')
                     : ' — efekt nawodnienia na sen jest nieznaczny.'}
               </div>
             )}
@@ -3604,7 +3604,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && !isLoadingWaterSleep && waterSleepInsight && !waterSleepInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">💧😴 Woda a jakość snu</span>
+              <span className="premium-title">{t("💧😴 Woda a jakość snu")}</span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '8px 0', marginBottom: 0 }}>
               Za mało dni z danymi o hydratacji i śnie (min. 14 dni).
@@ -3616,7 +3616,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && sleepWorkoutPerfInsight && sleepWorkoutPerfInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">😴🏃 Sen → wydajność treningu</span>
+              <span className="premium-title">{t("😴🏃 Sen → wydajność treningu")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.55)', marginBottom: '10px' }}>
               Wydajność (kcal/min) po nocach z dobrym snem (score ≥{sleepWorkoutPerfInsight.goodSleepThreshold}) vs słabym (≤{sleepWorkoutPerfInsight.poorSleepThreshold}).
@@ -3624,12 +3624,12 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </p>
             <div className="premium-grid-2" style={{ gap: '8px' }}>
               <div style={{ background: 'rgba(74,222,128,0.08)', borderRadius: '8px', padding: '8px 10px' }}>
-                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>Po dobrym śnie</div>
+                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>{t("Po dobrym śnie")}</div>
                 <div style={{ fontSize: '1.2rem', fontWeight: '700', color: 'var(--success-light)' }}>{sleepWorkoutPerfInsight.avgKcalPerMinAfterGoodSleep}</div>
                 <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)' }}>kcal/min</div>
               </div>
               <div style={{ background: 'rgba(248,113,113,0.08)', borderRadius: '8px', padding: '8px 10px' }}>
-                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>Po słabym śnie</div>
+                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>{t("Po słabym śnie")}</div>
                 <div style={{ fontSize: '1.2rem', fontWeight: '700', color: 'var(--danger-light)' }}>{sleepWorkoutPerfInsight.avgKcalPerMinAfterPoorSleep}</div>
                 <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)' }}>kcal/min</div>
               </div>
@@ -3641,9 +3641,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 </span>
                 {Math.abs(sleepWorkoutPerfInsight.diff) >= 1
                   ? (sleepWorkoutPerfInsight.diff > 0
-                      ? ' — po lepszym śnie ćwiczysz wydajniej.'
-                      : ' — jakość snu nie widoczna na wydajności w Twoich danych.')
-                  : ' — brak wyraźnej różnicy w Twoich danych.'}
+                      ? t(' — po lepszym śnie ćwiczysz wydajniej.')
+                      : t(' — jakość snu nie widoczna na wydajności w Twoich danych.'))
+                  : t(' — brak wyraźnej różnicy w Twoich danych.')}
               </div>
             )}
             <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', marginTop: '8px', marginBottom: 0 }}>
@@ -3654,7 +3654,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && sleepWorkoutPerfInsight && !sleepWorkoutPerfInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">😴🏃 Sen → wydajność treningu</span>
+              <span className="premium-title">{t("😴🏃 Sen → wydajność treningu")}</span>
             </div>
             <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)', textAlign: 'center', padding: '8px 0', marginBottom: 0 }}>
               Za mało danych (potrzeba min. {sleepWorkoutPerfInsight.minRequired ?? 5} treningów po dobrym i złym śnie). Masz: {sleepWorkoutPerfInsight.goodSleepDays ?? 0} vs {sleepWorkoutPerfInsight.poorSleepDays ?? 0}.
@@ -3666,7 +3666,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {summary?.has_oura && readinessWorkoutInsight && readinessWorkoutInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🎯 Gotowość → wydajność treningu</span>
+              <span className="premium-title">{t("🎯 Gotowość → wydajność treningu")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.55)', marginBottom: '10px' }}>
               Wydajność (kcal/min) przy wysokiej gotowości Oura (≥{readinessWorkoutInsight.highReadinessThreshold} pkt) vs niskiej (≤{readinessWorkoutInsight.lowReadinessThreshold} pkt).
@@ -3674,12 +3674,12 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </p>
             <div className="premium-grid-2" style={{ gap: '8px' }}>
               <div style={{ background: 'rgba(74,222,128,0.08)', borderRadius: '8px', padding: '8px 10px' }}>
-                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>Wysoka gotowość</div>
+                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>{t("Wysoka gotowość")}</div>
                 <div style={{ fontSize: '1.2rem', fontWeight: '700', color: 'var(--success-light)' }}>{readinessWorkoutInsight.avgKcalPerMinHighReadiness}</div>
                 <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)' }}>kcal/min</div>
               </div>
               <div style={{ background: 'rgba(248,113,113,0.08)', borderRadius: '8px', padding: '8px 10px' }}>
-                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>Niska gotowość</div>
+                <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>{t("Niska gotowość")}</div>
                 <div style={{ fontSize: '1.2rem', fontWeight: '700', color: 'var(--danger-light)' }}>{readinessWorkoutInsight.avgKcalPerMinLowReadiness}</div>
                 <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)' }}>kcal/min</div>
               </div>
@@ -3691,9 +3691,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 </span>
                 {Math.abs(readinessWorkoutInsight.diff) >= 1
                   ? (readinessWorkoutInsight.diff > 0
-                      ? ' — wyższy readiness przekłada się na lepszy trening.'
-                      : ' — score gotowości nie widoczny na wydajności w Twoich danych.')
-                  : ' — brak wyraźnej korelacji.'}
+                      ? t(' — wyższy readiness przekłada się na lepszy trening.')
+                      : t(' — score gotowości nie widoczny na wydajności w Twoich danych.'))
+                  : t(' — brak wyraźnej korelacji.')}
               </div>
             )}
             <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', marginTop: '8px', marginBottom: 0 }}>
@@ -3706,7 +3706,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {hrPolarizationInsight && hrPolarizationInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">📊 Polaryzacja stref tętna</span>
+              <span className="premium-title">{t("📊 Polaryzacja stref tętna")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.55)', marginBottom: '10px' }}>
               Rozkład wysiłku w strefach z ostatnich {hrPolarizationInsight.lookbackDays} dni ({hrPolarizationInsight.workoutsAnalyzed} treningów, {hrPolarizationInsight.totalZoneMinutes} min ze strefami).
@@ -3717,8 +3717,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 { label: 'Z1 Regeneracja', pct: hrPolarizationInsight.zone1Pct, color: '#38bdf8' },
                 { label: 'Z2 Aerobowa', pct: hrPolarizationInsight.zone2Pct, color: '#4ade80' },
                 { label: 'Z3 Tempo / "szara strefa"', pct: hrPolarizationInsight.zone3Pct, color: '#fbbf24' },
-                { label: 'Z4 Próg anaerobowy', pct: hrPolarizationInsight.zone4Pct, color: '#fb923c' },
-                { label: 'Z5 Maks. wysiłek', pct: hrPolarizationInsight.zone5Pct, color: '#f87171' },
+                { label: t('Z4 Próg anaerobowy'), pct: hrPolarizationInsight.zone4Pct, color: '#fb923c' },
+                { label: t('Z5 Maks. wysiłek'), pct: hrPolarizationInsight.zone5Pct, color: '#f87171' },
               ].map(({ label, pct, color }) => (
                 <div key={label}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', marginBottom: '3px' }}>
@@ -3736,11 +3736,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 {hrPolarizationInsight.isWellPolarized
                   ? '✅ Dobra polaryzacja'
                   : hrPolarizationInsight.tooMuchGrayZone
-                    ? '⚠️ Za dużo "szarej strefy" (Z3)'
+                    ? t('⚠️ Za dużo "szarej strefy" (Z3)')
                     : '⚠️ Nieoptymalna polaryzacja'}
               </span>
               {hrPolarizationInsight.tooMuchGrayZone && (
-                <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.75rem' }}> — spróbuj więcej wolnego cardio lub krótkich interwałów Z4-5 zamiast ciągłego Z3.</span>
+                <span style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.75rem' }}>{t("— spróbuj więcej wolnego cardio lub krótkich interwałów Z4-5 zamiast ciągłego Z3.")}</span>
               )}
             </div>
           </div>
@@ -3758,7 +3758,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {workoutRecoveryHrvInsight.avgHrvDay1 != null && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
-                  <span style={{ color: 'rgba(255,255,255,0.6)' }}>HRV dzień +1 vs baseline</span>
+                  <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("HRV dzień +1 vs baseline")}</span>
                   <span style={{ fontWeight: '700', color: (workoutRecoveryHrvInsight.hrvDiff1 ?? 0) < -3 ? 'var(--danger-light)' : (workoutRecoveryHrvInsight.hrvDiff1 ?? 0) > 3 ? 'var(--success-light)' : '#fff' }}>
                     {workoutRecoveryHrvInsight.avgHrvDay1} ms
                     {workoutRecoveryHrvInsight.hrvDiff1 != null && (
@@ -3769,7 +3769,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               )}
               {workoutRecoveryHrvInsight.avgHrvDay2 != null && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
-                  <span style={{ color: 'rgba(255,255,255,0.6)' }}>HRV dzień +2</span>
+                  <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("HRV dzień +2")}</span>
                   <span style={{ fontWeight: '700', color: (workoutRecoveryHrvInsight.hrvDiff2 ?? 0) < -3 ? 'var(--danger-light)' : (workoutRecoveryHrvInsight.hrvDiff2 ?? 0) > 3 ? 'var(--success-light)' : '#fff' }}>
                     {workoutRecoveryHrvInsight.avgHrvDay2} ms
                     {workoutRecoveryHrvInsight.hrvDiff2 != null && (
@@ -3780,7 +3780,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               )}
               {workoutRecoveryHrvInsight.avgRhrDay1 != null && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
-                  <span style={{ color: 'rgba(255,255,255,0.6)' }}>RHR dzień +1 vs baseline</span>
+                  <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("RHR dzień +1 vs baseline")}</span>
                   <span style={{ fontWeight: '700', color: (workoutRecoveryHrvInsight.rhrDiff1 ?? 0) > 3 ? 'var(--danger-light)' : (workoutRecoveryHrvInsight.rhrDiff1 ?? 0) < -3 ? 'var(--success-light)' : '#fff' }}>
                     {workoutRecoveryHrvInsight.avgRhrDay1} bpm
                     {workoutRecoveryHrvInsight.rhrDiff1 != null && (
@@ -3800,7 +3800,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {workoutRestPerfInsight && workoutRestPerfInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
-              <span className="premium-title">🗓️ Przerwa → wydajność treningu</span>
+              <span className="premium-title">{t("🗓️ Przerwa → wydajność treningu")}</span>
             </div>
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.55)', marginBottom: '10px' }}>
               Wydajność (kcal/min) po 0–1 dniach przerwy vs po 2+ dniach odpoczynku.
@@ -3825,9 +3825,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 </span>
                 {Math.abs(workoutRestPerfInsight.diff) >= 1
                   ? (workoutRestPerfInsight.diff > 0
-                      ? ' — dłuższy odpoczynek wyraźnie poprawia wydajność.'
-                      : ' — krótsze przerwy dają lepszą wydajność w Twoich danych.')
-                  : ' — przerwa nie ma wyraźnego wpływu na wydajność.'}
+                      ? t(' — dłuższy odpoczynek wyraźnie poprawia wydajność.')
+                      : t(' — krótsze przerwy dają lepszą wydajność w Twoich danych.'))
+                  : t(' — przerwa nie ma wyraźnego wpływu na wydajność.')}
               </div>
             )}
             <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', marginTop: '8px', marginBottom: 0 }}>
@@ -3885,7 +3885,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             ) : (
               <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', textAlign: 'center', padding: '8px 0', marginBottom: 0 }}>
                 {weightGoalForecast.reason === 'no_target_weight_set' ? (
-                  'Ustaw swój cel wagi w Ustawieniach, aby aktywować prognozę.'
+                  t('Ustaw swój cel wagi w Ustawieniach, aby aktywować prognozę.')
                 ) : (
                   `Za mało pomiarów wagi w ostatnich 60 dniach (zalogowano: ${weightGoalForecast.weightMeasurements || 0} z wymaganych 4 przez co najmniej 14 dni).`
                 )}
@@ -3909,7 +3909,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                   </p>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
-                      <span style={{ color: 'rgba(255,255,255,0.6)' }}>Bilans z logów</span>
+                      <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("Bilans z logów")}</span>
                       <span style={{ fontWeight: '700', color: '#fff' }}>{calorieSuggestion.loggedDailyBalance > 0 ? '+' : ''}{calorieSuggestion.loggedDailyBalance} kcal/dzień</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem' }}>
@@ -3932,7 +3932,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                     disabled={isApplyingCalorieSuggestion}
                     style={{ marginTop: '12px', width: '100%', padding: '8px 14px', fontSize: '0.85rem' }}
                   >
-                    {isApplyingCalorieSuggestion ? 'Zapisywanie...' : `Zastosuj cel ${calorieSuggestion.suggestedTargetCalories} kcal`}
+                    {isApplyingCalorieSuggestion ? t('Zapisywanie...') : `Zastosuj cel ${calorieSuggestion.suggestedTargetCalories} kcal`}
                   </button>
                   <p style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.3)', marginTop: '10px', marginBottom: 0 }}>
                     Sugestia oparta na Twoich danych z ostatnich tygodni, nie porada medyczna. Zawsze możesz ustawić cel ręcznie w Aktywności.
@@ -3997,7 +3997,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <input
               type="number"
               min="1"
-              placeholder="Własna (ml)"
+              placeholder={t("Własna (ml)")}
               value={customWaterAmount}
               onChange={(e) => setCustomWaterAmount(e.target.value)}
               style={{
@@ -4088,7 +4088,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </div>
 
             <textarea
-              placeholder="Wpisz przyjmowane suplementy (np. Kreatyna, Omega-3, Wit. D3, Białko)..."
+              placeholder={t("Wpisz przyjmowane suplementy (np. Kreatyna, Omega-3, Wit. D3, Białko)...")}
               value={supplementsText}
               onChange={(e) => setSupplementsText(e.target.value)}
               rows={3}
@@ -4106,7 +4106,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             />
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '0.75rem', color: supplementsMessage.type === 'success' ? 'var(--color-secondary)' : supplementsMessage.type === 'error' ? 'var(--danger)' : 'rgba(255,255,255,0.3)' }}>
-                {supplementsMessage.text || 'Zapisz, aby AI wzięło je pod uwagę'}
+                {supplementsMessage.text || t('Zapisz, aby AI wzięło je pod uwagę')}
               </span>
               <button
                 type="button"
@@ -4115,7 +4115,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 onClick={handleSaveSupplements}
                 style={{ padding: '8px 16px', fontSize: '0.8rem' }}
               >
-                {isSavingSupplements ? 'Zapisywanie...' : 'Zapisz'}
+                {isSavingSupplements ? t('Zapisywanie...') : 'Zapisz'}
               </button>
             </div>
 
@@ -4282,7 +4282,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {/* ODŻYWIANIE (NUTRITION) */}
         <div className="premium-card">
           <div className="premium-title-row">
-            <span className="premium-title">Odżywianie</span>
+            <span className="premium-title">{t("Odżywianie")}</span>
             <span className="premium-title-info">▶</span>
           </div>
 
@@ -4321,7 +4321,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '2px' }}>
-                  <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>Węglowodany</span>
+                  <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>{t("Węglowodany")}</span>
                   <span style={{ fontWeight: '700' }}>{Math.round(eatenCarbs)}g / {targetCarbs}g</span>
                 </div>
                 <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
@@ -4330,7 +4330,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               </div>
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '2px' }}>
-                  <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>Białko</span>
+                  <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>{t("Białko")}</span>
                   <span style={{ fontWeight: '700' }}>{Math.round(eatenProtein)}g / {targetProtein}g</span>
                 </div>
                 <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
@@ -4339,7 +4339,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               </div>
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '2px' }}>
-                  <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>Tłuszcz</span>
+                  <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>{t("Tłuszcz")}</span>
                   <span style={{ fontWeight: '700' }}>{Math.round(eatenFat)}g / {targetFat}g</span>
                 </div>
                 <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
@@ -4353,7 +4353,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {/* WAGA I SKŁAD CIAŁA */}
         <div className="premium-card">
           <div className="premium-title-row">
-            <span className="premium-title">⚖️ Waga i Skład Ciała</span>
+            <span className="premium-title">{t("⚖️ Waga i Skład Ciała")}</span>
             <span style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.4)' }}>
               {summary.weight !== null && summary.weight !== undefined ? 'Zsynchronizowano' : 'Brak danych'}
             </span>
@@ -4392,7 +4392,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '10px' }}>
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '2px' }}>
-                      <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>Mięśnie</span>
+                      <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>{t("Mięśnie")}</span>
                       <span style={{ fontWeight: '700' }}>{muscleMass > 0 ? `${muscleMass} kg` : '--'} ({musclePercentage}%)</span>
                     </div>
                     <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
@@ -4401,7 +4401,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                   </div>
                   <div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '2px' }}>
-                      <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>Tłuszcz</span>
+                      <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>{t("Tłuszcz")}</span>
                       <span style={{ fontWeight: '700' }}>{fatMass > 0 ? `${fatMass} kg` : '--'} ({fatPercentage}%)</span>
                     </div>
                     <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
@@ -4411,7 +4411,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                   {otherMass > 0 && (
                     <div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '2px' }}>
-                        <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>Inne (woda, kości)</span>
+                        <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>{t("Inne (woda, kości)")}</span>
                         <span style={{ fontWeight: '700' }}>{otherMass} kg ({otherPercentage}%)</span>
                       </div>
                       <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
@@ -4426,7 +4426,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '10px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)' }}>
-              <span>Wskaźnik BMI</span>
+              <span>{t("Wskaźnik BMI")}</span>
               {bmiValue !== null ? (
                 <span style={{ color: 'var(--success-light)', fontWeight: '600' }}>
                   {bmiValue} ({bmiCategory})
@@ -4438,7 +4438,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               )}
             </div>
             {/* Ciśnienie tętnicze usunięte z tego miejsca (UX runda 7, punkt 2) - duplikowało
-                osobną, pełną kartę "🩺 Ciśnienie tętnicze" pod strefami tętna, którą użytkownik
+                osobną, pełną kartę t("🩺 Ciśnienie tętnicze") pod strefami tętna, którą użytkownik
                 wcześniej wyraźnie poprosił o umieszczenie w tamtym miejscu. Tu zostawiamy
                 tylko BMI i pomiar obwodów, żeby nie pokazywać tej samej liczby dwa razy. */}
             {latestBodyMeasurement && (
@@ -4451,7 +4451,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                     latestBodyMeasurement.hips != null && `Biodra: ${latestBodyMeasurement.hips}cm`,
                     latestBodyMeasurement.biceps != null && `Biceps: ${latestBodyMeasurement.biceps}cm`,
                     latestBodyMeasurement.thigh != null && `Udo: ${latestBodyMeasurement.thigh}cm`
-                  ].filter(Boolean).join(' · ') || 'Brak wypełnionych pól'}
+                  ].filter(Boolean).join(' · ') || t('Brak wypełnionych pól')}
                 </span>
               </div>
             )}
@@ -4483,7 +4483,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             {/* Sleep Stages */}
             <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <SleepStageBar 
-                label="Sen głęboki" 
+                label={t("Sen głęboki")} 
                 durationText={formatHoursMins(sleepDeepHours)} 
                 percentage={Math.min((sleepDeepHours / 2.5) * 100, 100)} 
                 typicalStart={35} 
@@ -4530,7 +4530,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             (walking_running_distance). */}
         <div className="premium-card">
           <div className="premium-title-row">
-            <span className="premium-title">Energia i aktywność dnia</span>
+            <span className="premium-title">{t("Energia i aktywność dnia")}</span>
             <span className="premium-title-info">ⓘ</span>
           </div>
 
@@ -4561,7 +4561,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 )}
               </>
             ) : (
-              <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)' }}>Brak danych (czekam na synchronizację)</span>
+              <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)' }}>{t("Brak danych (czekam na synchronizację)")}</span>
             )}
           </div>
           {/* Realny poziom stresu (Oura /v2/usercollection/daily_stress) - wcześniej ta
@@ -4614,7 +4614,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 <span style={{ fontWeight: '700' }}>{activeMinutes} min</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
-                <span style={{ color: 'rgba(255,255,255,0.6)' }}>🚶 Niska intensywność</span>
+                <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t("🚶 Niska intensywność")}</span>
                 <span style={{ fontWeight: '700' }}>{lowActivityMinutes} min</span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
@@ -4655,7 +4655,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 '--' i neutralny stan zamiast fałszywego "0 ms"/"0 bpm" i błędnych
                 porównań (null >= 48 czy null < 61 dałyby nielogiczne wyniki). */}
             <TrendCard
-              title="Zmienność rytmu zatokowego"
+              title={t("Zmienność rytmu zatokowego")}
               valueText={hrv != null ? String(hrv) : '--'}
               unitText="ms"
               activeSegment={hrv != null && hrv >= 48 ? "right" : "middle"}
@@ -4664,7 +4664,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               status="success"
             />
             <TrendCard
-              title="Spoczynkowe tętno"
+              title={t("Spoczynkowe tętno")}
               valueText={rhr != null ? String(rhr) : '--'}
               unitText="bpm"
               activeSegment={rhr != null && rhr < 61 ? "left" : "middle"}
@@ -4681,12 +4681,12 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 w przeciwnym razie karta jest po prostu niewidoczna, bez fałszywych zer. */}
             {summary.respiratory_rate != null && (
               <TrendCard
-                title="Częstość oddechów"
+                title={t("Częstość oddechów")}
                 valueText={String(summary.respiratory_rate)}
                 unitText="odd/min"
                 activeSegment={summary.respiratory_rate < 12 ? "left" : summary.respiratory_rate > 20 ? "right" : "middle"}
                 color="blue"
-                footerText={summary.respiratory_rate >= 12 && summary.respiratory_rate <= 20 ? "Norma 12-20" : "Poza normą 12-20"}
+                footerText={summary.respiratory_rate >= 12 && summary.respiratory_rate <= 20 ? "Norma 12-20" : t("Poza normą 12-20")}
                 status={summary.respiratory_rate >= 12 && summary.respiratory_rate <= 20 ? "success" : "warning"}
               />
             )}
@@ -4697,7 +4697,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 unitText="%"
                 activeSegment={summary.spo2_percentage >= 98 ? "right" : summary.spo2_percentage >= 95 ? "middle" : "left"}
                 color="blue"
-                footerText={summary.spo2_percentage >= 95 ? "Prawidłowy ≥ 95%" : "Niski < 95%"}
+                footerText={summary.spo2_percentage >= 95 ? t("Prawidłowy ≥ 95%") : "Niski < 95%"}
                 status={summary.spo2_percentage >= 95 ? "success" : "warning"}
               />
             )}
@@ -4796,9 +4796,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsHrZonesOpen(o => !o); } }}
             style={{ cursor: 'pointer' }}
           >
-            <span className="premium-title">💓 Strefy Tętna (Karvonen)</span>
+            <span className="premium-title">{t("💓 Strefy Tętna (Karvonen)")}</span>
             <span style={{ fontSize: '0.75rem', color: 'rgba(255, 255, 255, 0.4)' }}>
-              Na bazie RHR ({rhr} bpm) · {isHrZonesOpen ? 'Zwiń ▲' : 'Pokaż ▼'}
+              Na bazie RHR ({rhr} bpm) · {isHrZonesOpen ? t('Zwiń ▲') : t('Pokaż ▼')}
             </span>
           </div>
           {isHrZonesOpen && (
@@ -4808,15 +4808,15 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 <span style={{ fontSize: '0.8rem', fontWeight: '600', color: '#fff' }}>Strefa 1 (Regeneracja)</span>
                 <span style={{ fontSize: '0.8rem', fontWeight: '700', color: '#60a5fa' }}>{hrZone1Min}-{hrZone1Max} bpm</span>
               </div>
-              <span style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.4)' }}>Aktywna regeneracja, bardzo lekki wysiłek</span>
+              <span style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.4)' }}>{t("Aktywna regeneracja, bardzo lekki wysiłek")}</span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', padding: '6px 8px', background: 'rgba(255,255,255,0.01)', borderRadius: '8px', borderLeft: '3px solid #34d399' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.8rem', fontWeight: '600', color: '#fff' }}>Strefa 2 (Spalanie Tłuszczu)</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: '600', color: '#fff' }}>{t("Strefa 2 (Spalanie Tłuszczu)")}</span>
                 <span style={{ fontSize: '0.8rem', fontWeight: '700', color: 'var(--success-light)' }}>{hrZone2Min}-{hrZone2Max} bpm</span>
               </div>
-              <span style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.4)' }}>Baza tlenowa, optymalne spalanie tłuszczu</span>
+              <span style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.4)' }}>{t("Baza tlenowa, optymalne spalanie tłuszczu")}</span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', padding: '6px 8px', background: 'rgba(255,255,255,0.01)', borderRadius: '8px', borderLeft: '3px solid #fbbf24' }}>
@@ -4824,23 +4824,23 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 <span style={{ fontSize: '0.8rem', fontWeight: '600', color: '#fff' }}>Strefa 3 (Cardio / Tempo)</span>
                 <span style={{ fontSize: '0.8rem', fontWeight: '700', color: '#fbbf24' }}>{hrZone3Min}-{hrZone3Max} bpm</span>
               </div>
-              <span style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.4)' }}>Poprawa wydolności sercowo-naczyniowej</span>
+              <span style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.4)' }}>{t("Poprawa wydolności sercowo-naczyniowej")}</span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', padding: '6px 8px', background: 'rgba(255,255,255,0.01)', borderRadius: '8px', borderLeft: '3px solid #f87171' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.8rem', fontWeight: '600', color: '#fff' }}>Strefa 4 (Próg / Threshold)</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: '600', color: '#fff' }}>{t("Strefa 4 (Próg / Threshold)")}</span>
                 <span style={{ fontSize: '0.8rem', fontWeight: '700', color: 'var(--danger-light)' }}>{hrZone4Min}-{hrZone4Max} bpm</span>
               </div>
-              <span style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.4)' }}>Budowanie wytrzymałości beztlenowej</span>
+              <span style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.4)' }}>{t("Budowanie wytrzymałości beztlenowej")}</span>
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', padding: '6px 8px', background: 'rgba(255,255,255,0.01)', borderRadius: '8px', borderLeft: '3px solid #ef4444' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.8rem', fontWeight: '600', color: '#fff' }}>Strefa 5 (Maks. Wysiłek)</span>
+                <span style={{ fontSize: '0.8rem', fontWeight: '600', color: '#fff' }}>{t("Strefa 5 (Maks. Wysiłek)")}</span>
                 <span style={{ fontSize: '0.8rem', fontWeight: '700', color: 'var(--danger)' }}>{hrZone5Min}-{userMaxHr} bpm</span>
               </div>
-              <span style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.4)' }}>Trening beztlenowy, interwały, maksymalna wydolność</span>
+              <span style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.4)' }}>{t("Trening beztlenowy, interwały, maksymalna wydolność")}</span>
             </div>
           </div>
           )}
@@ -4850,7 +4850,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         {/* CIŚNIENIE TĘTNICZE - przeniesione pod strefy tętna w prawej kolumnie na życzenie użytkownika */}
         <div className="premium-card">
           <div className="premium-title-row">
-            <span className="premium-title">🩺 Ciśnienie tętnicze</span>
+            <span className="premium-title">{t("🩺 Ciśnienie tętnicze")}</span>
             <span className="premium-title-info">ⓘ</span>
           </div>
 
@@ -4861,8 +4861,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               let color = 'var(--success-light)';
               let label = 'Optymalne';
               if (sys >= 140 || dia >= 90) { color = 'var(--danger-light)'; label = 'Wysokie'; }
-              else if (sys >= 130 || dia >= 80) { color = '#fbbf24'; label = 'Podwyższone'; }
-              else if (sys >= 120) { color = '#fbbf24'; label = 'Prawidłowe wysokie'; }
+              else if (sys >= 130 || dia >= 80) { color = '#fbbf24'; label = t('Podwyższone'); }
+              else if (sys >= 120) { color = '#fbbf24'; label = t('Prawidłowe wysokie'); }
               return (
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', margin: '8px 0' }}>
                   <span style={{ fontSize: '2rem', fontWeight: '800', color: '#fff' }}>
@@ -5013,10 +5013,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 gap: '8px'
               }}>
                 {[
-                  'Jak wygląda mój sen w tym tygodniu?',
-                  'Czy jestem blisko celu kalorycznego?',
-                  'Jak moja regeneracja po ostatnim treningu?',
-                  'Coś niepokojącego w moich danych?'
+                  t('Jak wygląda mój sen w tym tygodniu?'),
+                  t('Czy jestem blisko celu kalorycznego?'),
+                  t('Jak moja regeneracja po ostatnim treningu?'),
+                  t('Coś niepokojącego w moich danych?')
                 ].map((suggestion) => (
                   <button
                     key={suggestion}
@@ -5063,7 +5063,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 className="btn-primary"
                 style={{ width: '45px', height: '42px', padding: 0, borderRadius: '12px' }}
                 disabled={isSendingChat}
-                aria-label="Wyślij wiadomość"
+                aria-label={t("Wyślij wiadomość")}
               >
                 ➔
               </button>

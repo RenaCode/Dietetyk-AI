@@ -66,8 +66,18 @@ Google Fit's `dataset:aggregate` aligns its daily buckets to the **start of the 
 
 `npm run check-i18n` (in `frontend/`) cross-checks every `t('…')` literal against the dictionary in `utils/i18n.js` and reports three things: missing translations, texts hardcoded in JSX despite having a translation, and stale dictionary entries.
 
-> [!WARNING]
-> As of this writing the check reports **6% coverage**: only 13 strings actually go through `t()`, 61 have a translation but are hardcoded in JSX, and 127 dictionary entries match no string in the code. Switching the language to English therefore changes almost nothing on screen. `t()` now warns in the console (dev builds only) whenever a translation is missing, so the failure is at least visible — but wiring the remaining strings through `t()` is still outstanding work.
+**430 strings now go through `t()`**, up from 13 — switching the language actually translates the interface. `t()` also warns in the console (dev builds only) whenever a translation is missing, so future drift is visible instead of silent.
+
+A handful of Polish literals remain unwrapped on purpose, and the check lists them:
+
+- **Keyword matchers** — `'siłownia'`, `'pływ'`, `'różeniec'` are compared against workout and supplement names with `.includes()`. Wrapping them in `t()` would change what the code *matches*, not what it *shows*, and silently break the matching in English.
+- **Comparison operands** — e.g. `recentCategory !== 'Prawidłowe'`, where the value comes from the backend.
+- **Comments** — Polish prose inside `//` and `{/* */}` is covered by the separate code-language rule in `CLAUDE.md`, not by `t()`.
+
+> [!NOTE]
+> The dictionary keys are the Polish source strings themselves, so changing Polish copy silently breaks its translation. `npm run check-i18n` is what catches that: it matches **exact** occurrences only. An earlier version used a substring match and reported 61 hardcoded strings where only 43 were real — `"Zaloguj się"` was matching inside `"Sesja wygasła. Zaloguj się ponownie."`. Wrapping a hit like that would have torn the sentence in half.
+
+About 150 dictionary entries match no string in the code. They are pre-written translations for wording that has since changed; they are kept rather than deleted, because the English text is still useful when that part of the UI is revisited.
 
 ---
 

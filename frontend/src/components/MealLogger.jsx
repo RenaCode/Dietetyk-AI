@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { t } from '../utils/i18n';
 
 export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing, frequentMeals, onRepeatMeal }) {
   const [mealText, setMealText] = useState('');
@@ -32,7 +33,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
     try {
       const ok = await onRepeatMeal(mealId);
       if (ok) {
-        setSuccessMessage('Posiłek zapisany!');
+        setSuccessMessage(t('Posiłek zapisany!'));
         if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
         successTimeoutRef.current = setTimeout(() => setSuccessMessage(''), 4000);
       }
@@ -98,7 +99,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
         if (fileInputRef.current) {
           fileInputRef.current.value = '';
         }
-        setSuccessMessage('Posiłek zapisany!');
+        setSuccessMessage(t('Posiłek zapisany!'));
         if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
         successTimeoutRef.current = setTimeout(() => setSuccessMessage(''), 4000);
       }
@@ -133,9 +134,9 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
   return (
     <div className="logger-card">
       <div className="glass-card">
-        <h3 className="card-title" id="meal-logger-heading">✍️ Co dziś jadłeś?</h3>
+        <h3 className="card-title" id="meal-logger-heading">{t("✍️ Co dziś jadłeś?")}</h3>
         <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
-          Wpisz posiłek w języku naturalnym lub <strong>dodaj zdjęcie swojego talerza</strong>. Sztuczna inteligencja automatycznie wyliczy kalorie i makro.
+          Wpisz posiłek w języku naturalnym lub <strong>{t("dodaj zdjęcie swojego talerza")}</strong>. Sztuczna inteligencja automatycznie wyliczy kalorie i makro.
         </p>
 
         {/* Częste posiłki (Runda 9): chipy z najczęściej powtarzanymi posiłkami
@@ -165,7 +166,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                     opacity: repeatingMealId !== null && repeatingMealId !== fm.mealId ? 0.5 : 1
                   }}
                 >
-                  {repeatingMealId === fm.mealId ? 'Zapisywanie...' : `🔁 ${fm.rawText}`}
+                  {repeatingMealId === fm.mealId ? t('Zapisywanie...') : `🔁 ${fm.rawText}`}
                 </button>
               ))}
             </div>
@@ -189,8 +190,8 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
               value={mealText}
               onChange={(e) => setMealText(e.target.value)}
               placeholder={imageSrc
-                ? "Uzupełnij lub popraw zdjęcie (np. '200 g kurczaka, nie 150', 'smażone na maśle', 'do tego szklanka soku', 'chleba nie zjadłem')..."
-                : "Opisz swój posiłek (np. 'Kurczak z ryżem i warzywami') albo dodaj zdjęcie..."}
+                ? t("Uzupełnij lub popraw zdjęcie (np. '200 g kurczaka, nie 150', 'smażone na maśle', 'do tego szklanka soku', 'chleba nie zjadłem')...")
+                : t("Opisz swój posiłek (np. 'Kurczak z ryżem i warzywami') albo dodaj zdjęcie...")}
                 disabled={isAnalyzing || isSubmitting}
             />
           </div>
@@ -200,7 +201,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
               id="meal-photo-hint"
               style={{ fontSize: '0.8rem', color: 'var(--text-dim)', margin: '-6px 0 0', lineHeight: 1.5 }}
             >
-              💡 Opis <strong>uzupełnia zdjęcie</strong>, nie tworzy drugiego posiłku. Gdy opis
+              💡 Opis <strong>{t("uzupełnia zdjęcie")}</strong>, nie tworzy drugiego posiłku. Gdy opis
               przeczy zdjęciu, AI liczy według opisu i zaznacza to w komentarzu dietetyka.
             </p>
           )}
@@ -222,7 +223,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                 }}
                 disabled={isAnalyzing || isCompressing || isSubmitting}
               >
-                📷 {imageSrc ? 'Zmień zdjęcie' : 'Zrób/Dodaj zdjęcie'}
+                📷 {imageSrc ? t('Zmień zdjęcie') : t('Zrób/Dodaj zdjęcie')}
               </button>
               <input
                 type="file"
@@ -236,7 +237,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
 
             {imageSrc && (
               <div style={{ position: 'relative', width: '100%', maxWidth: '200px', height: '150px', borderRadius: '12px', overflow: 'hidden', border: '1px solid var(--border-glass)', marginTop: '8px' }}>
-                <img src={imageSrc} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Podgląd posiłku" />
+                <img src={imageSrc} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt={t("Podgląd posiłku")} />
                 <button
                   type="button"
                   onClick={() => {
@@ -260,8 +261,8 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                     fontSize: '0.8rem',
                     fontWeight: 'bold'
                   }}
-                  title="Usuń zdjęcie"
-                  aria-label="Usuń zdjęcie"
+                  title={t("Usuń zdjęcie")}
+                  aria-label={t("Usuń zdjęcie")}
                 >
                   ✕
                 </button>
@@ -287,7 +288,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
               </>
             ) : (
               <>
-                <span>🥗 Przeanalizuj posiłek</span>
+                <span>{t("🥗 Przeanalizuj posiłek")}</span>
               </>
             )}
           </button>
@@ -295,10 +296,10 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
       </div>
 
       <div className="glass-card">
-        <h3 className="card-title">📋 Dzisiejsze posiłki</h3>
+        <h3 className="card-title">{t("📋 Dzisiejsze posiłki")}</h3>
         
         {meals.length === 0 ? (
-          <p className="empty-state">Brak wprowadzonych posiłków na ten dzień. Wpisz coś powyżej lub dodaj zdjęcie!</p>
+          <p className="empty-state">{t("Brak wprowadzonych posiłków na ten dzień. Wpisz coś powyżej lub dodaj zdjęcie!")}</p>
         ) : (
           <div className="meals-list">
             {meals.map((meal) => (
@@ -322,8 +323,8 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                     <button
                       className="btn-delete"
                       onClick={() => onDeleteMeal(meal.id)}
-                      title="Usuń posiłek"
-                      aria-label="Usuń posiłek"
+                      title={t("Usuń posiłek")}
+                      aria-label={t("Usuń posiłek")}
                     >
                       🗑️
                     </button>
@@ -394,7 +395,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
 
                   {meal.food_items && meal.food_items.length > 0 && (
                     <div style={{ marginTop: '8px' }}>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>Rozbicie na składniki:</span>
+                      <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)' }}>{t("Rozbicie na składniki:")}</span>
                       <ul style={{ fontSize: '0.8rem', paddingLeft: '16px', color: 'var(--text-muted)', marginTop: '4px' }}>
                         {meal.food_items.map((item, idx) => (
                           <li key={idx} style={{ marginBottom: '2px' }}>
@@ -418,7 +419,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                     boxShadow: 'var(--shadow-purple)',
                     marginTop: '4px'
                   }}>
-                    <img src={meal.image_base64} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt="Zdjęcie posiłku" />
+                    <img src={meal.image_base64} style={{ width: '100%', height: '100%', objectFit: 'cover' }} alt={t("Zdjęcie posiłku")} />
                   </div>
                 )}
               </div>

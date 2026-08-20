@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { t } from '../utils/i18n';
 
 export default function AdminPanel({ sessionToken, onLogout }) {
   const [config, setConfig] = useState({
@@ -104,16 +105,16 @@ export default function AdminPanel({ sessionToken, onLogout }) {
       });
 
       if (res.ok) {
-        setConfigMessage({ type: 'success', text: 'Konfiguracja systemowa została zapisana pomyślnie!' });
+        setConfigMessage({ type: 'success', text: t('Konfiguracja systemowa została zapisana pomyślnie!') });
         setTimeout(() => setConfigMessage({ type: '', text: '' }), 5000);
       } else if (res.status === 401) {
         if (onLogout) onLogout();
       } else {
         const data = await res.json();
-        setConfigMessage({ type: 'error', text: data.error || 'Błąd zapisu konfiguracji.' });
+        setConfigMessage({ type: 'error', text: data.error || t('Błąd zapisu konfiguracji.') });
       }
     } catch (err) {
-      setConfigMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setConfigMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     } finally {
       setIsSavingConfig(false);
     }
@@ -148,10 +149,10 @@ export default function AdminPanel({ sessionToken, onLogout }) {
         if (onLogout) onLogout();
       } else {
         const data = await res.json();
-        setInviteMessage({ type: 'error', text: data.error || 'Błąd wysyłania zaproszenia.' });
+        setInviteMessage({ type: 'error', text: data.error || t('Błąd wysyłania zaproszenia.') });
       }
     } catch (err) {
-      setInviteMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setInviteMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     } finally {
       setIsInviting(false);
     }
@@ -197,14 +198,14 @@ export default function AdminPanel({ sessionToken, onLogout }) {
       }
 
       if (res.ok) {
-        setUserActionMessage({ type: 'success', text: data.message || 'Operacja wykonana pomyślnie!' });
+        setUserActionMessage({ type: 'success', text: data.message || t('Operacja wykonana pomyślnie!') });
         fetchUsers();
         setTimeout(() => setUserActionMessage({ type: '', text: '' }), 5000);
       } else {
-        setUserActionMessage({ type: 'error', text: data.error || 'Wystąpił błąd podczas wykonywania akcji.' });
+        setUserActionMessage({ type: 'error', text: data.error || t('Wystąpił błąd podczas wykonywania akcji.') });
       }
     } catch (err) {
-      setUserActionMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setUserActionMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     } finally {
       setActioningUserId(null);
     }
@@ -267,7 +268,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
             </div>
 
             <div className="input-group">
-              <label className="input-label">Nadawca wiadomości (From)</label>
+              <label className="input-label">{t("Nadawca wiadomości (From)")}</label>
               <input
                 type="text"
                 className="input-field"
@@ -297,7 +298,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
             </div>
           </div>
 
-          <h4 style={{ color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '8px', marginBottom: '16px' }}>🛡️ Bezpieczeństwo i Dwuetapowe Uwierzytelnianie (2FA)</h4>
+          <h4 style={{ color: '#fff', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '8px', marginBottom: '16px' }}>{t("🛡️ Bezpieczeństwo i Dwuetapowe Uwierzytelnianie (2FA)")}</h4>
           <div className="settings-grid" style={{ marginBottom: '24px' }}>
             <div className="input-group" style={{ gridColumn: 'span 2', display: 'flex', alignItems: 'center', gap: '10px' }}>
               <input
@@ -355,14 +356,14 @@ export default function AdminPanel({ sessionToken, onLogout }) {
           </div>
 
           <button type="submit" className="btn-primary" disabled={isSavingConfig} style={{ marginTop: '10px' }}>
-            {isSavingConfig ? 'Zapisywanie...' : 'Zapisz konfigurację'}
+            {isSavingConfig ? t('Zapisywanie...') : t('Zapisz konfigurację')}
           </button>
         </form>
       </div>
 
       {/* Sekcja 2: Zapraszanie Użytkowników */}
       <div className="glass-card">
-        <h3 className="card-title">✉️ Zaproś Nowego Użytkownika</h3>
+        <h3 className="card-title">{t("✉️ Zaproś Nowego Użytkownika")}</h3>
         <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '20px' }}>
           Wyślij zaproszenie do utworzenia konta w aplikacji Dietetyk AI. Użytkownik otrzyma wiadomość e-mail z unikalnym tokenem rejestracyjnym.
         </p>
@@ -375,7 +376,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
 
         <form onSubmit={handleInvite} style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
           <div className="input-group" style={{ flex: '2', minWidth: '250px' }}>
-            <label className="input-label">Adres e-mail zapraszanego użytkownika</label>
+            <label className="input-label">{t("Adres e-mail zapraszanego użytkownika")}</label>
             <input
               type="email"
               className="input-field"
@@ -387,27 +388,27 @@ export default function AdminPanel({ sessionToken, onLogout }) {
           </div>
           
           <div className="input-group" style={{ flex: '1', minWidth: '150px' }}>
-            <label className="input-label">Poziom uprawnień (rola)</label>
+            <label className="input-label">{t("Poziom uprawnień (rola)")}</label>
             <select
               className="input-field"
               value={inviteRole}
               onChange={(e) => setInviteRole(e.target.value)}
               style={{ background: '#121629', color: '#fff' }}
             >
-              <option value="user">Użytkownik (user)</option>
+              <option value="user">{t("Użytkownik (user)")}</option>
               <option value="admin">Administrator (admin)</option>
             </select>
           </div>
 
           <button type="submit" className="btn-primary" disabled={isInviting} style={{ height: '46px', padding: '0 24px' }}>
-            {isInviting ? 'Wysyłanie...' : 'Wyślij zaproszenie'}
+            {isInviting ? t('Wysyłanie...') : t('Wyślij zaproszenie')}
           </button>
         </form>
       </div>
 
       {/* Sekcja 3: Lista Użytkowników i Zarządzanie */}
       <div className="glass-card">
-        <h3 className="card-title">👥 Zarządzanie Użytkownikami</h3>
+        <h3 className="card-title">{t("👥 Zarządzanie Użytkownikami")}</h3>
         <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '20px' }}>
           Lista wszystkich zarejestrowanych oraz oczekujących kont w aplikacji.
         </p>
@@ -428,7 +429,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border-glass)', textAlign: 'left' }}>
                   <th style={{ padding: '12px 8px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>ID</th>
-                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>Użytkownik</th>
+                  <th style={{ padding: '12px 8px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>{t("Użytkownik")}</th>
                   <th style={{ padding: '12px 8px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>E-mail</th>
                   <th style={{ padding: '12px 8px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>Rola</th>
                   <th style={{ padding: '12px 8px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>Status</th>
@@ -469,16 +470,16 @@ export default function AdminPanel({ sessionToken, onLogout }) {
                         background: u.status === 'active' ? 'rgba(16, 185, 129, 0.15)' : 'rgba(245, 158, 11, 0.15)',
                         color: u.status === 'active' ? '#34d399' : '#fbbf24'
                       }}>
-                        {u.status === 'active' ? 'Aktywny' : 'Oczekujący'}
+                        {u.status === 'active' ? 'Aktywny' : t('Oczekujący')}
                       </span>
                     </td>
                     <td style={{ padding: '12px 8px', fontSize: '0.9rem' }}>
                       {u.totp_enabled === 1 ? (
-                        <span style={{ color: '#34d399', display: 'flex', alignItems: 'center', gap: '4px' }}>🛡️ Włączona</span>
+                        <span style={{ color: '#34d399', display: 'flex', alignItems: 'center', gap: '4px' }}>{t("🛡️ Włączona")}</span>
                       ) : u.force_2fa ? (
                         <span style={{ color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '4px' }}>⚠️ Wymuszone</span>
                       ) : (
-                        <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>🔓 Wyłączona</span>
+                        <span style={{ color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>{t("🔓 Wyłączona")}</span>
                       )}
                     </td>
                     <td style={{ padding: '12px 8px', textAlign: 'right', display: 'flex', justifyContent: 'flex-end', gap: '8px', flexWrap: 'wrap' }}>
@@ -519,7 +520,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
                             disabled={actioningUserId === u.id}
                             style={{ padding: '4px 8px', fontSize: '0.75rem', opacity: actioningUserId === u.id ? 0.5 : 1 }}
                           >
-                            Usuń
+                            {t("Usuń")}
                           </button>
                         </>
                       )}

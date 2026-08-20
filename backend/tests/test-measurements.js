@@ -1,15 +1,15 @@
 const db = require('../db');
 
 async function runTest() {
-  console.log('\n--- TEST BAZY DANYCH: POMIARY OBWODÓW CIAŁA ---');
+  console.log('\n--- DATABASE TEST: BODY CIRCUMFERENCE MEASUREMENTS ---');
   try {
     await db.initDb();
 
-    // Wybierz testową datę
+    // Pick a test date
     const testDate = '2026-06-16';
     const testUserId = 1; // admin
 
-    console.log(`Wstawianie testowego pomiaru dla użytkownika ${testUserId} na datę ${testDate}...`);
+    console.log(`Inserting a test measurement for user ${testUserId} on ${testDate}...`);
 
     // 1. Wstawienie/Aktualizacja pomiaru
     await db.run(`
@@ -23,7 +23,7 @@ async function runTest() {
         thigh = excluded.thigh
     `, [testUserId, testDate]);
 
-    console.log('✅ Wstawienie/Aktualizacja powiodła się.');
+    console.log('✅ Insert/update succeeded.');
 
     // 2. Pobranie pomiaru
     const row = await db.get(`
@@ -34,12 +34,12 @@ async function runTest() {
     console.log('Pobrane dane z bazy:', row);
 
     if (row && row.chest === 105.5 && row.waist === 88.0 && row.hips === 96.5 && row.biceps === 38.5 && row.thigh === 58.0) {
-      console.log('✅ Weryfikacja danych powiodła się.');
+      console.log('✅ Data verification succeeded.');
     } else {
-      throw new Error('Pobrane dane nie zgadzają się z zapisanymi!');
+      throw new Error('The retrieved data does not match what was saved.');
     }
 
-    // 3. Posprzątanie (usunięcie)
+    // 3. Cleanup (delete)
     console.log('Usuwanie testowego wpisu...');
     await db.run(`
       DELETE FROM body_measurements 
@@ -52,17 +52,17 @@ async function runTest() {
     `, [testUserId, testDate]);
 
     if (!rowAfterDelete) {
-      console.log('✅ Usunięcie wpisu i czyszczenie powiodło się.');
+      console.log('✅ Deleting the entry and cleaning up succeeded.');
     } else {
-      throw new Error('Wpis nie został usunięty z bazy danych!');
+      throw new Error('The entry was not deleted from the database.');
     }
 
     console.log('\n=====================================');
-    console.log('🎉 TESTY POMIARÓW CIAŁA ZAKOŃCZONE SUKCESEM!');
+    console.log('🎉 BODY MEASUREMENT TESTS PASSED');
     console.log('=====================================');
     process.exit(0);
   } catch (err) {
-    console.error('\n❌ TESTY POMIARÓW CIAŁA NIEUDANE:', err.message);
+    console.error('\n❌ BODY MEASUREMENT TESTS FAILED:', err.message);
     process.exit(1);
   }
 }

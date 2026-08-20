@@ -1,10 +1,10 @@
-// Testy szyfrowania sekretów w bazie (utils/encryption.js, Runda 18 - naprawa z
-// audytu: tokeny OAuth i klucze API były trzymane w SQLite jawnym tekstem).
-// Czysto jednostkowe - bez bazy danych/sieci, można uruchomić: node tests/test-encryption.js
+// Tests for the database secret encryption (utils/encryption.js, round 18 audit fix:
+// OAuth tokens and API keys used to sit in SQLite as plain text).
+// Pure unit tests - no database or network, run with: node tests/test-encryption.js
 
-// utils/encryption.js wymaga APP_PASSWORD (fail-fast) - ładujemy .env jawnie, tak jak
-// robi to config.js, żeby ten test dało się uruchomić samodzielnie, niezależnie od
-// tego, czy coś wcześniejszego w łańcuchu require już załadowało dotenv.
+// utils/encryption.js requires APP_PASSWORD and fails fast without it - we load .env
+// explicitly, as config.js does, so this test can run standalone regardless of whether
+// anything earlier in the require chain already loaded dotenv.
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 
 function assert(condition, message) {
@@ -21,31 +21,31 @@ function run() {
   const secret = 'AIzaSy-fake-test-key-1234567890';
   const encrypted = encrypt(secret);
 
-  assert(typeof encrypted === 'string' && encrypted.startsWith('enc:v1:'), 'encrypt() zwraca wartość z rozpoznawalnym prefiksem enc:v1:');
-  assert(!encrypted.includes(secret), 'zaszyfrowana wartość nie zawiera oryginalnego sekretu jawnym tekstem');
+  assert(typeof encrypted === 'string' && encrypted.startsWith('enc:v1:'), 'encrypt() returns a value with the recognisable enc:v1: prefix');
+  assert(!encrypted.includes(secret), 'the encrypted value does not contain the original secret in plain text');
   assert(decrypt(encrypted) === secret, 'decrypt(encrypt(x)) === x (round-trip)');
 
-  // Dwa szyfrowania tej samej wartości muszą dać RÓŻNY ciphertext (losowy IV) -
-  // inaczej dwa identyczne sekrety (np. ten sam klucz API u dwóch użytkowników)
-  // byłyby rozpoznawalne po samym wyglądzie zaszyfrowanej wartości w bazie.
+  // Encrypting the same value twice must produce DIFFERENT ciphertext (random IV) -
+  // otherwise two identical secrets, such as the same API key held by two users, would be
+  // recognisable from the stored value alone.
   const encryptedAgain = encrypt(secret);
-  assert(encrypted !== encryptedAgain, 'to samo wejście szyfrowane dwukrotnie daje różny ciphertext (losowy IV)');
-  assert(decrypt(encryptedAgain) === secret, 'drugi ciphertext też odszyfrowuje się poprawnie');
+  assert(encrypted !== encryptedAgain, 'the same input encrypted twice yields different ciphertext (random IV)');
+  assert(decrypt(encryptedAgain) === secret, 'the second ciphertext also decrypts correctly');
 
-  // Legacy passthrough: wartości zapisane PRZED wdrożeniem szyfrowania (zwykły
-  // plaintext, bez prefiksu) muszą dalej działać bez migracji bazy.
+  // Legacy passthrough: values written BEFORE encryption was introduced (plain text, no
+  // prefix) must keep working without a database migration.
   assert(decrypt('plain-legacy-value') === 'plain-legacy-value', 'decrypt() zwraca niezaszyfrowany (legacy) plaintext bez zmian');
 
-  // Puste/brakujące wartości - częsty przypadek (np. użytkownik nie skonfigurował
-  // własnego klucza Gemini) - nie mogą wywalić się wyjątkiem.
+  // Empty or missing values - a common case, e.g. a user who never configured their own
+  // Gemini key - must not throw.
   assert(encrypt('') === '', 'encrypt() na pustym stringu zwraca pusty string (no-op)');
   assert(encrypt(null) === null, 'encrypt() na null zwraca null (no-op)');
   assert(decrypt('') === '', 'decrypt() na pustym stringu zwraca pusty string (no-op)');
   assert(decrypt(null) === null, 'decrypt() na null zwraca null (no-op)');
 
-  // Integralność: zmanipulowany ciphertext (np. bit-flip przy nieautoryzowanym
-  // dostępie do pliku bazy) musi zostać wykryty (AES-GCM auth tag), nie po cichu
-  // zwrócić uszkodzone/błędne dane.
+  // Integrity: tampered ciphertext - a bit flip from unauthorised access to the database
+  // file, say - must be detected by the AES-GCM auth tag rather than silently returning
+  // corrupted data.
   const tampered = encrypted.slice(0, -4) + (encrypted.slice(-4) === 'AAAA' ? 'BBBB' : 'AAAA');
   let threw = false;
   try {
@@ -53,9 +53,9 @@ function run() {
   } catch (e) {
     threw = true;
   }
-  assert(threw, 'zmanipulowany ciphertext rzuca błędem zamiast cicho zwrócić błędne dane (auth tag GCM)');
+  assert(threw, 'tampered ciphertext throws instead of silently returning wrong data (GCM auth tag)');
 
-  console.log('\n🎉 TESTY SZYFROWANIA ZAKOŃCZONE SUKCESEM!\n');
+  console.log('\n🎉 ENCRYPTION TESTS PASSED\n');
 }
 
 try {

@@ -1,13 +1,12 @@
-// Prosty, bezzależnościowy globalny limiter zapytań API (w pamięci procesu),
+// Simple, dependency-free global API rate limiter, held in process memory,
 // w tym samym stylu co backend/services/loginAttempts.js. Chroni przede
-// wszystkim trasy korzystające z Gemini AI (analiza posiłków/zdjęć, czat
-// dietetyka) oraz resztę /api przed nadużyciem (np. zalewem zapytań z jednego
-// adresu IP, ręcznym lub zautomatyzowanym), zanim koszty/limity API zostaną
-// wykorzystane lub baza danych zostanie przeciążona.
-// Nie wymaga żadnej dodatkowej biblioteki npm (np. express-rate-limit).
+// primarily the routes that call Gemini (meal/photo analysis, the dietician chat) and the
+// rest of /api, against abuse - a flood of requests from a single IP, manual or scripted -
+// before the API cost/quota is burned or the database is overwhelmed.
+// Requires no additional npm package such as express-rate-limit.
 
-const WINDOW_MS = 60 * 1000;   // okno czasowe liczenia zapytań
-const MAX_REQUESTS = 120;      // maks. liczba zapytań /api na adres IP w oknie
+const WINDOW_MS = 60 * 1000;   // window over which requests are counted
+const MAX_REQUESTS = 120;      // max /api requests per IP address within the window
 
 const logger = require('../services/logger');
 
@@ -33,7 +32,7 @@ function apiRateLimiter(req, res, next) {
     res.set('Retry-After', String(Math.max(retryAfterSec, 1)));
     
     logger.security(
-      `Przekroczono limit żądań API (${rec.count}/${MAX_REQUESTS})`,
+      `API request limit exceeded (${rec.count}/${MAX_REQUESTS})`,
       'RATE_LIMIT',
       { path: req.originalUrl, method: req.method },
       ip
@@ -45,7 +44,7 @@ function apiRateLimiter(req, res, next) {
   next();
 }
 
-// Okresowe czyszczenie wygasłych wpisów, aby mapa nie rosła w nieskończoność
+// Periodic cleanup of expired entries so the map does not grow without bound
 setInterval(() => {
   const now = Date.now();
   for (const [ip, rec] of hits.entries()) {
@@ -55,16 +54,16 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
-// Dedykowany, ostrzejszy limiter per-użytkownik dla endpointów wysyłki e-maili
-// testowych podsumowań (send-weekly/daily/monthly-summary). Te endpointy
-// przyjmują dowolny `email` w body (zamierzona funkcja "wyślij testowy e-mail
-// na wskazany adres") - bez tego limitu zalogowany użytkownik mógłby w kółko
-// wysyłać e-maile na dowolny adres zewnętrzny, wykorzystując reputację/limit
+// A dedicated, stricter per-user limiter for the endpoints that send test summary emails
+// (send-weekly/daily/monthly-summary). Those endpoints accept an arbitrary `email` in the
+// body - an intentional "send a test email to this address" feature - so without this
+// limit a logged-in user could send mail repeatedly to any external address, burning the
+// sender reputation and quota
 // konta Mailgun do spamu. Limit jest per-user_id (nie per-IP jak globalny
-// apiRateLimiter powyżej), bo to ten sam użytkownik wielokrotnie wywołujący
-// endpoint stanowi tu ryzyko, niezależnie od adresu IP.
+// apiRateLimiter above), because the risk here is one user calling the endpoint
+// repeatedly, regardless of which IP address they come from.
 const SUMMARY_EMAIL_WINDOW_MS = 10 * 60 * 1000; // 10 minut
-const SUMMARY_EMAIL_MAX = 5;                    // maks. 5 wysyłek testowych / 10 min / użytkownik
+const SUMMARY_EMAIL_MAX = 5;                    // max 5 test sends per 10 min per user
 
 const summaryEmailHits = new Map(); // userId -> { count, windowStart }
 
@@ -73,7 +72,7 @@ function summaryEmailLimiter(req, res, next) {
     return next();
   }
   const userId = req.user && req.user.id;
-  if (!userId) return next(); // requireAuth powinien to wyłapać wcześniej; tu tylko defensywnie
+  if (!userId) return next(); // requireAuth should have caught this earlier; defensive only
 
   const now = Date.now();
   let rec = summaryEmailHits.get(userId);
@@ -90,7 +89,7 @@ function summaryEmailLimiter(req, res, next) {
     res.set('Retry-After', String(Math.max(retryAfterSec, 1)));
 
     logger.security(
-      `Przekroczono limit wysyłki e-maili testowych (${rec.count}/${SUMMARY_EMAIL_MAX})`,
+      `Test email send limit exceeded (${rec.count}/${SUMMARY_EMAIL_MAX})`,
       'RATE_LIMIT_EMAIL',
       { email: req.body.email },
       req.ip || 'unknown',
@@ -112,16 +111,16 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
-// Dedykowany, ostrzejszy limiter per-użytkownik dla endpointów wywołujących Gemini
-// bezpośrednio na żądanie użytkownika (czat dietetyka - routes/chat.js, analiza
-// zdjęcia/opisu posiłku - routes/meals.js POST /api/meals). Audyt (Runda 18) wykazał,
-// że jedyną ochroną tych endpointów był globalny apiRateLimiter (120 req/min/IP na
-// całe /api) - w praktyce nie chronił realnie przed nadużyciem kosztu/limitów Gemini,
-// bo pojedynczy użytkownik mógłby zużyć niemal całą tę pulę wyłącznie zapytaniami AI.
-// Limit per-user (nie per-IP), bo to koszt/nadużycie konta danego użytkownika jest
-// tu ryzykiem, niezależnie od tego, z ilu różnych adresów IP korzysta.
+// A dedicated, stricter per-user limiter for endpoints that call Gemini directly on user
+// action (the dietician chat in routes/chat.js, meal photo/description analysis in
+// routes/meals.js POST /api/meals). The round 18 audit found that the only protection on
+// these endpoints was the global apiRateLimiter (120 req/min/IP across all of /api),
+// which in practice did not guard the Gemini cost/quota at all: a single user could
+// consume almost the entire allowance with AI requests alone.
+// The limit is per-user rather than per-IP, because the risk here is cost and abuse tied
+// to one account, no matter how many IP addresses it is used from.
 const AI_WINDOW_MS = 10 * 60 * 1000; // 10 minut
-const AI_MAX_REQUESTS = 30;          // maks. 30 wywołań AI / 10 min / użytkownik
+const AI_MAX_REQUESTS = 30;          // max 30 AI calls per 10 min per user
 
 const aiHits = new Map(); // userId -> { count, windowStart }
 
@@ -130,7 +129,7 @@ function aiRateLimiter(req, res, next) {
     return next();
   }
   const userId = req.user && req.user.id;
-  if (!userId) return next(); // requireAuth powinien to wyłapać wcześniej; tu tylko defensywnie
+  if (!userId) return next(); // requireAuth should have caught this earlier; defensive only
 
   const now = Date.now();
   let rec = aiHits.get(userId);
@@ -147,7 +146,7 @@ function aiRateLimiter(req, res, next) {
     res.set('Retry-After', String(Math.max(retryAfterSec, 1)));
 
     logger.security(
-      `Przekroczono limit żądań AI (${rec.count}/${AI_MAX_REQUESTS})`,
+      `AI request limit exceeded (${rec.count}/${AI_MAX_REQUESTS})`,
       'RATE_LIMIT_AI',
       { path: req.originalUrl, method: req.method },
       req.ip || 'unknown',

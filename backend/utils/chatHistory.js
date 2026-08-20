@@ -1,24 +1,26 @@
 // Logika budowania kontekstu historii dla czatu Dietetyka AI (routes/chat.js) -
-// wydzielona do osobnego modułu (analogicznie do utils/mealAnomaly.js), żeby dało
-// się ją testować jednostkowo bez uruchamiania całego serwera Express/bazy danych.
+// extracted into its own module (like utils/mealAnomaly.js) so it can be unit tested
+// without booting the whole Express server and database.
 
-// Limit znaków pojedynczej wiadomości czatu - bez tego nic nie ograniczało długości
-// `message` trafiającego prosto do promptu Gemini (limit body to 20MB, ustawiony w
-// server.js z myślą o webhooku Apple Health, nie o czacie) - użytkownik mógłby
-// wysłać ogromny tekst, drastycznie zwiększając koszt/czas wywołania AI albo
-// powodując błąd po stronie Gemini.
+// Character limit for a single chat message. Without it nothing bounded the length of
+// `message` going straight into the Gemini prompt - the 20 MB body limit in server.js was
+// set for the Apple Health webhook, not for chat - so a user could send an enormous text,
+// drastically increasing the cost and latency of the AI call or causing an error on
+// Gemini's side.
 const MAX_CHAT_MESSAGE_LENGTH = 2000;
 
-// Czat z dostępem do długiej historii: domyślnie czat widzi tylko ostatnie 7 dni
-// (CHAT_DEFAULT_LOOKBACK_DAYS) - wystarczające dla typowych pytań o "dzisiaj"/
-// "ostatnie dni" i utrzymujące prompt krótkim. Gdy treść wiadomości wskazuje, że
-// użytkownik pyta o szerszy okres (miesiąc, trend, konkretna nazwa miesiąca itp.),
-// rozszerzamy okno do CHAT_EXTENDED_LOOKBACK_DAYS (90 dni - ta sama wartość co w
-// innych funkcjach "długoterminowych" w aplikacji, np. SLEEP_INSIGHT_LOOKBACK_DAYS
-// w dashboard.js). Przy rozszerzonym oknie zamieniamy też szczegółowy log DZIENNY
-// na zwarte podsumowanie TYGODNIOWE (patrz buildWeeklyTrendSummary) - dziesiątki
-// pojedynczych dni w prompcie niepotrzebnie zwiększałyby koszt/czas odpowiedzi
-// Gemini bez realnej wartości dla odpowiedzi.
+// Chat with access to long history: by default the chat sees only the last 7 days
+// (CHAT_DEFAULT_LOOKBACK_DAYS), which is enough for typical "today" / "recent days"
+// questions and keeps the prompt short. When the message suggests the user is asking
+// about a wider period (a month, a trend, a specific month name and so on), we widen the
+// window to CHAT_EXTENDED_LOOKBACK_DAYS - 90 days, the same value other "long term"
+// features use, e.g. SLEEP_INSIGHT_LOOKBACK_DAYS in dashboard.js. With the wider window
+// we also swap the detailed DAILY log for a compact WEEKLY summary (see
+// buildWeeklyTrendSummary): dozens of individual days in the prompt would raise Gemini's
+// cost and latency without adding real value to the answer.
+//
+// The keyword list below stays in Polish deliberately - it is matched against the user's
+// Polish message, so translating it would break the detection.
 const CHAT_DEFAULT_LOOKBACK_DAYS = 7;
 const CHAT_EXTENDED_LOOKBACK_DAYS = 90;
 
@@ -33,17 +35,20 @@ const LONG_HISTORY_KEYWORDS = [
   'grudnia', 'grudniu', ' rok', 'roku', 'porównaj', 'porównanie'
 ];
 
-// Heurystyka na bazie słów kluczowych - nie idealna (np. nie złapie pytania o
-// konkretną datę bez słowa-wskazówki), ale prosta, deterministyczna i bez kosztu
-// dodatkowego wywołania AI tylko do klasyfikacji intencji.
+// A keyword heuristic - not perfect (it will not catch a question about a specific date
+// with no cue word), but simple, deterministic, and free of the cost of an extra AI call
+// just to classify intent.
 function messageNeedsLongHistory(msg) {
   const lower = msg.toLowerCase();
   return LONG_HISTORY_KEYWORDS.some(kw => lower.includes(kw));
 }
 
-// Podsumowanie tygodniowe (okna 7-dniowe od najstarszej daty w zakresie) - używane
-// przy rozszerzonym oknie historii. Pomija okna bez żadnych danych (brak posiłków,
-// wagi, kroków, snu i treningów), żeby nie zaśmiecać promptu liniami "brak danych".
+// Weekly summary (7-day buckets starting from the oldest date in range) - used with the
+// extended history window. Buckets with no data at all (no meals, weight, steps, sleep or
+// workouts) are skipped, so the prompt is not littered with "no data" lines.
+//
+// The summary text itself is Polish on purpose: it goes into the Gemini prompt and is
+// what keeps the model answering in Polish.
 function buildWeeklyTrendSummary(historyMetrics, historyMeals, historyWorkouts, startDateStr, endDateStr) {
   const mealsByDate = {};
   historyMeals.forEach(m => {

@@ -27,10 +27,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   const [isSyncing, setIsSyncing] = useState(false);
   const [message, setMessage] = useState({ type: '', text: '' });
 
-  // Zwijalne pola poświadczeń integracji (UX: runda 7) - gdy integracja jest już
-  // połączona, pola Client ID/Secret i instrukcje nie muszą rzucać się w oczy,
-  // więc startują zwinięte za "Zaawansowane". Gdy NIE jest połączona, muszą być
-  // od razu widoczne, bo użytkownik musi je wypełnić, żeby połączyć.
+  // Collapsible integration credential fields (UX: round 7) - when an integration is
+  // already connected, the Client ID/Secret fields and the instructions do not need to draw
+  // the eye, so they start collapsed behind "Advanced". When it is NOT connected they must be
+  // visible immediately, because the user has to fill them in to connect.
   const [isOuraAdvancedOpen, setIsOuraAdvancedOpen] = useState(!userProfile.has_oura);
   const [isWithingsAdvancedOpen, setIsWithingsAdvancedOpen] = useState(!userProfile.has_withings);
   const [isAppleHealthInstructionsOpen, setIsAppleHealthInstructionsOpen] = useState(false);
@@ -39,7 +39,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   const [avatarMessage, setAvatarMessage] = useState({ type: '', text: '' });
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
 
-  // Stan zmiany hasła
+  // Password change state
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
     newPassword: '',
@@ -51,13 +51,12 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   const [is2faOpen, setIs2faOpen] = useState(false);
   const [isDietGoalsOpen, setIsDietGoalsOpen] = useState(false);
 
-  // Lokalizacja użytkownika dla kontekstu pogody wstrzykiwanego do promptów AI
-  // (patrz backend/utils/weatherContext.js) - domyślnie serwer używa stałej
-  // lokalizacji (Trzebnica), ale użytkownik może ją nadpisać wyszukując swoją
-  // miejscowość. Wynik wyszukiwania (weather_lat/weather_lon/weather_location_label)
-  // trafia do zwykłego stanu `settings` i jest zapisywany razem z resztą
-  // ustawień przez istniejący handleSave/POST /api/settings - bez osobnego
-  // zapisu, żeby nie dublować logiki.
+  // The user's location, used for the weather context injected into the AI prompts (see
+  // backend/utils/weatherContext.js) - by default the server uses a fixed location
+  // (Trzebnica), but the user can override it by searching for their own town. The search
+  // result (weather_lat/weather_lon/weather_location_label) goes into the ordinary `settings`
+  // state and is saved together with the rest of the settings through the existing
+  // handleSave/POST /api/settings - with no separate save, to avoid duplicating the logic.
   const [locationQuery, setLocationQuery] = useState('');
   const [locationResults, setLocationResults] = useState([]);
   const [isSearchingLocation, setIsSearchingLocation] = useState(false);
@@ -66,21 +65,21 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   // Stan eksportu danych i usuwania konta (RODO/GDPR)
   const [isExportingData, setIsExportingData] = useState(false);
   const [exportMessage, setExportMessage] = useState({ type: '', text: '' });
-  // Stan eksportu raportu PDF dla lekarza/dietetyka - niezależny od eksportu JSON
-  // powyżej (inny endpoint, inny format pliku, własny okres raportu).
+  // State for the PDF report export for a doctor or dietician - independent of the JSON
+  // export above (different endpoint, different file format, its own report period).
   const [pdfReportDays, setPdfReportDays] = useState(30);
   const [isExportingPdfReport, setIsExportingPdfReport] = useState(false);
   const [pdfExportMessage, setPdfExportMessage] = useState({ type: '', text: '' });
-  // Stan udostępniania raportu linkiem (read-only) - rozszerzenie eksportu PDF
-  // powyżej o wariant "wyślij link" zamiast "pobierz i wyślij plik samodzielnie".
-  // `shareLinkDays` to okres danych w samym raporcie (jak pdfReportDays), niezależny
-  // od `shareValidityKey` - czyli tego, jak długo sam LINK będzie działał.
+  // State for sharing the report by link (read-only) - an extension of the PDF export above
+  // with a "send a link" variant instead of "download the file and send it yourself".
+  // `shareLinkDays` is the data period inside the report itself (like pdfReportDays),
+  // independent of `shareValidityKey` - that is, how long the LINK itself will work.
   const [shareLinkDays, setShareLinkDays] = useState(30);
   const [shareValidityKey, setShareValidityKey] = useState('7d');
   const [isCreatingShareLink, setIsCreatingShareLink] = useState(false);
   const [shareLinkMessage, setShareLinkMessage] = useState({ type: '', text: '' });
-  // Ostatnio wygenerowany link - pokazywany tylko raz, do skopiowania (backend nie
-  // zwraca tokenu przy liście udostępnień, patrz listSharesForUser w sharedReports.js).
+  // The most recently generated link - shown only once, to be copied (the backend does not
+  // return the token when listing shares, see listSharesForUser in sharedReports.js).
   const [lastCreatedShareUrl, setLastCreatedShareUrl] = useState('');
   const [sharedReports, setSharedReports] = useState([]);
   const [isLoadingSharedReports, setIsLoadingSharedReports] = useState(false);
@@ -88,18 +87,18 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [deleteMessage, setDeleteMessage] = useState({ type: '', text: '' });
 
-  // Stan e-mail, raportów tygodniowych i tokenu synchronizacji
+  // State for e-mail, weekly reports and the sync token
   const [emailInput, setEmailInput] = useState(userProfile.email || '');
-  // Imię/nazwisko - AI dietetyk używa imienia, by zwracać się do użytkownika po imieniu
+  // First and last name - the AI dietician uses the first name to address the user by name
   const [firstNameInput, setFirstNameInput] = useState(userProfile.first_name || '');
   const [lastNameInput, setLastNameInput] = useState(userProfile.last_name || '');
-  // Rok urodzenia - opcjonalny, używany przez backend do wyliczenia realnego
-  // maksymalnego tętna (220 - wiek) w strefach kardio na Dashboardzie. Trzymany
-  // jako string w stanie inputu (pole number w JSX i tak je sparsuje przy zapisie).
+  // Year of birth - optional, used by the backend to compute the real maximum heart rate
+  // (220 - age) for the cardio zones on the Dashboard. Held as a string in the input state
+  // (the number field in the JSX parses it on save anyway).
   const [birthYearInput, setBirthYearInput] = useState(userProfile.birth_year || '');
-  // Cel sylwetki (opis tekstowy) - AI dietetyk bierze go pod uwagę przy generowaniu
-  // porad (dashboard.js) i odpowiedzi czatu (chat.js). Zdjęcie celu sylwetki ma
-  // własny, niezależny stan/upload poniżej - mirror wzorca avatara.
+  // Body goal (a free-text description) - the AI dietician takes it into account when
+  // generating advice (dashboard.js) and chat replies (chat.js). The body goal photo has its
+  // own independent state and upload below - mirroring the avatar pattern.
   const [bodyGoalTextInput, setBodyGoalTextInput] = useState(userProfile.body_goal_text || '');
   const [bodyGoalPhotoMessage, setBodyGoalPhotoMessage] = useState({ type: '', text: '' });
   const [isUploadingBodyGoalPhoto, setIsUploadingBodyGoalPhoto] = useState(false);
@@ -114,7 +113,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   const [monthlySummaryTime, setMonthlySummaryTime] = useState(userProfile.monthly_summary_time || '09:00');
   const [languageInput, setLanguageInput] = useState(userProfile.language || 'pl');
 
-  // Stan zarządzania 2FA
+  // 2FA management state
   const [isSettingUp2fa, setIsSettingUp2fa] = useState(false);
   const [totpSetupData, setTotpSetupData] = useState({ qrCode: '', secret: '', tempToken: '' });
   const [totpSetupCode, setTotpSetupCode] = useState('');
@@ -185,16 +184,16 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           ...data
         }));
       } else if (res.status === 401) {
-        // Wcześniej brak tej obsługi - wygasła sesja przy wejściu w Ustawienia
-        // kończyła się ciche pustymi/domyślnymi formularzami, bez wylogowania
-        // i bez informacji dla użytkownika, czemu nic się nie zapisuje.
+          // This handling used to be missing - an expired session on entering Settings ended
+          // with silently empty or default forms, with no sign-out and no information for the
+          // user about why nothing was being saved.
         if (onLogout) onLogout();
         setMessage({ type: 'error', text: t('Sesja wygasła. Zaloguj się ponownie.') });
       } else {
         setMessage({ type: 'error', text: t('Nie udało się wczytać ustawień.') });
       }
     } catch (err) {
-      console.error('Błąd pobierania ustawień:', err);
+      console.error('Failed to fetch the settings:', err);
       setMessage({ type: 'error', text: t('Błąd połączenia z serwerem podczas wczytywania ustawień.') });
     }
   };
@@ -236,7 +235,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   };
 
   // Adres webhooka Apple Health (apka Health Auto Export) - zbudowany z tokenu
-  // synchronizacji użytkownika (syncToken, prop z App.jsx). Backend: routes/appleHealth.js.
+  // the user's sync token (syncToken, a prop from App.jsx). Backend: routes/appleHealth.js.
   const appleHealthWebhookUrl = syncToken
     ? `https://dietetyk.renacode.com/api/integrations/apple-health/${syncToken}`
     : '';
@@ -253,16 +252,16 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   };
 
   // Generuje nowy, losowy token synchronizacji (taki sam format jak tokeny
-  // tworzone automatycznie przy rejestracji - patrz backend/routes/auth.js)
-  // i zapisuje go przez istniejący endpoint POST /api/user/profile (już
+  // created automatically on registration - see backend/routes/auth.js) and saves it through
+  // the existing POST /api/user/profile endpoint (already
   // wspiera pole syncToken - backend/routes/account.js).
-  // UWAGA: Math.random() NIE jest kryptograficznie bezpieczny (generator PRNG silnika
-  // JS jest odtwarzalny/przewidywalny w pewnych warunkach) - a ten token jest realnym
-  // poświadczeniem: backend (account.js) przyjmuje go bez żadnej dodatkowej weryfikacji
-  // i ustawia jako nowy sync_token użytkownika, który m.in. autoryzuje webhook Apple
-  // Health (Health Auto Export) bez sesji/logowania. Używamy więc window.crypto.getRandomValues
-  // (kryptograficznie bezpieczny generator dostępny w przeglądarce), tak jak backend
-  // korzysta z crypto.randomBytes przy generowaniu tokenów w db.js/auth.js.
+  // NOTE: Math.random() is NOT cryptographically secure (the JS engine's PRNG is
+  // reproducible/predictable under certain conditions) - and this token is a real credential:
+  // the backend (account.js) accepts it with no additional verification and sets it as the
+  // user's new sync_token, which among other things authorises the Apple Health webhook
+  // (Health Auto Export) with no session or sign-in. So we use window.crypto.getRandomValues
+  // (the cryptographically secure generator available in the browser), just as the backend
+  // uses crypto.randomBytes when generating tokens in db.js/auth.js.
   const generateRandomToken = () => {
     const bytes = new Uint8Array(20);
     window.crypto.getRandomValues(bytes);
@@ -302,12 +301,12 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     const numericFields = ['target_calories', 'target_protein', 'target_carbs', 'target_fat', 'bmr', 'target_water_ml', 'height_cm', 'target_weight_kg', 'target_body_fat_pct'];
-    // POPRAWKA (runda 4 audytu): Number('') === 0, więc wyczyszczenie pola liczbowego
-    // (np. żeby zostawić je puste do późniejszego wypełnienia) zapisywało w stanie
-    // formularza realne 0 - np. dla "Wzrost" trwale wyłączało liczenie BMI, mimo że
-    // backend (GET /api/settings, patrz komentarz przy `r.value === ''`) jest już
-    // przygotowany na przechowywanie i poprawny odczyt pustej wartości. Teraz puste
-    // pole zostaje pustym stringiem, a nie liczbą 0.
+    // FIX (audit round 4): Number('') === 0, so clearing a numeric field (to leave it empty
+    // and fill it in later, for instance) stored a real 0 in the form state - for "Height"
+    // that permanently disabled the BMI calculation, even though the backend (GET
+    // /api/settings, see the comment near `r.value === ''`) is already prepared to store and
+    // correctly read an empty value. Now an empty field stays an empty string rather than the
+    // number 0.
     setSettings(prev => ({
       ...prev,
       [name]: numericFields.includes(name) ? (value === '' ? '' : Number(value)) : value
@@ -344,10 +343,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
-  // Wyszukiwanie miejscowości (Open-Meteo Geocoding, patrz GET /api/settings/geocode-location
-  // w backend/routes/account.js) - NIE zapisuje nic samo z siebie, tylko pokazuje
-  // listę kandydatów do wyboru (jedna nazwa typu "Malin" bywa niejednoznaczna -
-  // istnieje wiele miejscowości o tej samej nazwie na świecie).
+  // Town search (Open-Meteo Geocoding, see GET /api/settings/geocode-location in
+  // backend/routes/account.js) - it saves nothing by itself, it only shows a list of
+  // candidates to choose from (a single name like "Malin" can be ambiguous - many towns
+  // around the world share the same name).
   const handleSearchLocation = async (e) => {
     if (e) e.preventDefault();
     const query = locationQuery.trim();
@@ -474,11 +473,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     submitAvatar(null);
   };
 
-  // Zdjęcie celu sylwetki - w odróżnieniu od avatara (150x150, mała ikonka) skalujemy
-  // do 800x800 / jakość 0.7, bo to realne zdjęcie referencyjne, które AI dietetyk
-  // analizuje wizualnie (patrz backend/routes/dashboard.js) - przy mniejszej
-  // rozdzielczości analiza wizualna byłaby zbyt niedokładna. Wzorzec kompresji
-  // identyczny jak w MealLogger.jsx (zdjęcia posiłków).
+  // Body goal photo - unlike the avatar (150x150, a small icon) we scale this to 800x800 at
+  // quality 0.7, because it is a real reference photo that the AI dietician analyses visually
+  // (see backend/routes/dashboard.js) - at a lower resolution the visual analysis would be too
+  // imprecise. The compression pattern is identical to the one in MealLogger.jsx (meal photos).
   const handleBodyGoalPhotoUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -591,8 +589,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
-  // Eksport własnych danych (RODO art. 20) - pobiera plik JSON z profilem,
-  // ustawieniami (sekrety zamaskowane), posiłkami i historią zdrowotną.
+  // Export of the user's own data (GDPR art. 20) - downloads a JSON file with the profile,
+  // settings (secrets masked), meals and health history.
   const handleExportData = async () => {
     setExportMessage({ type: '', text: '' });
     setIsExportingData(true);
@@ -621,9 +619,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
-  // Eksport raportu PDF dla lekarza/dietetyka - zwięzłe podsumowanie (cele, średnie
-  // z wybranego okresu, sen/skład ciała, obwody ciała, suplementy), w odróżnieniu
-  // od pełnego zrzutu JSON powyżej. Ten sam wzorzec pobierania pliku (blob + link).
+  // PDF report export for a doctor or dietician - a concise summary (goals, averages over the
+  // chosen period, sleep/body composition, body measurements, supplements), unlike the full
+  // JSON dump above. The same file-download pattern (blob + link).
   const handleExportPdfReport = async () => {
     setPdfExportMessage({ type: '', text: '' });
     setIsExportingPdfReport(true);
@@ -652,9 +650,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
-  // Lista istniejących udostępnień (Produkt: udostępnianie raportu linkiem) -
-  // wołane przy montowaniu komponentu i po każdej zmianie (stworzenie/odwołanie
-  // linku), żeby lista w UI nie rozjeżdżała się ze stanem na backendzie.
+  // List of the existing shares (product: sharing the report by link) - called when the
+  // component mounts and after every change (creating or revoking a link), so the list in the
+  // UI does not drift from the state on the backend.
   const fetchSharedReports = async () => {
     setIsLoadingSharedReports(true);
     try {
@@ -666,16 +664,16 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         setSharedReports(data.shares || []);
       }
     } catch (err) {
-      // Nieudane odświeżenie listy nie jest krytyczne (lista po prostu zostaje
-      // nieaktualna do następnej próby) - nie pokazujemy z tego powodu błędu.
+      // A failed list refresh is not critical (the list simply stays stale until the next
+      // attempt) - we do not show an error for it.
     } finally {
       setIsLoadingSharedReports(false);
     }
   };
 
-  // Stworzenie nowego linku udostępniania - token jest pokazany TYLKO tu, w
-  // odpowiedzi na stworzenie (patrz komentarz w listSharesForUser, backend), więc
-  // zapisujemy go w stanie do wyświetlenia/skopiowania, zanim zniknie.
+  // Creating a new share link - the token is shown ONLY here, in the response to the creation
+  // (see the comment in listSharesForUser on the backend), so we keep it in state to be
+  // displayed and copied before it disappears.
   const handleCreateShareLink = async () => {
     setShareLinkMessage({ type: '', text: '' });
     setLastCreatedShareUrl('');
@@ -712,8 +710,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     );
   };
 
-  // Odwołanie udostępnienia - od razu odświeża listę, żeby status "active" zmienił
-  // się na "revoked" bez konieczności ręcznego odświeżenia strony.
+  // Revoking a share - refreshes the list immediately, so the "active" status changes to
+  // "revoked" without needing a manual page reload.
   const handleRevokeShareLink = async (shareId) => {
     setShareLinkMessage({ type: '', text: '' });
     try {
@@ -732,9 +730,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
-  // Etykiety statusu udostępnienia (status liczony na backendzie, patrz
-  // listSharesForUser w services/sharedReports.js) i okresu ważności - do
-  // czytelnego wyświetlenia listy w UI.
+  // Share status labels (the status is computed on the backend, see listSharesForUser in
+  // services/sharedReports.js) and validity period - for a readable rendering of the list in
+  // the UI.
   const SHARE_STATUS_LABELS = { active: 'Aktywny', expired: t('Wygasł'), revoked: t('Odwołany') };
   const formatShareDate = (isoString) => {
     try {
@@ -744,8 +742,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
-  // Usunięcie własnego konta (RODO art. 17) - wymaga potwierdzenia hasłem
-  // oraz dodatkowego potwierdzenia w oknie dialogowym, bo to nieodwracalne.
+  // Deleting one's own account (GDPR art. 17) - requires confirmation with the password plus
+  // an additional confirmation in a dialog, because it is irreversible.
   const handleDeleteAccount = async (e) => {
     e.preventDefault();
     setDeleteMessage({ type: '', text: '' });
@@ -772,7 +770,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             method: 'POST',
             headers: { 'Authorization': `Bearer ${sessionToken}` }
           });
-        } catch (_) { /* ignorujemy błąd logout - konto i tak jest usuwane */ }
+        } catch (_) { /* ignore a logout error - the account is being deleted anyway */ }
         localStorage.removeItem('diet_session_token');
         window.location.href = '/';
       } else {
@@ -801,7 +799,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           email: emailInput,
           first_name: firstNameInput,
           last_name: lastNameInput,
-          // Pusty input -> null (backend liczy HRmax z fallbackiem), a nie ''
+      // Empty input -> null (the backend computes HRmax with a fallback), not ''
           // czy NaN z Number('').
           birth_year: birthYearInput ? Number(birthYearInput) : null,
           body_goal_text: bodyGoalTextInput,
@@ -930,8 +928,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
   const handleDisable2FA = async () => {
     if (!confirm(t('Czy na pewno chcesz wyłączyć dwuetapową weryfikację (2FA) na swoim koncie? Obniży to bezpieczeństwo profilu.'))) return;
-    // Backend wymaga teraz ponownej weryfikacji aktualnym hasłem przed wyłączeniem 2FA
-    // (patrz backend/routes/account.js) - samo posiadanie aktywnej sesji nie wystarczy.
+  // The backend now requires re-verification with the current password before disabling 2FA
+  // (see backend/routes/account.js) - simply holding an active session is not enough.
     const password = prompt('Aby wyłączyć 2FA, potwierdź swoje aktualne hasło:');
     if (!password) return;
     setIsDisabling2fa(true);
@@ -985,17 +983,16 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   };
 
   const handleConnect = async (service) => {
-    // WAŻNE: zapisujemy bieżący stan formularza (Client ID/Secret) PRZED przekierowaniem.
-    // Wcześniej przycisk "Połącz" od razu robił window.location.href, więc jeśli
-    // użytkownik wpisał dane i kliknął "Połącz" bez wcześniejszego kliknięcia
-    // odrębnego przycisku "Zapisz poświadczenia integracji" na dole formularza,
-    // backend przy budowaniu URL-a OAuth czytał z bazy starą/pustą wartość -
-    // stąd zgłoszony błąd z client_id=0 w adresie autoryzacji Withings.
-    // Przekierowanie do OAuth następuje TYLKO, jeśli zapis się powiódł - wcześniej
-    // window.location.href wykonywało się bezwarunkowo, więc np. wygasła sesja w
-    // trakcie zapisu (401) i tak przenosiła użytkownika do zewnętrznego dostawcy
-    // ze starymi/błędnymi danymi konfiguracyjnymi, co kończyło się niewyjaśnionym
-    // błędem autoryzacji po powrocie.
+    // IMPORTANT: we save the current form state (Client ID/Secret) BEFORE redirecting.
+    // Previously the "Connect" button went straight to window.location.href, so if the user
+    // typed the credentials and clicked "Connect" without first clicking the separate "Save
+    // integration credentials" button at the bottom of the form, the backend read the old or
+    // empty value from the database when building the OAuth URL - hence the reported bug with
+    // client_id=0 in the Withings authorisation address.
+    // The redirect to OAuth happens ONLY if the save succeeded - previously
+    // window.location.href ran unconditionally, so a session that expired during the save
+    // (401) still sent the user to the external provider with stale or wrong configuration
+    // data, which ended in an unexplained authorisation error after coming back.
     try {
       const res = await fetch('/api/settings', {
         method: 'POST',
@@ -1011,17 +1008,17 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         return;
       }
     } catch (err) {
-      console.error('Błąd zapisu ustawień przed połączeniem:', err);
+      console.error('Failed to save the settings before connecting:', err);
       setMessage({ type: 'error', text: t('Błąd połączenia z serwerem - nie połączono z integracją.') });
       return;
     }
     window.location.href = `${window.location.origin}/api/auth/${service}?token=${sessionToken}`;
   };
 
-  // Połączenie/odłączenie konta Google (logowanie) - osobne od Google Fit (źródło danych).
-  // Brak Client ID/Secret do zapisania (konfiguracja globalna admina), więc po prostu
-  // przekierowujemy z tokenem sesji - backend rozpoznaje to jako przepływ "łączenia"
-  // dzięki podpisanemu `state` (patrz backend/routes/auth.js, GET /api/auth/google/link).
+  // Linking/unlinking a Google account (sign-in) - separate from Google Fit (a data source).
+  // There are no Client ID/Secret to save (that is global admin configuration), so we simply
+  // redirect with the session token - the backend recognises this as the "linking" flow
+  // thanks to the signed `state` (see backend/routes/auth.js, GET /api/auth/google/link).
   const handleConnectGoogle = () => {
     window.location.href = `${window.location.origin}/api/auth/google/link?token=${sessionToken}`;
   };
@@ -1046,8 +1043,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
-  // Połączenie/odłączenie Google Fit (źródło danych o krokach/kaloriach), analogicznie
-  // do Oura/Withings, ale bez własnych Client ID/Secret - korzysta z tej samej,
+  // Connecting/disconnecting Google Fit (the source of step and calorie data), analogous to
+  // Oura/Withings but without its own Client ID/Secret - it uses the same,
   // globalnej konfiguracji Google co logowanie Google.
   const handleConnectGoogleFit = () => {
     window.location.href = `${window.location.origin}/api/auth/google-fit?token=${sessionToken}`;
@@ -1076,8 +1073,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   return (
     <div className="setup-container">
       
-      {/* 1. Panel Ustawień Celów */}
-      {/* 1. Panel Ustawień Celów */}
+      {/* 1. Goal settings panel */}
+      {/* 1. Goal settings panel */}
       <div
         className="glass-card"
         role="button"
@@ -1224,13 +1221,13 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         </div>
       )}
 
-      {/* Panel Profilu (Avatar) oraz pozostałe karty ustawień.
-          Karta Profilu jest dużo wyższa niż pozostałe (Cel Sylwetki, Twoje Dane,
-          Zmiana Hasła, 2FA), więc zamiast jednej siatki auto-fit (gdzie 5 kart różnej
-          wysokości nierówno "łamało się" w wiersze i zostawiało puste komórki w drugim
-          rzędzie - patrz zgłoszenie użytkownika), dzielimy układ na dwie kolumny:
-          lewa - sama, wysoka karta Profilu; prawa - stała siatka 2x2 dla czterech
-          mniejszych kart, więc nie ma już "dziur" ani nierównych linii. */}
+      {/* Profile panel (avatar) and the remaining settings cards.
+          The Profile card is much taller than the others (Body Goal, Your Data, Password
+          Change, 2FA), so instead of one auto-fit grid (where 5 cards of differing heights
+          wrapped into rows unevenly and left empty cells in the second row - see the user
+          report), we split the layout into two columns: left - the tall Profile card on its
+          own; right - a fixed 2x2 grid for the four smaller cards, so there are no more
+          "holes" or uneven lines. */}
       <div className="settings-main-grid">
 
         {/* Panel Profilu i Avatara */}
@@ -1355,9 +1352,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               </select>
             </div>
 
-            {/* Połączenie konta z Google - niezależne od logowania Google (które łączy
-                konta automatycznie tylko po zgodnym e-mailu). To pozwala powiązać konto
-                założone hasłem z Google bez zmiany/zgodności adresu e-mail. */}
+            {/* Linking an account with Google - independent of Google sign-in (which links
+                accounts automatically only when the e-mail matches). This lets an account
+                created with a password be linked to Google without changing or matching
+                the e-mail address. */}
             <div style={{
               display: 'flex',
               alignItems: 'center',
@@ -1473,8 +1471,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                       value={monthlySummaryDay}
                       onChange={(e) => {
                         // Pozwalamy na tymczasowo pusty string podczas wpisywania
-                        // (wzorzec jak dla pozostałych pól liczbowych w tym pliku).
-                        // Clamp do 1-31 stosowany dopiero przy submit (server-side też waliduje).
+                        // (the same pattern as the other numeric fields in this file).
+                        // The 1-31 clamp is applied only on submit (the server validates too).
                         if (e.target.value === '') {
                           setMonthlySummaryDay('');
                           return;
@@ -1505,9 +1503,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               <button type="submit" className="btn-primary" disabled={isSavingProfile} style={{ width: '100%' }}>
                 {isSavingProfile ? t('Zapisywanie...') : 'Zapisz profil'}
               </button>
-              {/* minmax(0, 1fr) zamiast samego 1fr - bez tego kolumna nie skurczy się
-                  poniżej szerokości tekstu przycisku (np. t("Wyślij tygodniowe")) na
-                  wąskich ekranach, ten sam mechanizm co naprawiony .premium-grid-2 */}
+              {/* minmax(0, 1fr) rather than a bare 1fr - without it the column will not
+                  shrink below the width of the button text (t("Wyślij tygodniowe"), for
+                  example) on narrow screens; the same mechanism as the fixed .premium-grid-2 */}
               <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: '10px' }}>
                 <button
                   type="button"
@@ -1541,14 +1539,14 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           </form>
         </div>
 
-        {/* Prawa kolumna - podzielona na dwie pionowe pod-kolumny (flex), aby zapobiec powstawaniu dziur/pustych obszarów spowodowanych różnymi wysokościami kart */}
+        {/* Right column - split into two vertical sub-columns (flex) to prevent holes/empty areas caused by differing card heights */}
         <div className="settings-right-grid">
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {/* Panel Celu Sylwetki - opis tekstowy + zdjęcie referencyjne, brane pod uwagę
-                przez AI dietetyka przy generowaniu porad (dashboard.js) i odpowiedzi
-                czatu (chat.js). Zapisywane na backendzie w users.body_goal_text /
-                users.body_goal_photo_base64 (patrz migracja w db.js). */}
+            {/* Body goal panel - a text description plus a reference photo, taken into
+                account by the AI dietician when generating advice (dashboard.js) and chat
+                replies (chat.js). Stored on the backend in users.body_goal_text /
+                users.body_goal_photo_base64 (see the migration in db.js). */}
             <div className="glass-card">
               <h3 className="card-title">🎯 Cel Sylwetki</h3>
               <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '20px' }}>
@@ -1646,8 +1644,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               </p>
             </div>
 
-            {/* Panel Zmiany Hasła */}
-            {/* Panel Zmiany Hasła */}
+            {/* Password change panel */}
+            {/* Password change panel */}
             <div
               className="glass-card"
               role="button"
@@ -1834,7 +1832,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-            {/* Panel Twoje Dane (RODO) - eksport i usunięcie konta */}
+            {/* Your Data panel (GDPR) - export and account deletion */}
             <div className="glass-card">
               <h3 className="card-title">📦 Twoje Dane</h3>
               <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '20px' }}>
@@ -1857,10 +1855,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 {isExportingData ? 'Przygotowywanie...' : '⬇️ Eksportuj moje dane (JSON)'}
               </button>
 
-              {/* Raport PDF dla lekarza/dietetyka - zwięzłe podsumowanie danych z
-                  wybranego okresu (cele, średnie, sen/skład ciała, obwody, suplementy),
-                  bez tekstu generowanego przez AI, żeby dokument pokazywany lekarzowi
-                  zawierał tylko surowe, policzone dane. */}
+              {/* PDF report for a doctor or dietician - a concise summary of the data from
+                  the chosen period (goals, averages, sleep/body composition, measurements,
+                  supplements), with no AI-generated text, so that the document shown to a
+                  doctor contains only raw, computed data. */}
               <h4 style={{ fontSize: '1rem', color: 'var(--text-main)', marginBottom: '8px' }}>Raport dla lekarza/dietetyka</h4>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
                 Pobierz zwięzłe podsumowanie PDF z wybranego okresu - możesz zabrać je na wizytę.
@@ -1895,11 +1893,11 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 </button>
               </div>
 
-              {/* Udostępnianie raportu linkiem (read-only) - alternatywa dla pobrania
-                  pliku powyżej: link można wysłać lekarzowi/dietetykowi, który otworzy
-                  go bez konta w aplikacji. Token jest jedyną autoryzacją (patrz
-                  backend/routes/sharedReport.js), więc link ma ograniczony czas
-                  ważności i można go w każdej chwili odwołać poniżej. */}
+              {/* Sharing the report by link (read-only) - an alternative to downloading
+                  the file above: the link can be sent to a doctor or dietician, who opens
+                  it without an account in the app. The token is the only authorisation (see
+                  backend/routes/sharedReport.js), so the link has a limited validity period
+                  and can be revoked at any time below. */}
               <h4 style={{ fontSize: '1rem', color: 'var(--text-main)', marginBottom: '8px' }}>{t("Udostępnij raport linkiem")}</h4>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
                 Wygeneruj link do raportu, który można wysłać lekarzowi/dietetykowi - otworzy go bez logowania się do aplikacji.
@@ -2041,7 +2039,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
       </div>
 
-      {/* 2. Integracje ze Źródłami Danych */}
+        {/* 2. Data source integrations */}
       <div className="glass-card">
         <h3 className="card-title">{t("🔌 Integracje ze Źródłami Danych")}</h3>
         <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
@@ -2053,11 +2051,11 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           </a>
         </p>
 
-        {/* Komunikat o wyniku akcji (np. synchronizacji lub odłączenia integracji) -
-            zduplikowany tutaj, bo oryginalny alert renderuje się tylko w karcie "Cele
-            Dietetyczne" na samym szczycie strony. Bez tego, kliknięcie "Wymuś ręczną
-            synchronizację" (które jest w tej karcie, niżej na stronie) nie dawało
-            żadnej widocznej reakcji, jeśli użytkownik nie przewinął strony do góry. */}
+        {/* A message about the result of an action (a sync or disconnecting an
+            integration, for instance) - duplicated here because the original alert renders
+            only in the "Cele Dietetyczne" card at the very top of the page. Without this,
+            clicking "Wymuś ręczną synchronizację" (which is in this card, further down the
+            page) produced no visible reaction unless the user scrolled back to the top. */}
         {message.text && (
           <div className={`alert alert-${message.type}`} style={{ marginBottom: '16px' }}>
             {message.text}
@@ -2090,9 +2088,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         )}
 
         <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {/* Lokalizacja dla kontekstu pogody w poradach AI (czat i codzienna porada na
-              Dashboardzie - patrz backend/utils/weatherContext.js) - domyślnie serwer
-              używa stałej lokalizacji, tu użytkownik może ją nadpisać swoją miejscowością. */}
+          {/* Location for the weather context in the AI advice (chat and the daily tip on
+              the Dashboard - see backend/utils/weatherContext.js) - by default the server
+              uses a fixed location; here the user can override it with their own town. */}
           <div style={{
             display: 'flex',
             flexDirection: 'column',
@@ -2178,9 +2176,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             )}
           </div>
 
-          {/* Google Fit - źródło danych o krokach/kaloriach/aktywności, analogicznie do
-              Oura/Withings, ale bez własnych Client ID/Secret (korzysta z globalnej
-              konfiguracji Google ustawionej przez admina - tej samej, co logowanie Google). */}
+          {/* Google Fit - the source of step, calorie and activity data, analogous to
+              Oura/Withings but without its own Client ID/Secret (it uses the global Google
+              configuration set by the admin - the same one as Google sign-in). */}
           <div style={{
             display: 'flex',
             flexDirection: 'column',
@@ -2447,8 +2445,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               <div className="input-group" style={{ marginBottom: 0 }}>
                 <label className="input-label" style={{ fontSize: '0.8rem' }}>URL webhooka (wklej w apce Health Auto Export)</label>
                 <div className="code-block">
-                  {/* syncToken jeszcze nie przyszedł z backendu (fetchSyncToken w App.jsx) -
-                      pokazujemy informację o ładowaniu, a nie URL z puste/fałszywym tokenem. */}
+                  {/* syncToken has not arrived from the backend yet (fetchSyncToken in App.jsx) -
+                      we show a loading message rather than a URL with an empty or bogus token. */}
                   <span style={!appleHealthWebhookUrl ? { color: 'var(--text-dim)', fontStyle: 'italic' } : undefined}>
                     {appleHealthWebhookUrl || t('Ładowanie tokenu...')}
                   </span>

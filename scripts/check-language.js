@@ -97,7 +97,12 @@ function classify(line, inBlockComment, opts) {
   const trimmed = line.trim();
 
   if (inBlockComment) return 'comment';
-  if (/^(\/\/|\*|#)/.test(trimmed)) return 'comment';
+  // A leading `*` only means "comment" INSIDE a block comment - the tracker above already
+  // reported that via inBlockComment. Outside one it is ordinary text, and in JSX it is a
+  // footnote rendered to the user ("* Height is optional, but without it..."). Treating a
+  // bare `*` line as a comment flagged those two UI footnotes in Settings.jsx as permanent
+  // violations whose only "fix" would be translating text the user reads.
+  if (/^(\/\/|#)/.test(trimmed)) return 'comment';
   if (/^\/\*/.test(trimmed)) return 'comment';
   if (/\{\s*\/\*/.test(line)) return 'comment';
 

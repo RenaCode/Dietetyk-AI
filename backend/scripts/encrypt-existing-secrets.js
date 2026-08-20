@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Jednorazowy, idempotentny skrypt migracyjny: szyfruje sekrety zapisane w bazie
+// A one-off, idempotent migration script: it encrypts the secrets that were stored in the
 // BEFORE utils/encryption.js was introduced (round 18 audit fix). Without this script the
 // existing OAuth tokens (oauth_tokens) and API keys (settings.gemini_api_key,
 // settings.oura_client_secret, settings.withings_client_secret, app_config.mailgun_api_key,

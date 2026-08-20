@@ -1,5 +1,5 @@
 // Default values for the user's targets (calories/BMR/water) - used as the fallback in
-// routes/dashboard.js i routes/chat.js, gdy w tabeli settings brakuje danego klucza
+// routes/dashboard.js and routes/chat.js when the settings table lacks a given key
 // or when the stored value is not a number (NaN). Every file - often every endpoint
 // within the same file - used to hardcode its own fallback: some places used 2000 kcal,
 // others 2500, even though db.js/auth.js always SEEDS a new user with 2500 (see

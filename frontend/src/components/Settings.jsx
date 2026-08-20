@@ -62,7 +62,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   const [isSearchingLocation, setIsSearchingLocation] = useState(false);
   const [locationMessage, setLocationMessage] = useState({ type: '', text: '' });
 
-  // Stan eksportu danych i usuwania konta (RODO/GDPR)
+  // State for the data export and account deletion (GDPR)
   const [isExportingData, setIsExportingData] = useState(false);
   const [exportMessage, setExportMessage] = useState({ type: '', text: '' });
   // State for the PDF report export for a doctor or dietician - independent of the JSON
@@ -251,10 +251,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
-  // Generuje nowy, losowy token synchronizacji (taki sam format jak tokeny
+  // Generates a new, random sync token (the same format as the tokens
   // created automatically on registration - see backend/routes/auth.js) and saves it through
   // the existing POST /api/user/profile endpoint (already
-  // wspiera pole syncToken - backend/routes/account.js).
+  // supports the syncToken field - backend/routes/account.js).
   // NOTE: Math.random() is NOT cryptographically secure (the JS engine's PRNG is
   // reproducible/predictable under certain conditions) - and this token is a real credential:
   // the backend (account.js) accepts it with no additional verification and sets it as the
@@ -800,7 +800,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           first_name: firstNameInput,
           last_name: lastNameInput,
       // Empty input -> null (the backend computes HRmax with a fallback), not ''
-          // czy NaN z Number('').
+          // or NaN from Number('').
           birth_year: birthYearInput ? Number(birthYearInput) : null,
           body_goal_text: bodyGoalTextInput,
           weekly_summary_enabled: weeklySummaryEnabled ? '1' : '0',

@@ -150,7 +150,7 @@ function testUnknownLanguageFallsBackToPolish() {
   console.log('\n--- TEST 9: unknown language -> Polish ---');
   for (const lang of [undefined, null, 'de', '']) {
     const prompt = buildMealPrompt({ hasImage: true, userText: DESCRIPTION, language: lang });
-    assert.ok(/IDŹ ZA OPISEM/.test(prompt), `For language=${JSON.stringify(lang)} nie użyto polskiego wariantu.`);
+    assert.ok(/IDŹ ZA OPISEM/.test(prompt), `For language=${JSON.stringify(lang)} the Polish variant was not used.`);
   }
   console.log('  ✓ undefined/null/de/"" -> the Polish variant');
   console.log('✅ Safe language fallback.');

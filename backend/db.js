@@ -39,7 +39,7 @@ db.run('PRAGMA busy_timeout = 5000;', (err) => {
 // SQLite does NOT enforce foreign keys or "ON DELETE CASCADE" declared in the schema
 // (CREATE TABLE) by default - it has to be enabled per connection. Without it, deleting a
 // user (the account-deletion feature, see routes/account.js) would leave
-// osierocone wiersze w sessions/oauth_tokens/meals/health_metrics/settings/
+// orphaned rows behind in sessions/oauth_tokens/meals/health_metrics/settings/
 // body_measurements behind instead of cascading the delete.
 db.run('PRAGMA foreign_keys = ON;', (err) => {
   if (err) console.error('Failed to set PRAGMA foreign_keys=ON:', err.message);
@@ -55,7 +55,7 @@ const run = (sql, params = []) => {
   });
 };
 
-// Pomocnicza funkcja do pobierania jednego wiersza (get)
+// Helper for fetching a single row (get)
 const get = (sql, params = []) => {
   return new Promise((resolve, reject) => {
     db.get(sql, params, (err, row) => {
@@ -65,7 +65,7 @@ const get = (sql, params = []) => {
   });
 };
 
-// Pomocnicza funkcja do pobierania wielu wierszy (all)
+// Helper for fetching multiple rows (all)
 const all = (sql, params = []) => {
   return new Promise((resolve, reject) => {
     db.all(sql, params, (err, rows) => {
@@ -75,7 +75,7 @@ const all = (sql, params = []) => {
   });
 };
 
-// Inicjalizacja tabel i migracje
+// Table initialisation and migrations
 const initDb = async () => {
   // 1. Users table
   await run(`
@@ -356,7 +356,7 @@ const initDb = async () => {
     await run(`ALTER TABLE sessions ADD COLUMN is_verified_2fa INTEGER DEFAULT 0`);
   } catch (e) {}
 
-  // 5b. Tabela blokady brute-force logowania (login_attempts) - przeniesiona
+  // 5b. Brute-force login lockout table (login_attempts) - moved
   // from process memory (a Map) into the database, so that blocks survive a restart of the
   // backend container - during a deploy, for instance. See services/loginAttempts.js.
   await run(`
@@ -451,14 +451,14 @@ const initDb = async () => {
     await run("ALTER TABLE health_metrics ADD COLUMN respiratory_rate REAL DEFAULT NULL");
   } catch (e) {}
 
-  // Migracja: dobowe SpO2 z Oury (endpoint /v2/usercollection/daily_spo2, NOWE
+  // Migration: daily SpO2 from Oura (the /v2/usercollection/daily_spo2 endpoint, a NEW
   // request in sync.js - available only on Gen 3 rings; on older models the field stays
   // NULL). The "Blood oxygen" card previously showed a hardcoded "98.4".
   try {
     await run("ALTER TABLE health_metrics ADD COLUMN spo2_percentage REAL DEFAULT NULL");
   } catch (e) {}
 
-  // Migracja: absolutna temperatura nadgarstka z Apple Watch (Health Auto Export,
+  // Migration: absolute wrist temperature from Apple Watch (Health Auto Export,
   // the "Wrist Temperature" metric arrives as name: "wrist_temperature", see
   // routes/appleHealth.js). NOTE: this is a different value from Oura's
   // `temperature_deviation`, which is a deviation from baseline rather than an absolute
@@ -469,7 +469,7 @@ const initDb = async () => {
     await run("ALTER TABLE health_metrics ADD COLUMN wrist_temperature REAL DEFAULT NULL");
   } catch (e) {}
 
-  // Migracja: dystans (metry) - z Oury (equivalent_walking_distance), Google Fit
+  // Migration: distance (metres) - from Oura (equivalent_walking_distance), Google Fit
   // (distance.delta) or Apple Health (walking_running_distance, via the webhook). Taken
   // from the same source as the rest of the activity data (priority apple > google_fit >
   // oura, see activity_source and utils/activitySources.js).
@@ -488,7 +488,7 @@ const initDb = async () => {
     await run("ALTER TABLE health_metrics ADD COLUMN low_activity_minutes INTEGER DEFAULT NULL");
   } catch (e) {}
 
-  // Migracja: realny poziom stresu z Oury (endpoint /v2/usercollection/daily_stress,
+  // Migration: the real stress level from Oura (the /v2/usercollection/daily_stress endpoint,
   // available only on rings that support it - otherwise the fields stay NULL).
   // This is NOT a revival of the old hardcoded stress section (see the comment where it was
   // removed in Dashboard.jsx) - these are real values from the Oura API.
@@ -511,7 +511,7 @@ const initDb = async () => {
   // same account as weight and body composition, see syncWithings in services/sync.js).
   // Separate columns rather than one text field, so the values can be used in trends and
   // charts.
-  // tak samo jak weight/fat_ratio/muscle_mass.
+  // just like weight/fat_ratio/muscle_mass.
   try {
     await run("ALTER TABLE health_metrics ADD COLUMN blood_pressure_systolic REAL DEFAULT NULL");
   } catch (e) {}
@@ -583,7 +583,7 @@ const initDb = async () => {
     )
   `);
 
-  // Migracja: typ treningu (np. "Running", "Functional Strength Training" - pole
+  // Migration: workout type (e.g. "Running", "Functional Strength Training" - the
   // the `name` field from the Health Auto Export payload, see routes/appleHealth.js).
   // Added after a functional audit found that /api/dashboard always returned a hardcoded
   // empty `workouts: []` even though this table was in fact collecting workouts - without
@@ -701,12 +701,12 @@ const initDb = async () => {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
-  // Indeks pod zapytania "WHERE user_id = ? AND type = ? AND end_date >= ? AND
+  // Index for "WHERE user_id = ? AND type = ? AND end_date >= ? AND
   // start_date <= ?" (checking that an event range intersects the insight window).
   await run(`CREATE INDEX IF NOT EXISTS idx_day_events_user_type ON day_events(user_id, type, start_date, end_date)`);
 
-  // Indeksy pod zapytania zakresowe "WHERE user_id = ? AND date >= ?" (agregacje
-  // 7/30/90-dniowe w dashboard.js/summaries.js/chat.js). health_metrics i
+  // Indexes for range queries "WHERE user_id = ? AND date >= ?" (the 7/30/90-day
+  // aggregations in dashboard.js/summaries.js/chat.js). health_metrics and
   // body_measurements already get such an index for free (PRIMARY KEY(user_id, date) for
   // health_metrics, UNIQUE(user_id, date) for body_measurements each create an implicit
   // index) - it was missing for meals and apple_health_workouts, where (user_id, date) is
@@ -793,7 +793,7 @@ const verifyBackupFile = (backupPath) => new Promise((resolve) => {
       resolve({ ok: false, reason: `cannot open: ${openErr.message}` });
       return;
     }
-    // quick_check zamiast integrity_check: wykrywa te same uszkodzenia struktury,
+    // quick_check rather than integrity_check: it detects the same structural corruption,
     // but does not walk the whole database page by page - for a backup taken every 24h a
     // full scan would load the production disk for no good reason.
     probe.get('PRAGMA quick_check', (checkErr, row) => {

@@ -33,7 +33,7 @@ async function getUserSettings(userId) {
     targetFat: settings.target_fat ?? 80,
     bmr: settings.bmr ?? 1800,
     targetWaterMl: settings.target_water_ml ?? 2500,
-    // 0 = nieustawiony (ta sama konwencja co w routes/dashboard.js) - liczbowy cel
+    // 0 = not set (the same convention as in routes/dashboard.js) - the numeric
 // the weight target is optional, unlike calories and macros, which have sensible
 // defaults.
     targetWeightKg: settings.target_weight_kg || 0
@@ -235,7 +235,7 @@ async function generateAiSummaryText({ userId, user, prompt, shouldGenerate, fal
 // Line by line - handles headings (## / ###), bullet lists ('- ' / '* ') and
 // the previous replacement did not close <ul> and did not understand headings, so the new
 // structured AI response - '## Analysis' / '## Recommendations' in bullets - rendered flat.
-// Najpierw escapujemy HTML (tekst generuje LLM), tak jak w renderAdviceMarkdown na froncie.
+// We escape the HTML first (the text is LLM-generated), just as renderAdviceMarkdown does on the frontend.
 function markdownToHtml(text) {
   const escaped = text
     .replace(/&/g, '&amp;')
@@ -402,7 +402,7 @@ async function sendWeeklySummaryForUser(userId, customEmail = null) {
   const { user, emailToUse } = await getUserAndEmail(userId, customEmail);
   const { targetCalories, targetProtein, targetCarbs, targetFat, bmr, targetWaterMl, targetWeightKg } = await getUserSettings(userId);
 
-  // Pobranie danych z ostatnich 7 dni
+  // Fetching the data from the last 7 days
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
     // Only the columns actually used by aggregateNutritionAndHealth below (numeric sums and
@@ -763,7 +763,7 @@ async function sendMonthlySummaryForUser(userId, customEmail = null) {
   const { user, emailToUse } = await getUserAndEmail(userId, customEmail);
   const { targetCalories, targetProtein, targetCarbs, targetFat, bmr, targetWaterMl } = await getUserSettings(userId);
 
-  // Pobranie danych z ostatnich 30 dni
+  // Fetching the data from the last 30 days
   const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
     // See the comment in sendWeeklySummaryForUser - only the numeric columns needed for the

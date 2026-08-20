@@ -12,6 +12,7 @@
 //   node scripts/check-language.js              summary + worst files
 //   node scripts/check-language.js --file <p>   every flagged line in one file
 //   node scripts/check-language.js --category comment|log|identifier
+//   node scripts/check-language.js --unresolved     lines the check could not decide
 //
 // Exit code is always 0: this is a progress report, not a gate. Failing the build
 // on ~2800 pre-existing Polish comments would only mean disabling the check.
@@ -41,40 +42,122 @@ const EXT = /\.(js|jsx|sh|yml|yaml)$/;
 const PL_DIACRITICS = /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/;
 const PL_WORDS = /\b(nie|jest|sie|dla|przez|zeby|tego|ktore|ktory|oraz|albo|jako|tylko|takze|wiec|bez|przy|jednak|zawsze|nigdy|teraz|potem|kazdy|wszystkie|dane|uzytkownik|posilek|zdjecie|dzien|godzina|kopia|jesli|mozna|trzeba|byla|byly|zostac|moze|nawet|wtedy|czyli|patrz|robi|maja|ma to|do tego)\b/i;
 
-// Third detector: word DENSITY on the line with quoted spans removed.
+// Third detector: an ENGLISH DICTIONARY check.
 //
-// The first two still under-reported, and in a way that mattered. A block-by-block
-// translation cuts comment blocks at the boundary of what the detector flagged, so any line
-// the detector missed stayed Polish INSIDE an otherwise English block - exactly the
-// half-translated state CLAUDE.md warns about. Two real examples that passed both detectors:
+// The two detectors above are allow-lists of Polish, and an allow-list can only ever find
+// what someone already thought to add. That failed in practice: after a pass that reported
+// "0 violations, 82/82 compliant", 131 Polish comment lines were still in the tree - whole
+// comments like "// Inicjalizacja Gemini API" and "// Zapisz cache" carry no diacritics and
+// matched no listed word. A previous attempt to patch this with a longer word list caught
+// exactly the two lines it was written against and nothing else.
 //
-//   // niepoprawny string (np. "abc", inny format) wywala shiftDate/Date.UTC w
-//        -> no diacritics at all, and none of its words were in PL_WORDS
-//   // Wczesny alert "przeciazenie/mozliwa infekcja": odchylenie DZISIEJSZYCH
-//        -> every diacritic sat inside the quotes, which stripQuoted removes
+// Inverting the test fixes that: instead of asking "is this word Polish?", ask "is this word
+// English?". Anything left over after removing English words, technical vocabulary and the
+// code's own identifiers is, in this codebase, Polish. That found all 131 without being told
+// what to look for.
 //
-// Rather than growing the word list forever, we measure how much of the line is made of
-// unambiguously Polish tokens. The list below deliberately excludes anything that is also an
-// English word or an identifier fragment ("to", "a", "i", "do", "na", "ma", "pole"), because
-// those produce false positives on ordinary English comments.
-const PL_DENSE_WORDS = /^(niepoprawny|poprawny|wywala|rzuca|zamiast|czytelnego|wczesny|odchylenie|dzisiejszych|przypisane|kalendarzowego|mapujemy|sekundy|minuty|konwersji|ustawienia|tabela|globalnej|innym|stylu|wychwyci|zanim|karta|cichu|wypadnie|niepotrzebnie|wartosc|wartosci|zwraca|liczba|liczy|brak|braku|zakres|zakresu|srednia|wynik|wyniku|sposob|miejsce|miejscu|wiersz|kolumna|blad|bledu|proba|okno|okna|inny|inna|inne|innych|jesli|mozna|trzeba|zostac|nawet|wtedy|czyli|patrz|kazdy|kazda|wszystkie|uzytkownik|uzytkownika|posilek|posilku|zdjecie|dzien|dnia|godzina|kopia|ktore|ktory|ktora|oraz|albo|przez|zeby|tylko|takze|jednak|zawsze|nigdy|teraz|potem|wiec|przy|jest|sie|dla|tego)$/i;
+// The dictionary is the system word list. If it is unavailable (a slim CI image, for
+// instance) the check degrades to the two detectors above and SAYS SO in the report - the
+// one thing it must never do is stay silent and imply a clean tree it did not verify.
+const DICT_PATHS = ['/usr/share/dict/words', '/usr/share/dict/web2'];
+const ENGLISH = new Set();
+for (const p of DICT_PATHS) {
+  try {
+    for (const w of fs.readFileSync(p, 'utf8').split('\n')) {
+      const t = w.trim().toLowerCase();
+      if (t) ENGLISH.add(t);
+    }
+  } catch { /* dictionary absent - handled by DICT_AVAILABLE below */ }
+}
+const DICT_AVAILABLE = ENGLISH.size > 1000;
 
-// A comment line is Polish by density when at least three of its unquoted words are
-// unambiguously Polish AND they make up more than a quarter of the line. Both conditions
-// matter: the count alone fires on a long English sentence that happens to contain a Polish
-// identifier, and the ratio alone fires on a two-word fragment.
+// Vocabulary this project uses that a general English dictionary does not carry. Kept short
+// on purpose: every entry here is a hole in the detector, so add a word only after checking
+// it really is English or a technical term, never to silence a Polish word.
+const TECHNICAL = new Set((`
+api uri json sql sqlite http https js jsx css html dom ui ux env npm node express react vite
+gemini oura withings karvonen hrv rhr spo bmi bmr tdee kcal kg cm ms utc cron webhook oauth
+csrf uuid jwt regex async await eslint playwright mailgun ghcr helm kubernetes docker compose
+timestamp timestamps params param config configs init auth middleware middlewares backend
+frontend runtime repo readme boolean nullable enum lookback datetime endpoint endpoints crud
+upsert rebase dedupe deduped iife jsdoc favicon svg png webp localstorage useeffect usestate
+props polyfill stringify parseint isnan isfinite sedentary readiness wearable macronutrient
+macronutrients whr adonis percentile percentiles zscore stddev renormalise renormalised
+renormalisation prioritise prioritised normalise normalised unlogged subquery subqueries
+sanitise sanitised sanitisation authorise authorised authorisation behaviour behaviours
+tokenise tokenised serialisation gdpr mvp i18n cdn tsx mjs cjs
+`).trim().split(/\s+/));
+
+// Words that are plainly English but absent from the system list (inflections it omits).
+const englishish = (w) => ENGLISH.has(w)
+  || (w.endsWith('s') && ENGLISH.has(w.slice(0, -1)))
+  || (w.endsWith('es') && ENGLISH.has(w.slice(0, -2)))
+  || (w.endsWith('ed') && (ENGLISH.has(w.slice(0, -2)) || ENGLISH.has(w.slice(0, -1))))
+  || (w.endsWith('ing') && (ENGLISH.has(w.slice(0, -3)) || ENGLISH.has(w.slice(0, -3) + 'e')))
+  || (w.endsWith('ly') && ENGLISH.has(w.slice(0, -2)))
+  || (w.endsWith('er') && ENGLISH.has(w.slice(0, -2)))
+  || (w.endsWith('ise') && ENGLISH.has(w.slice(0, -3) + 'ize'))
+  || (w.endsWith('ised') && ENGLISH.has(w.slice(0, -4) + 'ized'));
+
+// Everything that is not prose: quoted spans, URLs, identifiers, paths. A comment naming
+// `getWarsawWallClock` must not be reported because the dictionary has never heard of it.
+const proseOnly = (line) => line
+  .replace(/https?:\/\/\S+/g, ' ')
+  .replace(/`[^`]*`/g, ' ')
+  .replace(/"[^"]*"/g, ' ')
+  .replace(/'[^']*'/g, ' ')
+  .replace(/\b[\w.]*[A-Z][a-z]*[A-Z]\w*\b/g, ' ')
+  .replace(/\b\w*[_./]\w*\b/g, ' ');
+
+// The dictionary alone is too noisy to be a verdict: run over this codebase it leaves ~1170
+// lines, of which only ~130 are Polish - the rest are technical terms and coinages no general
+// word list carries. So the dictionary SELECTS candidates and Polish morphology CONFIRMS
+// them. Neither half works alone: morphology on its own fires on English words that happen to
+// end in -ie or -om, and the dictionary on its own drowns the real hits in noise. Together
+// they found every one of the 131 lines the diacritics-and-word-list detectors had missed,
+// with no false positives on this tree.
+const PL_INFLECTION = /(ych|ego|emu|ami|ach|owa|owe|owy|iem|iej|ie|ia|ii|om|ow|em|ym|im|nia|nie|cja|cji|sci|osc|acz|arz|ka|ki|ku|cy|cie|ymi|imi)$/;
+const PL_CLUSTER = /(cz|sz|rz|dz|prz|krz|trz|wsz|zn|zb|zg|zd|zl|zm|zr|zw)/;
+// Short Polish function and domain words that carry no diacritics and no distinctive ending -
+// the ones a dictionary check finds but morphology cannot confirm on its own.
+const PL_BARE = new Set((`
+jak czy tak nie tez juz bez dla oraz albo lub przez zeby aby wiec przy nad pod gdy bo kiedy
+zawsze nigdy teraz potem jeszcze tylko takze nawet wtedy czyli patrz robi maja jest byla byly
+bedzie moze mozna trzeba zostac dane danych dni dzien dnia doba runda rundy funkcja typ typu
+krok kroku klucz klucze token tokeny baza bazy bazie tabela kolumna wiersz zapis zapisz odczyt
+pole pola brak braku nowa nowy nowe stary stare tej tego temu ten tych ktore ktory ktora kazdy
+wszystkie migracja weryfikacja inicjalizacja pomocnicza suplement suplementy trening treningu
+pobranie oura oury sekret sekrety danego samego wlasny ostatni ostatnich pierwszy drugi liczba
+liczby wartosc wartosci przed
+`).trim().split(/\s+/));
+
+const looksPolish = (lw) => PL_BARE.has(lw)
+  || (PL_INFLECTION.test(lw) && PL_CLUSTER.test(lw));
+
+// Returns the words on the line that the dictionary does not recognise, split by whether
+// morphology could confirm them as Polish. `confirmed` drives the violation count;
+// `unconfirmed` is REPORTED SEPARATELY rather than dropped.
 //
-// The quarter is calibrated on a real miss, not picked round: the line
-//   // niepoprawny string (np. "abc", inny format) wywala shiftDate/Date.UTC w
-// carries 3 Polish words among 10 tokens, because the identifiers it names
-// (shiftDate, Date, UTC) count towards the total. At a third it stayed invisible.
-const isDenselyPolish = (line) => {
-  const bare = stripQuoted(line).replace(/^[\s/*#{]+/, '');
-  const words = bare.match(/[A-Za-z_]+/g) || [];
-  if (words.length < 3) return false;
-  const polish = words.filter(w => PL_DENSE_WORDS.test(w));
-  return polish.length >= 3 && polish.length / words.length > 0.25;
+// That separation is the point. The previous detector silently discarded everything it could
+// not confirm, so the report said "0 violations, 82/82 compliant" while 131 Polish lines sat
+// in the tree - and because the script is the acceptance signal for this work, a false
+// all-clear is worse than no check at all. Morphology will always miss some Polish
+// ("// 2. Katalog aplikacji" has no diacritics, no Polish ending and no consonant cluster),
+// so the honest design is to surface the residue for a human to glance at instead of
+// pretending it was checked.
+const foreignWords = (line) => {
+  const confirmed = [];
+  const unconfirmed = [];
+  if (!DICT_AVAILABLE) return { confirmed, unconfirmed };
+  for (const w of proseOnly(line).match(/[A-Za-zĄ-ża-ż]{3,}/g) || []) {
+    const lw = w.toLowerCase();
+    if (englishish(lw) || TECHNICAL.has(lw)) continue;
+    (looksPolish(lw) ? confirmed : unconfirmed).push(w);
+  }
+  return { confirmed, unconfirmed };
 };
+
+const hasNonEnglishProse = (line) => foreignWords(line).confirmed.length > 0;
 
 const PL = PL_DIACRITICS;
 const isCommentLine = (trimmed) => /^(\/\/|\*|\/\*|#)/.test(trimmed) || /\{\s*\/\*/.test(trimmed);
@@ -92,7 +175,7 @@ const commentIsPolish = (line) => {
   const bare = isCommentLine(line.trim()) ? stripQuoted(line) : line;
   if (PL_DIACRITICS.test(bare)) return true;
   if (!isCommentLine(line.trim())) return false;
-  return PL_WORDS.test(bare) || isDenselyPolish(line);
+  return PL_WORDS.test(bare) || hasNonEnglishProse(line);
 };
 
 // Files whose Polish string content is product content by design.
@@ -229,6 +312,7 @@ const results = files.map(auditFile).filter(r => r.violations + r.hits.content >
 const args = process.argv.slice(2);
 const fileArg = args.includes('--file') ? args[args.indexOf('--file') + 1] : null;
 const catArg = args.includes('--category') ? args[args.indexOf('--category') + 1] : null;
+const showUnresolved = args.includes('--unresolved');
 
 if (fileArg) {
   const match = results.find(r => r.file.endsWith(fileArg));
@@ -270,6 +354,40 @@ withViolations.slice(0, 25).forEach(r => console.log(
 const rest = withViolations.slice(25);
 if (rest.length) {
   console.log(`      ... and ${rest.length} more files (${rest.reduce((s, r) => s + r.violations, 0)} violations)`);
+}
+
+// Advisory: comment lines carrying words that are neither English nor known technical
+// vocabulary, which morphology could NOT confirm as Polish. Not counted as violations - most
+// are coinages or product nouns - but listed so nothing the check could not decide disappears
+// from the report.
+const unresolved = [];
+for (const file of files) {
+  const rel = path.relative(REPO_ROOT, file);
+  let inBlock = false;
+  fs.readFileSync(file, 'utf8').split('\n').forEach((line, idx) => {
+    const trimmed = line.trim();
+    if (/^\/\*/.test(trimmed)) inBlock = true;
+    const isComment = inBlock || isCommentLine(trimmed);
+    if (/\*\//.test(trimmed)) inBlock = false;
+    if (!isComment || commentIsPolish(line)) return;
+    const { unconfirmed } = foreignWords(line);
+    if (unconfirmed.length) unresolved.push({ rel, line: idx + 1, words: unconfirmed, text: trimmed });
+  });
+}
+if (!DICT_AVAILABLE) {
+  console.log('\nNOTE: no system word list found - the English-dictionary detector is DISABLED,');
+  console.log('      so this report may under-report. Install one, or run the check on a machine');
+  console.log('      that has /usr/share/dict/words.\n');
+} else if (unresolved.length) {
+  // Deliberately ONE line, not a list. The system word list is a 1934 Webster's - it has
+  // never heard of "database", "startup" or "cardio" - so the raw residue here is ~900 lines
+  // of noise. Printing all of it would train the reader to skip the report, which is how a
+  // check stops being read at all. The count stays visible so the residue is never hidden,
+  // and --unresolved prints it when someone actually wants to audit it.
+  console.log(`\nUnresolved: ${unresolved.length} comment line(s) contain words the dictionary`);
+  console.log('does not know and morphology could not confirm as Polish (mostly modern technical');
+  console.log('vocabulary the 1934 word list predates). Run with --unresolved to list them.');
+  if (showUnresolved) unresolved.forEach(u => console.log(`  ${u.rel}:${u.line}  [${u.words.join(', ')}]  ${u.text.slice(0, 80)}`));
 }
 
 console.log('\nInspect one file:  node scripts/check-language.js --file routes/dashboard.js');

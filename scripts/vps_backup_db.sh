@@ -2,9 +2,9 @@
 # scripts/vps_backup_db.sh
 #
 # Backup of the production SQLite database on the VPS: creation, VERIFICATION,
-# opcjonalne zgranie poza serwer i rotacja.
+# optional off-site shipping and rotation.
 #
-# Cron roota (codziennie o 3:00):
+# Root's cron (daily at 03:00):
 #   0 3 * * * /opt/dietetyk-ai/scripts/vps_backup_db.sh >> /var/log/db_backup.log 2>&1
 #
 # Shipping off-site (without this the copies sit on the SAME disk as the database and do not
@@ -31,7 +31,7 @@ DB_FILE="$DB_DIR/dietetyk.db"
 BACKUP_DIR="${BACKUP_DIR:-$DB_DIR/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
 CONTAINER="${CONTAINER:-dietetyk-backend}"
-# Cel zgrywania poza serwer (rsync). Puste = pomijamy ten krok.
+# Off-site shipping destination (rsync). Empty = we skip this step.
 OFFSITE_DEST="${OFFSITE_DEST:-}"
 # ---------------------
 

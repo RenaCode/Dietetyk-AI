@@ -38,7 +38,7 @@ function resolveGeminiModel() {
 
 const ACTIVE_GEMINI_MODEL = resolveGeminiModel();
 
-// Inicjalizacja Gemini API
+// Gemini API initialisation
 const geminiApiKey = process.env.GEMINI_API_KEY;
 let genAI = null;
 let model = null;

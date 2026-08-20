@@ -34,7 +34,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
   // onGoalsUpdate re-queries the dashboard - so the form field 'jumped' back to the default
   // even though 0 was correctly stored in the backend (see the fixed /api/dashboard in
   // dashboard.js). `??` distinguishes a real 0 from
-      // null/undefined (brak danych z backendu).
+      // null/undefined (no data from the backend).
       setGoals({
         target_steps: summary.target_steps ?? 10000,
         target_active_calories: summary.target_active_calories ?? 500,
@@ -505,7 +505,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
     );
   };
 
-  // Prognoza trendu wagi na podstawie regresji liniowej z danych historycznych.
+  // Weight trend forecast from a linear regression over the historical data.
   // targetWeight (optional, kg) - when given (>0) the function additionally computes in how
   // many days, and on what date, the trend line will cross the target weight ('forecast to
   // target'), rather than only the weight `daysAhead` days out.

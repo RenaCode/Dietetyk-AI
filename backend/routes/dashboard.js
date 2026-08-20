@@ -29,7 +29,7 @@ router.get = function registerAndIndex(path, ...handlers) {
   if (typeof path === 'string' && path.startsWith(INSIGHT_PATH_PREFIX)) {
     const id = path.slice(INSIGHT_PATH_PREFIX.length);
     // We skip parameterised and nested routes - the batch handles only
-    // proste, bezparametrowe endpointy odczytowe.
+    // simple, parameterless read-only endpoints.
     if (id && !id.includes('/') && !id.includes(':')) {
       insightHandlers.set(id, handlers[handlers.length - 1]);
     }
@@ -290,7 +290,7 @@ router.get('/api/dashboard', async (req, res) => {
     // `new Date().getFullYear()` returned the PREVIOUS year, so HRmax (Karvonen) was
     // computed a year "too young" for the user for about 2 hours on New Year's Eve - the
     // same bug pattern as with getLocalDateString (see
-    // komentarz w utils/dates.js).
+    // the comment in utils/dates.js).
     const currentYear = getWarsawWallClock().getUTCFullYear();
     const userMaxHr = userRow && userRow.birth_year ? (220 - (currentYear - userRow.birth_year)) : null;
 
@@ -1407,14 +1407,14 @@ const SUPPLEMENTS_SLEEP_LOOKBACK_DAYS = 90;
 // comparisons.
 const MAX_SUPPLEMENT_FINDINGS = 5;
 
-// Insight: suplementy (wolny tekst, pole health_metrics.supplements) vs sen/
+// Insight: supplements (free text, the health_metrics.supplements field) vs sleep and
 // recovery on THE SAME day. Pairing on "the same day" (not day+1) is deliberate and follows
 // the existing convention already established in this file (the dashboard AI prompt, around
 // lines 456-519) and in services/summaries.js - supplements logged for day D are matched
 // there with the sleep_score/readiness_score from day D, not D+1. We copy no mechanism from
 // competing apps here - this is exclusively our own analysis of data Dietetyk-AI already
 // collects
-// (suplementy z routes/health.js + sleep_score/readiness_score z Oura).
+// (supplements from routes/health.js + sleep_score/readiness_score from Oura).
 //
 // Parsing the supplements text: split on the comma + trim, exactly as in the existing
 // frontend logic (Dashboard.jsx, handleSaveSupplements) - the only separator convention
@@ -2365,7 +2365,7 @@ router.get('/api/dashboard/rhr-drift-insight', async (req, res) => {
        WHERE user_id = ? AND date >= ? AND date <= ? AND rhr IS NOT NULL AND rhr > 0`,
       [req.user.id, baselineStart, today]
     );
-    // Tag dnia: dni choroby wykluczamy z liczenia baseline i odczytu trendu - RHR
+    // Day tag: illness days are excluded from the baseline and from reading the trend - RHR
     // is elevated for an already known reason, and including those days would falsely
     // "explain" the trend as illness rather than real fatigue or stress.
     const rhrIllnessExcluded = await getExcludedDates(req.user.id, ['illness'], baselineStart, today);
@@ -2644,7 +2644,7 @@ router.get('/api/dashboard/hr-zones-insight', async (req, res) => {
 // Round 10: further insights based EXCLUSIVELY on data the app already collects (the meals'
 // health_rating from analysis_json, the day of the week, workout cardio zones,
 // target_weight_kg from the settings, repeated meals) - zero new
-// integracji, zero kopiowania funkcji z konkurencyjnych aplikacji dietetycznych.
+// integrations, zero copying of features from competing diet apps.
 // ============================================================================
 
 const MEAL_QUALITY_RECENT_WINDOW_DAYS = 14;
@@ -2793,7 +2793,7 @@ router.get('/api/dashboard/weekend-effect-insight', async (req, res) => {
       weekendDaysLogged: weekendCalories.length,
       avgWeekdayCalories,
       avgWeekendCalories,
-      // B-S4: Zabezpieczenie przed NaN gdy avg() zwraca null (brak danych w jednej grupie)
+      // B-S4: guard against NaN when avg() returns null (no data in one of the groups)
       caloriesDiff: (avgWeekendCalories != null && avgWeekdayCalories != null) ? avgWeekendCalories - avgWeekdayCalories : null,
       avgWeekdaySteps: avg(weekdaySteps),
       avgWeekendSteps: avg(weekendSteps),
@@ -3209,7 +3209,7 @@ const PACE_WORKOUT_TYPE_REGEX = /run|bieg|walk|marsz|spacer|hik|trek/i;
 // the type) - otherwise the daily distance could be the sum of, say, a run and a separate
 // walk, which would falsify the pace. See workout-efficiency-insight - here, instead of
 // kcal/min, we compute
-// czas/km, i dodatkowo wymagamy typu run/walk/hike.
+// time/km, and additionally we require a run/walk/hike type.
 router.get('/api/dashboard/pace-trend-insight', async (req, res) => {
   try {
     const today = resolveQueryDate(req);
@@ -3810,13 +3810,13 @@ Dostępne dane z ostatniej doby (mogą, ale nie muszą wyjaśniać to odchylenie
 Napisz JEDNO do DWÓCH zwięzłych zdań po polsku, bezpośrednio do użytkownika, w stylu "Twoja/Twój [metryka] [spadła/wzrosła], bo [konkretna przyczyna z danych powyżej]". Jeśli dane NIE wskazują jednoznacznie na przyczynę, napisz to otwarcie (np. "Twój [X] jest niższy niż zwykle - dane z dzisiaj nie wskazują jednoznacznej przyczyny, warto zwrócić uwagę na regenerację"). Bez nagłówków, bez list, bez ogólników typu "dbaj o zdrowie".`;
 }
 
-// Insight (Runda 11, na bazie researchu konkurencji - styl Oura Advisor/Whoop Coach):
+// Insight (round 11, from competitor research - Oura Advisor / Whoop Coach style):
 // detects TODAY's LARGEST sleep/readiness/HRV/RHR deviation from the user's own 28-day
 // baseline (a z-score, as in rhr-drift-insight/spo2-trend-insight) and asks the AI for ONE
 // concrete, short explanation of the CAUSE from the data already collected
 // (nutrition/hydration/activity/workouts/supplements) - an extension of the existing AI
 // mechanism (ai_advice), but with a separate, much smaller prompt and cache (see the migration
-// ai_explanation/ai_explanation_generated_at w db.js).
+// ai_explanation/ai_explanation_generated_at in db.js).
 router.get('/api/dashboard/ai-explanation-insight', async (req, res) => {
   try {
     const today = resolveQueryDate(req);
@@ -3942,7 +3942,7 @@ function percentileRank(value, historicalValues) {
   return Math.round((countAtOrBelow / historicalValues.length) * 100);
 }
 
-// Insight (Runda 11, na bazie researchu konkurencji - prywatna wersja Whoop "people
+// Insight (round 11, from competitor research - a private version of Whoop's "people
 // like you", but WITHOUT any comparison between people): for each available metric it computes
 // the percentile of today's value against the user's own last 90 days, and then picks the most
 // DISTINCTIVE day (the highest and the lowest percentile) as the day's "best" and "weakest"
@@ -4034,7 +4034,7 @@ const WORKOUT_SLEEP_LOOKBACK_DAYS = 120;
 const MIN_WORKOUTS_PER_TYPE_FOR_SLEEP = 3;
 const MIN_REST_DAYS_FOR_SLEEP = 5;
 
-// Runda 13, nowa funkcja 1: typ treningu (workout_type) wykonanego danego dnia vs
+// Round 13, new feature 1: the workout type (workout_type) performed on a given day vs
 // the quality of THAT SAME NIGHT's sleep (sleep_score). Joined on THE SAME date - the
 // convention from fiber-sleep-insight ("the day's nutrition/activity -> that night's sleep"),
 // different from sleep-insight (there: sleep -> the NEXT day's nutrition). Days with no
@@ -4458,7 +4458,7 @@ router.get('/api/dashboard/diet-quality-weight-pace-insight', async (req, res) =
         const rating = Number(analysis.health_rating);
         if (Number.isFinite(rating) && rating >= 1 && rating <= 10) ratings.push(rating);
       } catch (e) {
-        // Brak/uszkodzony analysis_json - pomijamy (jak w meal-quality-trend-insight).
+        // A missing or corrupt analysis_json - we skip it (as in meal-quality-trend-insight).
       }
     });
 
@@ -4702,7 +4702,7 @@ router.get('/api/dashboard/sedentary-performance-insight', async (req, res) => {
 // Checks the correlation between the amount of water drunk (water_ml) and sleep_score.
 // The same pattern as hydration-readiness-insight, but measured against sleep (not readiness),
 // because readiness and sleep are different dimensions of recovery.
-// Minimalna liczba dni z oboma polami: MIN_WATER_SLEEP_DAYS.
+// The minimum number of days with both fields: MIN_WATER_SLEEP_DAYS.
 const MIN_WATER_SLEEP_DAYS = 14;
 const WATER_SLEEP_LOOKBACK_DAYS = 60;
 
@@ -4787,7 +4787,7 @@ router.get('/api/dashboard/water-sleep-insight', async (req, res) => {
 });
 
 // ============================================================================
-// Runda 23: Training Readiness + Training Plan Analysis
+// Round 23: Training Readiness + Training Plan Analysis
 // Data from our own database (apple_health_workouts, health_metrics, users, settings)
 // - no external APIs. The first endpoint is deterministic (no AI, no token cost, an
 // immediate response). The second uses Gemini with a 7-day cache in the settings table
@@ -4833,7 +4833,7 @@ router.get('/api/dashboard/training-readiness', async (req, res) => {
       ? baselineRows.reduce((s, r) => s + r.rhr, 0) / baselineRows.length
       : null;
 
-    // Treningi z ostatnich READINESS_RECENT_WORKOUTS_DAYS dni
+    // Workouts from the last READINESS_RECENT_WORKOUTS_DAYS days
     const recentWorkoutRows = await db.all(
       `SELECT date, SUM(duration_minutes) AS total_minutes FROM apple_health_workouts
        WHERE user_id = ? AND date >= ? AND date < ?
@@ -5023,7 +5023,7 @@ router.get('/api/dashboard/training-plan-insight', async (req, res) => {
     const today = resolveQueryDate(req);
     const lookbackStart = shiftDate(today, -(TRAINING_PLAN_LOOKBACK_WEEKS * 7));
 
-    // Treningi z ostatnich 4 tygodni
+    // Workouts from the last 4 weeks
     const workoutRows = await db.all(
       `SELECT date, workout_type, duration_minutes, active_calories
        FROM apple_health_workouts
@@ -5032,7 +5032,7 @@ router.get('/api/dashboard/training-plan-insight', async (req, res) => {
       [req.user.id, lookbackStart, today]
     );
 
-    // Agregat per typ treningu
+    // Aggregate per workout type
     const byType = {};
     workoutRows.forEach(w => {
       const t = (w.workout_type || 'Nieznany').trim();
@@ -5195,7 +5195,7 @@ Bądź konkretny i praktyczny. Maks. 3 sugestie. Odpowiadaj tylko po polsku.`;
     // Normalising overallRating (the AI may return a string despite the instruction)
     insightJson = sanitizeTrainingRating(insightJson);
 
-    // Zapisz cache
+    // Save the cache
     const nowStr = new Date().toISOString();
     await db.run(
       `INSERT INTO settings (user_id, key, value) VALUES (?, 'training_plan_insight_json', ?)
@@ -5221,7 +5221,7 @@ Bądź konkretny i praktyczny. Maks. 3 sugestie. Odpowiadaj tylko po polsku.`;
 });
 
 // =============================================================================
-// INSIGHTY TRENINGOWE (Runda 25): Oura + Apple Watch cross-device analytics
+// WORKOUT INSIGHTS (round 25): Oura + Apple Watch cross-device analytics
 // =============================================================================
 
 // The "good sleep" threshold - the same as in sleep-insight, kept locally here.

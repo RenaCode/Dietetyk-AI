@@ -51,7 +51,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
     reader.onload = (event) => {
       const img = new Image();
       img.onload = () => {
-        // Zmniejszenie rozmiaru obrazka do maks 800x800 px i kompresja canvas
+        // Shrinking the image to at most 800x800 px and compressing it on a canvas
         const canvas = document.createElement('canvas');
         const MAX_WIDTH = 800;
         const MAX_HEIGHT = 800;

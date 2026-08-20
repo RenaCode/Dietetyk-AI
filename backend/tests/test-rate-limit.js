@@ -1,4 +1,4 @@
-// Test dedykowanego limitera AI (middleware/rateLimit.js -> aiRateLimiter, Runda 18 -
+// Test of the dedicated AI limiter (middleware/rateLimit.js -> aiRateLimiter, round 18 -
 // audit fix: routes/chat.js and routes/meals.js POST /api/meals had only the global
 // apiRateLimiter at 120 req/min/IP protecting them, which in practice did not guard the
 // Gemini call cost against a single user).

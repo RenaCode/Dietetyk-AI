@@ -10,7 +10,7 @@
 // domains:
 // - USER_SECRET_SETTING_KEYS: PER-USER integration secrets, in the `settings` table
 //   (each user configures their own Oura/Withings/Gemini keys).
-// - APP_SECRET_CONFIG_KEYS: sekrety konfiguracji GLOBALNEJ aplikacji, w tabeli
+// - APP_SECRET_CONFIG_KEYS: GLOBAL application configuration secrets, in the
 //   `app_config` (Mailgun/Google OAuth, configured once by an admin for the whole app).
 
 const USER_SECRET_SETTING_KEYS = ['gemini_api_key', 'oura_client_secret', 'withings_client_secret'];

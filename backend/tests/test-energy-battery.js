@@ -5,7 +5,7 @@
 // user-facing output, which stays Polish by design - translating the assertions would break
 // them.
 //
-// Test uruchamia REALNY router Express na TYMCZASOWEJ bazie (DATABASE_DIR w katalogu
+// The test runs the REAL Express router against a TEMPORARY database (DATABASE_DIR in the
 // system temp directory), never against backend/dietetyk.db - so it can be run locally
 // without any risk of polluting development data.
 //
@@ -368,7 +368,7 @@ async function main() {
     failed = true;
   } finally {
     if (server) server.close();
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* katalog tymczasowy */ }
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* the temp directory may already be gone */ }
     // db.js holds an open connection and timers - exit the process explicitly.
     process.exit(failed ? 1 : 0);
   }

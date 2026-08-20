@@ -65,7 +65,7 @@ function testBuildWeeklyTrendSummaryAggregatesMealsAndMetrics() {
 function testMaxChatMessageLength() {
   console.log('\n--- TEST: MAX_CHAT_MESSAGE_LENGTH ---');
   const { MAX_CHAT_MESSAGE_LENGTH } = require('../utils/chatHistory');
-  assert(MAX_CHAT_MESSAGE_LENGTH === 2000, 'the chat message length limit has the expected value (a regression guard against a typo or an accidental zmianę)');
+  assert(MAX_CHAT_MESSAGE_LENGTH === 2000, 'the chat message length limit has the expected value (a regression guard against a typo or an accidental change)');
 }
 
 try {

@@ -24,10 +24,30 @@ const ROOTS = ['backend', 'frontend/src', 'frontend/scripts', 'scripts', 'e2e-te
 const SKIP_DIRS = new Set(['node_modules', '.git', 'public', 'dist', 'backups', 'assets']);
 const EXT = /\.(js|jsx|sh|yml|yaml)$/;
 
-// Polish diacritics are the only reliable signal. Matching on Polish *words*
-// without diacritics produces too many false positives on English text
-// ("nie" in "denied", "sie" in "series"), which would make the report noise.
-const PL = /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/;
+// Two detectors, because one is not enough.
+//
+// Diacritics catch most Polish, but plenty of real sentences carry none at all -
+// "co przy uwierzytelnianiu tokenem Bearer nie jest krytyczne" has not a single
+// ą/ć/ę. During the translation pass this blind spot reported several files as
+// fully compliant while half their comment blocks were still Polish, and it hid
+// blocks left half-translated mid-sentence. A checker that under-reports is worse
+// than no checker, because it is believed.
+//
+// The word list is therefore applied as a second pass. An earlier comment here
+// argued that word matching produces too many false positives ("nie" inside
+// "denied"); that concern was overstated - \b word boundaries make "denied" a
+// non-match. To keep the remaining risk low the word list runs ONLY on comment
+// lines, never on code or strings, where an English identifier could collide.
+const PL_DIACRITICS = /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/;
+const PL_WORDS = /\b(nie|jest|sie|dla|przez|zeby|tego|ktore|ktory|oraz|albo|jako|tylko|takze|wiec|bez|przy|jednak|zawsze|nigdy|teraz|potem|kazdy|wszystkie|dane|uzytkownik|posilek|zdjecie|dzien|godzina|kopia|jesli|mozna|trzeba|byla|byly|zostac|moze|nawet|wtedy|czyli|patrz|robi|maja|ma to|do tego)\b/i;
+
+const PL = PL_DIACRITICS;
+const isCommentLine = (trimmed) => /^(\/\/|\*|\/\*|#)/.test(trimmed) || /\{\s*\/\*/.test(trimmed);
+// A comment line counts as Polish if either detector fires.
+const commentIsPolish = (line) => {
+  if (PL_DIACRITICS.test(line)) return true;
+  return isCommentLine(line.trim()) && PL_WORDS.test(line);
+};
 
 // Files whose Polish string content is product content by design.
 const CONTENT_FILES = [
@@ -111,7 +131,7 @@ function auditFile(file) {
     const wasInTemplate = backtickDepth % 2 === 1;
     backtickDepth += (line.match(/`/g) || []).length;
 
-    if (!PL.test(line)) return;
+    if (!commentIsPolish(line)) return;
 
     const category = classify(line, wasBlock, {
       isContentFile, isJsx, inTemplateLiteral: wasInTemplate

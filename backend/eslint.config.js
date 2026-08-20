@@ -1,10 +1,10 @@
 const js = require('@eslint/js');
 
-// Minimalna konfiguracja ESLint dla backendu (Node.js, CommonJS). Celem jest
+// Minimal ESLint configuration for the backend (Node.js, CommonJS). The goal is
 // catching real mistakes (unused variables, undeclared globals, a missing await and so
 // on) rather than enforcing style - which is why we start from "recommended" without
 // additional, restrictive stylistic rules (style
-// formatowania dba Prettier, patrz .prettierrc).
+// is Prettier's job, see .prettierrc).
 module.exports = [
   js.configs.recommended,
   {

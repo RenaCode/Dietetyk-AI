@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 3000;
 // GEMINI_MODEL=gemini-1.5-flash as the production configuration for a long time, so
 // existing .env files on servers carry that value. The model returns 404 in this SDK, and
 // a hard rejection would stop AI analysis after
-// aktualizacji. Podmiana jest cicha, ale logowana przy starcie.
+// the next deploy. The substitution is silent but logged at startup.
 const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash';
 const DEPRECATED_GEMINI_MODELS = ['gemini-1.5-flash', 'gemini-1.5-pro'];
 

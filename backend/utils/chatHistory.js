@@ -1,4 +1,4 @@
-// Logika budowania kontekstu historii dla czatu Dietetyka AI (routes/chat.js) -
+// Logic for building the history context for the Dietetyk AI chat (routes/chat.js) -
 // extracted into its own module (like utils/mealAnomaly.js) so it can be unit tested
 // without booting the whole Express server and database.
 

@@ -1,7 +1,7 @@
 const db = require('../db');
 
 /**
- * Zapisuje zdarzenie logu do konsoli oraz asynchronicznie do bazy danych.
+ * Writes a log event to the console and, asynchronously, to the database.
  */
 async function logEvent({ level, category, message, ip = null, userId = null, details = null }) {
   try {
@@ -34,8 +34,8 @@ async function logEvent({ level, category, message, ip = null, userId = null, de
 
     // Write to SQLite in the background, without blocking the main thread.
     // Check that db is initialised and actually exposes a run function.
-    // UWAGA: db.run (z db.js) to wrapper oparty na Promise, NIE przyjmuje callbacku jako
-    // trzeciego argumentu (sqlite3 surowe API tak, ale to nie jest to API) - przekazanie
+    // NOTE: db.run (from db.js) is a Promise-based wrapper and does NOT take a callback
+    // as its third argument (the raw sqlite3 API does, but this is not that API) -
     // passing a function as the third argument here was silently ignored, and the
     // returned Promise was never handled - so a failed log write (SQLITE_BUSY, for
     // instance) surfaced as an unhandled promise rejection for the whole process.

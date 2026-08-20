@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from 'react';
  * SQLite queries. The backend computes these insights independently either way - all
  * that changes here is how they are delivered.
  *
- * Kontrakt odpowiedzi (patrz backend/routes/dashboard.js):
+ * Response contract (see backend/routes/dashboard.js):
  *   { date, results: { "<id>": { status: 'ok'|'error'|'timeout'|'unknown', data? } } }
  *
  * Entries with a status other than 'ok' deliberately do NOT enter the returned map -
@@ -17,7 +17,7 @@ import { useEffect, useMemo, useState } from 'react';
  * whole dashboard down with it.
  *
  * @param {string} sessionToken token sesji (Bearer)
- * @param {string} selectedDate data YYYY-MM-DD lub null/undefined dla dzisiaj
+ * @param {string} selectedDate date as YYYY-MM-DD, or null/undefined for today
  * @param {string[]} ids insight identifiers (the segment after /api/dashboard/)
  * @param {Function} onSessionExpired called on a 401 response
  */

@@ -1,7 +1,7 @@
-// Runda 12 (audyt): listy kluczy "sekretnych" (maskowanych jako '********' przy odczycie
+// Round 12 (audit): the lists of "secret" keys (masked as '********' on read
 // and never overwritten when the frontend sends the mask back) were duplicated
 // independently inside two files - routes/account.js (3 places: GET/POST /api/settings
-// oraz GET /api/user/export) i routes/admin.js (2 miejsca: GET/POST /api/admin/config).
+// and GET /api/user/export) and routes/admin.js (2 places: GET/POST /api/admin/config).
 // The real risk of that duplication: someone adds a new secret (a new integration key,
 // say) and updates only one of several places in the file - the result is a secret
 // leaking in plaintext from one endpoint while the others still mask it.

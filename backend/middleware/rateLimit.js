@@ -59,7 +59,7 @@ setInterval(() => {
 // body - an intentional "send a test email to this address" feature - so without this
 // limit a logged-in user could send mail repeatedly to any external address, burning the
 // sender reputation and quota
-// konta Mailgun do spamu. Limit jest per-user_id (nie per-IP jak globalny
+// of the Mailgun account for spam. The limit is per-user_id (not per-IP like the global
 // apiRateLimiter above), because the risk here is one user calling the endpoint
 // repeatedly, regardless of which IP address they come from.
 const SUMMARY_EMAIL_WINDOW_MS = 10 * 60 * 1000; // 10 minut

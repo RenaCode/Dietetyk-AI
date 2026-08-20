@@ -79,7 +79,7 @@ async function revokeShare(userId, shareId) {
   return result.changes > 0;
 }
 
-// Weryfikacja tokenu z publicznego endpointu (routes/sharedReport.js) - zwraca dane
+// Validates a token from the public endpoint (routes/sharedReport.js) - returns
 // what is needed to generate the PDF (userId, days), or null when the token does not
 // exist, was revoked, or expired. The HTTP response does not distinguish those three
 // cases (see routes/sharedReport.js) - to anyone guessing tokens, "not found" and

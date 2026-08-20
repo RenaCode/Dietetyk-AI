@@ -34,7 +34,7 @@ if [ ! -f "$TARGET" ]; then
 fi
 
 # Skrypt weryfikujący. Otwiera kopię TYLKO DO ODCZYTU i sprawdza kolejno:
-#   1. quick_check - czy struktura bazy jest nieuszkodzona,
+#   1. quick_check - whether the database structure is intact,
 #   2. obecność i niepustość kluczowych tabel - plik może być strukturalnie
 #      poprawny, a jednocześnie pusty (np. kopia zrobiona w trakcie migracji),
 #   3. odczyt przykładowego wiersza - dowód, że dane realnie da się wyciągnąć.

@@ -3,7 +3,7 @@ const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const { decrypt } = require('../utils/encryption');
 
 async function sendMailgunEmail({ to, subject, html }) {
-  // Pobieramy tylko kolumny faktycznie potrzebne w tym miejscu (Runda 17, naprawa
+  // We select only the columns actually needed here (round 17, a fix
   // from the audit) - `SELECT * FROM app_config` used to pull EVERY configuration row
   // (including google_client_secret and force_2fa) even though this function only needs
   // the Mailgun settings. `app_config` is a key-value table (PRIMARY KEY(key)), so we

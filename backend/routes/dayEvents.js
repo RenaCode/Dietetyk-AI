@@ -5,7 +5,7 @@ const { requireAuth } = require('../middleware/auth');
 
 // "Day tag" - the user marks a date range with context (illness/holiday/late bedtime) so
 // that selected dashboard insights can exclude those days from
-// liczenia baseline/normy (patrz dashboard.js, helper wykluczania dat). `type`
+// the baseline/norm calculation (see the date-exclusion helper in dashboard.js). `type`
 // is a closed enum - insights map specific types to specific exclusions, so arbitrary
 // free text here would break that logic.
 const VALID_TYPES = ['illness', 'vacation', 'late_sleep'];

@@ -1,9 +1,10 @@
 const db = require('../db');
 
 // Labels for day-event types ("day tag") - must stay consistent with VALID_TYPES in
-// routes/dayEvents.js. Trzymane tu osobno, bo ten plik jest importowany przez
-// prompty AI (dashboard.js, chat.js), a routes/dayEvents.js przez CRUD endpointy -
-// rozdzielenie unika cyklicznego importu routera tam, gdzie potrzebny jest tylko odczyt.
+// routes/dayEvents.js. Kept here separately because this file is imported by the AI
+// prompts (dashboard.js, chat.js) while routes/dayEvents.js is imported by the CRUD
+// endpoints - the split avoids a circular import of the router where only a read is
+// needed.
 const DAY_EVENT_TYPE_LABELS = {
   illness: 'Choroba',
   vacation: 'Wakacje/urlop',

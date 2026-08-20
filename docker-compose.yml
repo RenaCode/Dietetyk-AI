@@ -58,10 +58,10 @@ services:
     image: coleifer/sqlite-web
     container_name: dietetyk-db
     restart: unless-stopped
-    # Bind tylko do localhost - sqlite-web nie ma własnej autoryzacji, więc
-    # publiczne wystawienie portu 8081 dawało dowolnej osobie w internecie
-    # pełny dostęp do odczytu/zapisu/usuwania danych w bazie produkcyjnej.
-    # Dostęp z zewnątrz: tunel SSH, np. `ssh -L 8081:localhost:8081 user@vps`.
+    # Bind to localhost only - sqlite-web has no authentication of its own, so
+    # exposing port 8081 publicly gave anyone on the internet full read/write/delete
+    # access to the production database.
+    # Remote access goes through an SSH tunnel: `ssh -L 8081:localhost:8081 user@vps`.
     ports:
       - "127.0.0.1:8081:8080"
     volumes:

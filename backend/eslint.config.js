@@ -1,9 +1,9 @@
 const js = require('@eslint/js');
 
 // Minimalna konfiguracja ESLint dla backendu (Node.js, CommonJS). Celem jest
-// wychwytywanie realnych błędów (nieużywane zmienne, niezadeklarowane globalne,
-// brakujący await itp.), a nie wymuszanie stylu - dlatego startujemy od
-// "recommended" bez dodatkowych, restrykcyjnych reguł stylistycznych (o styl
+// catching real mistakes (unused variables, undeclared globals, a missing await and so
+// on) rather than enforcing style - which is why we start from "recommended" without
+// additional, restrictive stylistic rules (style
 // formatowania dba Prettier, patrz .prettierrc).
 module.exports = [
   js.configs.recommended,
@@ -29,9 +29,8 @@ module.exports = [
       }
     },
     rules: {
-      // Parametry/zmienne błędów w catch (np. `catch (e) {}` używane do
-      // ignorowania błędów ALTER TABLE przy migracjach w db.js) nie powinny
-      // wymuszać błędu lintera.
+      // Error parameters in catch blocks (e.g. `catch (e) {}` used to swallow ALTER
+      // TABLE errors during the migrations in db.js) should not be a lint error.
       'no-unused-vars': ['warn', { argsIgnorePattern: '^_|^e$|^err$', caughtErrorsIgnorePattern: '^_|^e$|^err$' }],
       'no-empty': ['warn', { allowEmptyCatch: true }]
     }

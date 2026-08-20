@@ -7,7 +7,7 @@ async function logEvent({ level, category, message, ip = null, userId = null, de
   try {
     const consoleMsg = `[${level}][${category}] ${message}${ip ? ` (IP: ${ip})` : ''}${userId ? ` (UID: ${userId})` : ''}`;
     
-    // Logowanie na standardowe wyjście konsoli (dla Dockera/PM2)
+    // Log to standard output (for Docker/PM2)
     if (level === 'ERROR') {
       console.error(consoleMsg, details || '');
     } else if (level === 'WARN' || level === 'SECURITY') {
@@ -32,13 +32,13 @@ async function logEvent({ level, category, message, ip = null, userId = null, de
       }
     }
 
-    // Bezpieczne wstawienie do bazy danych SQLite w tle (nie blokujemy wątku głównego)
-    // Sprawdzamy czy db jest zainicjalizowany i posiada funkcję run.
+    // Write to SQLite in the background, without blocking the main thread.
+    // Check that db is initialised and actually exposes a run function.
     // UWAGA: db.run (z db.js) to wrapper oparty na Promise, NIE przyjmuje callbacku jako
     // trzeciego argumentu (sqlite3 surowe API tak, ale to nie jest to API) - przekazanie
-    // tu funkcji jako trzeciego parametru było po cichu ignorowane, a sam zwrócony Promise
-    // nigdy nie był obsłużony, więc błąd zapisu logu (np. SQLITE_BUSY) kończył się
-    // nieobsłużonym odrzuceniem obietnicy (unhandled promise rejection) w całym procesie.
+    // passing a function as the third argument here was silently ignored, and the
+    // returned Promise was never handled - so a failed log write (SQLITE_BUSY, for
+    // instance) surfaced as an unhandled promise rejection for the whole process.
     if (db && typeof db.run === 'function') {
       db.run(
         `INSERT INTO app_logs (level, category, message, ip, user_id, details) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -48,7 +48,7 @@ async function logEvent({ level, category, message, ip = null, userId = null, de
       });
     }
   } catch (err) {
-    console.error('[LOGGER CRITICAL ERROR] Krytyczny błąd loggera:', err.message);
+    console.error('[LOGGER CRITICAL ERROR] The logger itself failed:', err.message);
   }
 }
 

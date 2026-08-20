@@ -5,7 +5,7 @@ module.exports = defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: 1, // Uruchamianie sekwencyjne, aby uniknąć problemów z blokowaniem SQLite
+  workers: 1, // Run sequentially to avoid SQLite locking problems
   reporter: 'list',
   use: {
     baseURL: 'http://localhost:3000',

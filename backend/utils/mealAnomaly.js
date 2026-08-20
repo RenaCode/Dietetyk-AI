@@ -1,28 +1,29 @@
 const db = require('../db');
 
-// Detektor anomalii w posiłkach (produktowa funkcja oparta wyłącznie na danych już
-// zbieranych przez aplikację - bez nowego wprowadzania danych przez użytkownika).
-// Współdzielony przez routes/meals.js (POST/GET pojedynczych posiłków) i
-// routes/dashboard.js (lista posiłków dnia w /api/dashboard) - tak jak
-// getDefaultHealthMetrics, żeby nie duplikować tej samej logiki w dwóch miejscach.
+// Meal anomaly detector - a product feature built entirely on data the app already
+// collects, requiring no new input from the user.
+// Shared by routes/meals.js (POST/GET of individual meals) and routes/dashboard.js (the
+// day's meal list in /api/dashboard) - like getDefaultHealthMetrics, so the same logic is
+// not duplicated in two places.
 //
-// Dwa niezależne sygnały, oceniane i pokazywane OSOBNO, bo mają różne przyczyny:
-// 1) Niezgodność kalorii z deklarowanych makro (białko*4 + węgle*4 + tłuszcz*9 vs
-//    podane kalorie) - typowo wskazuje na błąd estymacji AI (np. źle przeliczona
-//    wielkość porcji), a nie na nietypowy posiłek jako taki.
-// 2) Statystyczny odstrój kalorii posiłku względem WŁASNEJ historii użytkownika
+// Two independent signals, evaluated and surfaced SEPARATELY because they have different
+// causes:
+// 1) Calories inconsistent with the declared macros (protein*4 + carbs*4 + fat*9 versus
+//    the stated calories) - this usually indicates an AI estimation error (a misread
+//    portion size, say) rather than an unusual meal as such.
+// 2) A statistical outlier in meal calories relative to the user's OWN history
 //    (z-score na bazie ostatnich ANOMALY_LOOKBACK_DAYS dni) - wymaga minimalnej
-//    liczby wcześniejszych posiłków (MIN_MEALS_FOR_STATS_ANOMALY), inaczej pierwsze
-//    kilka wpisów w aplikacji zawsze wyglądałoby jak "anomalia" względem samych siebie.
+//    number of earlier meals (MIN_MEALS_FOR_STATS_ANOMALY), otherwise the first few
+//    entries in the app would always look like "anomalies" relative to themselves.
 const ANOMALY_LOOKBACK_DAYS = 60;
 const MIN_MEALS_FOR_STATS_ANOMALY = 8;
 const ANOMALY_Z_SCORE_THRESHOLD = 2.5;
 const MACRO_MISMATCH_MIN_KCAL_DIFF = 150;
 const MACRO_MISMATCH_MIN_RATIO = 0.35;
 
-// Przesunięcie daty (string YYYY-MM-DD) o N dni - ta sama, sprawdzona arytmetyka
-// (Date.UTC) co shiftDate w dashboard.js, lokalna kopia żeby uniknąć zależności
-// między modułami dla jednej małej funkcji pomocniczej.
+// Shifts a date string (YYYY-MM-DD) by N days - the same proven Date.UTC arithmetic as
+// shiftDate in dashboard.js, kept as a local copy to avoid a module dependency for one
+// small helper.
 const shiftDateForAnomaly = (dateStr, deltaDays) => {
   const [y, m, d] = dateStr.split('-').map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
@@ -30,9 +31,9 @@ const shiftDateForAnomaly = (dateStr, deltaDays) => {
   return dt.toISOString().split('T')[0];
 };
 
-// Bazowy rozkład kalorii na posiłek z historii użytkownika, liczony ZE WSZYSTKICH
-// dni PRZED `beforeDate` (nie włączając go) - dzięki temu posiłki z dnia, dla
-// którego liczymy anomalie, nigdy nie wpływają na własny punkt odniesienia.
+// Baseline distribution of calories per meal from the user's history, computed over ALL
+// days BEFORE `beforeDate` (exclusive) - so the meals of the day being checked never
+// influence their own point of reference.
 async function getCalorieBaseline(userId, beforeDate) {
   const startDate = shiftDateForAnomaly(beforeDate, -ANOMALY_LOOKBACK_DAYS);
   const rows = await db.all(
@@ -47,9 +48,9 @@ async function getCalorieBaseline(userId, beforeDate) {
   return { hasEnoughData: true, n, mean, stddev };
 }
 
-// Sprawdza pojedynczy posiłek względem dwóch sygnałów opisanych w komentarzu
-// powyżej. Zwraca tablicę (może być pusta) - posiłek może mieć 0, 1 albo oba
-// sygnały naraz (to są niezależne, różne problemy).
+// Checks a single meal against the two signals described above. Returns an array, which
+// may be empty - a meal can trigger 0, 1 or both signals at once, since they are
+// independent and describe different problems.
 function detectMealAnomalies(meal, baseline) {
   const anomalies = [];
   const reportedCalories = meal.calories || 0;

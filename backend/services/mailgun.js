@@ -4,10 +4,10 @@ const { decrypt } = require('../utils/encryption');
 
 async function sendMailgunEmail({ to, subject, html }) {
   // Pobieramy tylko kolumny faktycznie potrzebne w tym miejscu (Runda 17, naprawa
-  // z audytu) - wcześniej `SELECT * FROM app_config` ściągał WSZYSTKIE wiersze
-  // konfiguracji (w tym np. google_client_secret, force_2fa), mimo że ta funkcja
-  // używa wyłącznie ustawień Mailgun. `app_config` to tabela key-value (PRIMARY
-  // KEY(key)), więc filtrujemy po kluczu, nie po kolumnie.
+  // from the audit) - `SELECT * FROM app_config` used to pull EVERY configuration row
+  // (including google_client_secret and force_2fa) even though this function only needs
+  // the Mailgun settings. `app_config` is a key-value table (PRIMARY KEY(key)), so we
+  // filter by key rather than by column.
   const configRows = await db.all(
     `SELECT key, value FROM app_config WHERE key IN ('mailgun_api_key', 'mailgun_domain', 'mailgun_region', 'mailgun_from')`
   );
@@ -39,7 +39,7 @@ async function sendMailgunEmail({ to, subject, html }) {
 
   const authHeader = `Basic ${Buffer.from(`api:${apiKey}`).toString('base64')}`;
 
-  console.log(`[MAILGUN] Wysyłanie e-maila do ${to} za pomocą domeny ${domain}...`);
+  console.log(`[MAILGUN] Sending email to ${to} via domain ${domain}...`);
 
   const response = await fetchWithTimeout(url, {
     method: 'POST',
@@ -52,11 +52,11 @@ async function sendMailgunEmail({ to, subject, html }) {
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Błąd Mailgun API: ${response.status} - ${errorText}`);
+    throw new Error(`Mailgun API error: ${response.status} - ${errorText}`);
   }
 
   const result = await response.json();
-  console.log(`[MAILGUN] Wysłano pomyślnie. ID: ${result.id}`);
+  console.log(`[MAILGUN] Sent successfully. ID: ${result.id}`);
   return result;
 }
 

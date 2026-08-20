@@ -3,22 +3,22 @@ const router = express.Router();
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 
-// "Tag dnia" - użytkownik oznacza zakres dat kontekstem (choroba/wakacje/późne
-// zaśnięcie), żeby wybrane insighty na dashboardzie mogły wykluczyć te dni z
+// "Day tag" - the user marks a date range with context (illness/holiday/late bedtime) so
+// that selected dashboard insights can exclude those days from
 // liczenia baseline/normy (patrz dashboard.js, helper wykluczania dat). `type`
-// jest zamkniętym enumem - insighty mapują konkretne typy na konkretne
-// wykluczenia, więc dowolny wolny tekst tutaj rozwałkowałby tę logikę.
+// is a closed enum - insights map specific types to specific exclusions, so arbitrary
+// free text here would break that logic.
 const VALID_TYPES = ['illness', 'vacation', 'late_sleep'];
 
-// Walidacja formatu 'YYYY-MM-DD' - nie liczymy się tu z tym, czy data istnieje
-// kalendarzowo (np. 2026-02-30) - SQLite i tak porównuje takie wartości
-// leksykograficznie poprawnie dla zapytań zakresowych, a dokładna walidacja
-// kalendarzowa nie jest warta dodatkowej złożoności dla tego formularza.
+// Validates the 'YYYY-MM-DD' format only - we do not check whether the date exists in the
+// calendar (2026-02-30, say). SQLite still compares such values lexicographically
+// correctly for range queries, and full calendar validation is not worth the extra
+// complexity for this form.
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
 const MAX_NOTE_LENGTH = 500;
 
-// Lista zdarzeń dnia użytkownika, najnowsze (wg start_date) pierwsze.
+// The user's day events, most recent (by start_date) first.
 router.get('/api/day-events', requireAuth, async (req, res) => {
   try {
     const rows = await db.all(`
@@ -71,9 +71,9 @@ router.post('/api/day-events', requireAuth, async (req, res) => {
   }
 });
 
-// Edycja istniejącego zdarzenia - ta sama walidacja co przy tworzeniu, i tak samo
-// tylko własne (WHERE user_id = ? chroni przed edycją zdarzenia innego użytkownika
-// przez zgadnięcie/przejście po id).
+// Editing an existing event - the same validation as on creation, and likewise restricted
+// to one's own (WHERE user_id = ? prevents editing another user's event by guessing or
+// walking ids).
 router.put('/api/day-events/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) {
@@ -121,8 +121,8 @@ router.put('/api/day-events/:id', requireAuth, async (req, res) => {
   }
 });
 
-// Usunięcie zdarzenia - tylko własne (WHERE user_id = ? chroni przed usunięciem
-// zdarzenia innego użytkownika przez zgadnięcie/przejście po id).
+// Deleting an event - one's own only (WHERE user_id = ? prevents deleting another user's
+// event by guessing or walking ids).
 router.delete('/api/day-events/:id', requireAuth, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id)) {

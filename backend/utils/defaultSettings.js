@@ -1,13 +1,13 @@
-// Domyślne wartości celów użytkownika (kalorie/BMR/woda) - używane jako fallback w
+// Default values for the user's targets (calories/BMR/water) - used as the fallback in
 // routes/dashboard.js i routes/chat.js, gdy w tabeli settings brakuje danego klucza
-// albo zapisana wartość nie jest liczbą (NaN). Wcześniej każdy plik (a często każdy
-// endpoint w obrębie tego samego pliku) definiował własny fallback "na sztywno" -
-// część miejsc używała 2000 kcal, inne 2500 kcal, mimo że db.js/auth.js zawsze
-// SEEDUJE nowego użytkownika wartością 2500 (patrz initDb/registerUser). Efekt: jeśli
-// ktoś usunął wpis target_calories z ustawień, różne karty Dashboardu i czat AI
-// pokazywały różne cele kaloryczne dla tego samego użytkownika w tym samym momencie.
-// Wszystkie trzy stałe poniżej są teraz JEDYNYM miejscem definiującym te domyślne
-// wartości - muszą zostać zsynchronizowane z seedem w db.js/auth.js, jeśli się zmienią.
+// or when the stored value is not a number (NaN). Every file - often every endpoint
+// within the same file - used to hardcode its own fallback: some places used 2000 kcal,
+// others 2500, even though db.js/auth.js always SEEDS a new user with 2500 (see
+// initDb/registerUser). The effect: if someone deleted the target_calories setting,
+// different Dashboard cards and the AI chat showed different calorie targets for the
+// same user at the same moment.
+// The three constants below are now the ONLY place these defaults are defined - they
+// must be kept in sync with the seed in db.js/auth.js if they ever change.
 const DEFAULT_TARGET_CALORIES = 2500;
 const DEFAULT_BMR = 1800;
 const DEFAULT_TARGET_WATER_ML = 2500;

@@ -1,34 +1,34 @@
 import { useEffect, useMemo, useState } from 'react';
 
 /**
- * Pobiera wiele insightów dashboardu JEDNYM żądaniem (/api/dashboard/insights).
+ * Fetches many dashboard insights in a SINGLE request (/api/dashboard/insights).
  *
- * Dlaczego to istnieje: każda karta dashboardu miała własny useEffect i własny
- * fetch, więc jedno wejście na ekran to było ok. 60 round-tripów HTTP i tyle samo
- * osobnych serii zapytań do SQLite. Backend liczy te insighty i tak niezależnie -
- * jedyne, co zmieniamy, to sposób ich dostarczenia.
+ * Why this exists: every dashboard card had its own useEffect and its own fetch, so
+ * opening the screen fired roughly 60 HTTP round-trips and as many separate bursts of
+ * SQLite queries. The backend computes these insights independently either way - all
+ * that changes here is how they are delivered.
  *
  * Kontrakt odpowiedzi (patrz backend/routes/dashboard.js):
  *   { date, results: { "<id>": { status: 'ok'|'error'|'timeout'|'unknown', data? } } }
  *
- * Pozycje inne niż 'ok' celowo NIE trafiają do zwracanej mapy - karty czytają
- * wtedy undefined i renderują swój normalny stan "brak danych", dokładnie tak jak
- * przy nieudanym pojedynczym żądaniu. Dzięki temu jeden zepsuty insight nie
- * wywraca całego dashboardu.
+ * Entries with a status other than 'ok' deliberately do NOT enter the returned map -
+ * the cards then read undefined and render their normal "no data" state, exactly as they
+ * would after a failed individual request. That way one broken insight cannot take the
+ * whole dashboard down with it.
  *
  * @param {string} sessionToken token sesji (Bearer)
  * @param {string} selectedDate data YYYY-MM-DD lub null/undefined dla dzisiaj
- * @param {string[]} ids identyfikatory insightów (segment po /api/dashboard/)
- * @param {Function} onSessionExpired wywoływane przy odpowiedzi 401
+ * @param {string[]} ids insight identifiers (the segment after /api/dashboard/)
+ * @param {Function} onSessionExpired called on a 401 response
  */
 export function useInsights(sessionToken, selectedDate, ids, onSessionExpired) {
   const [data, setData] = useState({});
   const [isLoading, setIsLoading] = useState(false);
   const [failedIds, setFailedIds] = useState([]);
 
-  // Lista identyfikatorów jest stała w czasie życia komponentu, ale jako tablica
-  // jest nową referencją przy każdym renderze - bez sprowadzenia jej do stringa
-  // effect odpalałby się w kółko.
+  // The id list is constant for the component's lifetime, but as an array it is a new
+  // reference on every render - without collapsing it to a string the effect would fire
+  // in an endless loop.
   const idsKey = useMemo(() => ids.join(','), [ids]);
 
   useEffect(() => {
@@ -61,10 +61,10 @@ export function useInsights(sessionToken, selectedDate, ids, onSessionExpired) {
         setData(next);
         setFailedIds(failed);
         if (failed.length > 0) {
-          console.warn('[insights] Nie udało się pobrać:', failed.join(', '));
+          console.warn('[insights] Failed to fetch:', failed.join(', '));
         }
       } catch (err) {
-        console.error('Błąd zbiorczego pobierania insightów:', err);
+        console.error('Batch insight fetch failed:', err);
       } finally {
         if (!cancelled) setIsLoading(false);
       }

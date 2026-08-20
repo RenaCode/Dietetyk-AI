@@ -3,15 +3,15 @@ import react from 'eslint-plugin-react';
 import reactHooks from 'eslint-plugin-react-hooks';
 
 // Minimalna konfiguracja ESLint dla frontendu (React + Vite). Tak jak w
-// backendowym eslint.config.js - celem jest wychwytywanie realnych błędów
-// (hooki użyte poza komponentem, nieużywane zmienne, brakujące zależności
+// backend eslint.config.js - the goal is catching real mistakes (hooks used outside a
+// component, unused variables, missing dependencies
 // w useEffect), nie wymuszanie stylu (o to dba Prettier, patrz .prettierrc).
 export default [
   js.configs.recommended,
   {
-    // Skrypty narzędziowe (scripts/) działają w Node, nie w przeglądarce - mają
+    // Tooling scripts (scripts/) run in Node, not the browser - they have
     // process/console/__dirname, a nie window/document. Bez tego bloku ESLint
-    // zgłaszał je jako 32 błędy "'console' is not defined".
+    // reported them as 32 "'console' is not defined" errors.
     files: ['scripts/**/*.js'],
     languageOptions: {
       ecmaVersion: 2022,

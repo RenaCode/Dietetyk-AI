@@ -1,6 +1,6 @@
 const db = require('../db');
 
-// Etykiety typów zdarzeń dnia (Tag dnia) - muszą być zgodne z VALID_TYPES w
+// Labels for day-event types ("day tag") - must stay consistent with VALID_TYPES in
 // routes/dayEvents.js. Trzymane tu osobno, bo ten plik jest importowany przez
 // prompty AI (dashboard.js, chat.js), a routes/dayEvents.js przez CRUD endpointy -
 // rozdzielenie unika cyklicznego importu routera tam, gdzie potrzebny jest tylko odczyt.
@@ -10,10 +10,10 @@ const DAY_EVENT_TYPE_LABELS = {
   late_sleep: 'Późne zaśnięcie'
 };
 
-// Zdarzenia dnia użytkownika nakładające się na podany zakres dat (włącznie) -
-// używane do (a) wykluczania tagowanych dni z baseline w insightach (patrz
-// getExcludedDates w dashboard.js) i (b) wzbogacenia kontekstu promptów AI
-// poniżej, żeby AI nie traktowało nietypowych dni jako normalnego wzorca.
+// The user's day events overlapping the given date range (inclusive) - used to
+// (a) exclude tagged days from the baseline in insights (see getExcludedDates in
+// dashboard.js) and (b) enrich the AI prompt context below, so the model does not treat
+// unusual days as a normal pattern.
 async function getDayEventsInRange(userId, startDate, endDate) {
   return db.all(
     `SELECT type, start_date, end_date, note FROM day_events
@@ -23,9 +23,10 @@ async function getDayEventsInRange(userId, startDate, endDate) {
   );
 }
 
-// Formatuje zdarzenia dnia do zwartego opisu po polsku do wstrzyknięcia w prompt AI.
-// Zwraca pusty string, gdy nie ma żadnych zdarzeń w zakresie - żeby nie dodawać
-// pustej/zbędnej sekcji do promptu na większości dni (gdzie użytkownik nic nie oznaczył).
+// Formats day events into a compact Polish description to inject into the AI prompt.
+// The wording stays Polish on purpose: it is prompt content, and it is what makes Gemini
+// answer in Polish. Returns an empty string when the range contains no events, so we do
+// not append an empty section on the majority of days where nothing was tagged.
 function formatDayEventsForPrompt(events) {
   if (!events || events.length === 0) return '';
   const lines = events.map(ev => {

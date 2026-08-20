@@ -1,9 +1,9 @@
-// Domyślny obiekt health_metrics - używany jako fallback w routes/dashboard.js i
+// Default health_metrics object - used as the fallback in routes/dashboard.js and
 // routes/chat.js, gdy w bazie nie istnieje jeszcze wiersz health_metrics dla danej
 // (user, data) - np. zanim pierwsza synchronizacja Oura/Withings/Apple Health danego
-// dnia zapisze realne dane. Wcześniej oba pliki definiowały ten obiekt niezależnie,
-// z lekko różniącymi się polami - to jest UNIA wszystkich pól używanych w obu
-// miejscach (pełniejsza wersja z dashboard.js jako baza).
+// before that day has any real data. Both files used to define this object
+// independently, with slightly different fields - this is the UNION of every field used
+// in either place (built on the more complete version from dashboard.js).
 function getDefaultHealthMetrics() {
   return {
     steps: 0,

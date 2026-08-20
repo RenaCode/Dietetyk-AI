@@ -2,18 +2,18 @@ const crypto = require('crypto');
 const db = require('../db');
 const { PDF_REPORT_MAX_DAYS, PDF_REPORT_DEFAULT_DAYS } = require('./pdfReport');
 
-// Udostępnianie raportu PDF linkiem (read-only, bez konta) - rozszerzenie eksportu PDF
-// dla lekarza/dietetyka (services/pdfReport.js) o wariant "wyślij link" zamiast
-// "pobierz i wyślij plik samodzielnie". Token w URL identyfikuje zarówno użytkownika,
-// jak i konkretne udostępnienie - bez sesji/ciasteczka, bo odbiorca linku (lekarz/
-// dietetyk) nie ma i nie powinien potrzebować konta w aplikacji.
+// Sharing a PDF report by link (read-only, no account required) - extends the PDF export
+// for a doctor or dietician (services/pdfReport.js) with a "send a link" variant instead
+// of "download the file and send it yourself". The token in the URL identifies both the
+// user and the specific share, with no session or cookie, because the recipient has no
+// account in the app and should not need one.
 //
-// Wykorzystuje wyłącznie już istniejący mechanizm generowania PDF (buildHealthReportPdf) -
-// żadnych nowych źródeł danych, żadnego kopiowania funkcji z konkurencji.
+// Uses only the existing PDF generation path (buildHealthReportPdf) - no new data
+// sources.
 
-// Limity czasu ważności linku - krótkie domyślnie (link ma żyć tyle, co potrzeba na
-// jedną wizytę/konsultację), ale z opcją dłuższego okresu, gdyby ktoś chciał wysłać
-// link np. przed planowaną wizytą za kilka tygodni.
+// Link validity options - short by default (a link should live about as long as a single
+// appointment or consultation needs), with a longer option for cases such as sending a
+// link ahead of a visit scheduled a few weeks out.
 const VALIDITY_OPTIONS_HOURS = {
   '24h': 24,
   '7d': 24 * 7,
@@ -25,9 +25,9 @@ function resolveValidityHours(validityKey) {
   return VALIDITY_OPTIONS_HOURS[validityKey] || VALIDITY_OPTIONS_HOURS[DEFAULT_VALIDITY_KEY];
 }
 
-// Tworzy nowy link udostępniający raport PDF danego użytkownika. `days` to okres
-// danych w samym raporcie (jak w buildHealthReportPdf) - niezależny od `validityKey`,
-// czyli tego, jak długo sam LINK będzie działał.
+// Creates a new link sharing a user's PDF report. `days` is the data period covered by
+// the report itself (as in buildHealthReportPdf) - independent of `validityKey`, which
+// controls how long the LINK stays usable.
 async function createShareLink(userId, requestedDays, validityKey) {
   const days = Math.min(Math.max(parseInt(requestedDays, 10) || PDF_REPORT_DEFAULT_DAYS, 1), PDF_REPORT_MAX_DAYS);
   const validityHours = resolveValidityHours(validityKey);
@@ -43,10 +43,10 @@ async function createShareLink(userId, requestedDays, validityKey) {
   return { token, days, expiresAt };
 }
 
-// Lista udostępnień danego użytkownika (do wyświetlenia w Ustawieniach) - zarówno
-// aktywne, jak i wygasłe/odwołane, żeby użytkownik widział historię, a nie tylko
-// to, co aktualnie działa. Front decyduje, jak to pokazać (status liczony tu, żeby
-// nie duplikować logiki "czy wygasł" w dwóch miejscach).
+// A user's shares, for display in Settings - both active and expired/revoked, so the
+// user sees the history rather than only what currently works. The frontend decides how
+// to present it; the status is computed here so the "has it expired" logic is not
+// duplicated in two places.
 async function listSharesForUser(userId) {
   const rows = await db.all(
     `SELECT id, token, days, created_at, expires_at, revoked
@@ -60,16 +60,17 @@ async function listSharesForUser(userId) {
     createdAt: r.created_at,
     expiresAt: r.expires_at,
     revoked: !!r.revoked,
-    // Status do wyświetlenia - nie zwracamy samego tokenu ponownie (token jest
-    // pokazywany użytkownikowi tylko raz, w momencie stworzenia linku - patrz
-    // routes/account.js), żeby lista udostępnień nie była dodatkowym miejscem,
-    // z którego można odzyskać działający link bez świadomości właściciela.
+    // Status for display - we deliberately do not return the token again (it is shown to
+    // the user exactly once, when the link is created; see routes/account.js), so that
+    // the share list cannot become a second place to recover a working link without the
+    // owner realising.
     status: r.revoked ? 'revoked' : (r.expires_at < nowIso ? 'expired' : 'active')
   }));
 }
 
-// Odwołanie linku - tylko właściciel (sprawdzane przez user_id w WHERE, nie tylko id)
-// może odwołać swój link. Zwraca true, jeśli realnie coś zmieniono.
+// Revoking a link - only the owner can revoke their own link, enforced by including
+// user_id in the WHERE clause rather than matching on id alone. Returns true when a row
+// was actually changed.
 async function revokeShare(userId, shareId) {
   const result = await db.run(
     `UPDATE shared_reports SET revoked = 1 WHERE id = ? AND user_id = ?`,
@@ -79,10 +80,10 @@ async function revokeShare(userId, shareId) {
 }
 
 // Weryfikacja tokenu z publicznego endpointu (routes/sharedReport.js) - zwraca dane
-// potrzebne do wygenerowania PDF (userId, days) albo null, jeśli token nie istnieje,
-// jest odwołany albo wygasł. Nie rozróżniamy tych trzech przypadków w odpowiedzi
-// HTTP (patrz routes/sharedReport.js) - z punktu widzenia kogoś próbującego odgadnąć
-// token, "nie znaleziono" i "wygasło" powinny wyglądać identycznie.
+// what is needed to generate the PDF (userId, days), or null when the token does not
+// exist, was revoked, or expired. The HTTP response does not distinguish those three
+// cases (see routes/sharedReport.js) - to anyone guessing tokens, "not found" and
+// "expired" must look identical.
 async function getActiveShareByToken(token) {
   const row = await db.get(
     `SELECT user_id, days, expires_at, revoked FROM shared_reports WHERE token = ?`,

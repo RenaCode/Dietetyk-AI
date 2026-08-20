@@ -38,7 +38,7 @@ const CONTENT_FILES = [
 const LOG_CALL = /(console\.(log|warn|error|info|debug)|logger\.(info|warn|error|debug))\s*\(/;
 const API_ERROR = /res\.(status\(\d+\)\.)?json\(\s*\{\s*error|throw new Error|error:\s*['"]/;
 // A line that is part of a JSON schema description inside an AI prompt, e.g.
-//   "protein": (liczba - gramy białka),
+//   "protein": (number - grams of protein),
 const PROMPT_SCHEMA = /^\s*"?[a-z_]+"?\s*:\s*[("']|^\s*-\s|^\s*[A-ZŚŻ]{2,}/;
 
 function walk(dir, out = []) {

@@ -12,83 +12,81 @@ const { runHourlySyncIfDue } = require('./scheduler');
 
 const app = express();
 
-// Ufaj nagłówkowi X-Forwarded-For z nginx (reverse proxy przed backendem w docker-compose),
-// żeby req.ip pokazywał prawdziwy adres klienta, a nie adres kontenera nginx.
-// Wymagane do poprawnego działania blokady brute-force per adres IP.
+// Trust the X-Forwarded-For header from nginx (the reverse proxy in front of the backend
+// in docker-compose) so that req.ip shows the real client address rather than the nginx
+// container's. Required for the per-IP brute-force protection to work correctly.
 app.set('trust proxy', true);
 
 // Middleware
-// CORS ograniczony do skonfigurowanego adresu aplikacji (APP_URL) - wcześniej
-// cors() bez opcji odpowiadał Access-Control-Allow-Origin dla KAŻDEJ domeny,
-// co przy uwierzytelnianiu tokenem Bearer nie jest krytyczne (token nie jest
-// ciastkiem wysyłanym automatycznie), ale niepotrzebnie ułatwiało zapytania
-// z dowolnej, nieznanej strony. W lokalnym dev (brak APP_URL) zostaje otwarte,
-// żeby nie blokować pracy na różnych portach/localhost.
+// CORS restricted to the configured application URL (APP_URL). A bare cors() used to
+// answer Access-Control-Allow-Origin for EVERY domain. With Bearer-token authentication
+// that is not critical - the token is not a cookie the browser sends automatically - but
+// it needlessly made requests from any unknown site easier. In local development, where
+// APP_URL is unset, it stays open so work across different ports and localhost is not
+// blocked.
 const allowedOrigin = process.env.APP_URL;
 app.use(cors(allowedOrigin ? { origin: allowedOrigin } : {}));
-// Limit zwiększony z domyślnych 100kb - webhook Apple Health (Health Auto Export,
-// patrz routes/appleHealth.js) przy eksporcie Treningów z włączonymi "Danymi Trasy"
-// (GPS) za dłuższy okres wysyła duże payloady JSON, które przekraczały domyślny
-// limit i kończyły się błędem 413 "Nieprawidłowe żądanie" (patrz centralny handler
-// błędów poniżej).
+// Raised from the 100 kb default: the Apple Health webhook (Health Auto Export, see
+// routes/appleHealth.js) sends large JSON payloads when exporting Workouts with "Route
+// Data" (GPS) enabled over a longer period. Those exceeded the default limit and failed
+// with a 413 surfaced as "Nieprawidłowe żądanie" by the central error handler below.
 app.use(express.json({ limit: '20mb' }));
 
-// Domyślny format 'dev' morgana loguje pełny URL żądania WŁĄCZNIE z query stringiem.
-// To problem, bo część endpointów (np. /api/invitation-status?token=...) przyjmuje
-// wrażliwe wartości właśnie w query stringu - taki token trafiałby w czystym tekście
-// do logów kontenera. Tokeny sesji (Google OAuth) już nie podróżują w query stringu
-// (patrz routes/auth.js - przekazywane we fragmencie URL #, którego serwer nigdy nie
-// widzi), ale to dodatkowa warstwa obrony "w głąb" (defense in depth) na wypadek
-// innych/przyszłych parametrów tego typu w query stringu.
+// Morgan's default 'dev' format logs the full request URL INCLUDING the query string.
+// That is a problem because some endpoints (/api/invitation-status?token=..., for
+// instance) accept sensitive values there - such a token would land in the container logs
+// in plain text. Session tokens (Google OAuth) no longer travel in the query string (see
+// routes/auth.js - they are passed in the URL fragment, which the server never sees), but
+// this is an extra layer of defence in depth for other or future parameters of that kind.
 morgan.token('safe-url', (req) => {
   const url = req.originalUrl || req.url || '';
   return url
     .replace(/([?&])(token|code|state|access_token|refresh_token|client_secret|secret|key)=[^&]+/gi, '$1$2=%5Bredacted%5D')
-    // Webhook Apple Health (routes/appleHealth.js) przyjmuje sync_token jako SEGMENT
-    // ŚCIEŻKI (/api/integrations/apple-health/:syncToken), nie jako parametr query -
-    // powyższy replace na query stringu go nie obejmuje, więc token lądował w logach
-    // w czystym tekście. Redagujemy go tu osobno, niezależnie od długości/formatu tokenu.
+    // The Apple Health webhook (routes/appleHealth.js) takes sync_token as a PATH
+    // segment (/api/integrations/apple-health/:syncToken), not as a query parameter -
+    // the query-string replace above does not cover it, so the token ended up in the logs
+    // in plain text. We redact it separately here, regardless of its length or format.
     .replace(/(\/api\/integrations\/apple-health\/)[^/?]+/i, '$1%5Bredacted%5D');
 });
 app.use(morgan(':method :safe-url :status :response-time ms - :res[content-length]'));
 
-// Serwowanie plików statycznych frontendu w trybie produkcyjnym
+// Serve the built frontend as static files in production
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Globalny limiter zapytań (chroni m.in. trasy korzystające z Gemini AI i resztę /api
-// przed nadużyciem) - zamontowany PRZED requireAuth, żeby limitować również próby
-// logowania, nie tylko zapytania zalogowanych.
-// UWAGA: musi być zamontowany PRZED publicznym health-checkiem i webhookiem Apple Health
-// poniżej, NIE po nich - obie te trasy też zaczynają się od /api/, a middleware Express
-// wykonuje się w kolejności rejestracji. Webhook Apple Health w szczególności jest
-// autoryzowany tylko tokenem w adresie URL (sync_token) - bez limitera zamontowanego
-// PRZED nim, ten endpoint był całkowicie pozbawiony ochrony przed zalewem zapytań/
-// próbami odgadnięcia poprawnego tokenu, mimo że kod i komentarz niżej zawsze zakładały,
-// że limiter obejmuje "resztę /api", w tym tę trasę.
+// Global rate limiter (protects the Gemini-backed routes and the rest of /api from
+// abuse) - mounted BEFORE requireAuth so that it also limits login attempts, not just
+// requests from authenticated users.
+// NOTE: it must be mounted BEFORE the public health-check and the Apple Health webhook
+// below, NOT after them - both of those paths also start with /api/, and Express
+// middleware runs in registration order. The Apple Health webhook in particular is
+// authorised solely by the token in its URL (sync_token) - without the limiter mounted
+// before it, that endpoint had no protection whatsoever against request floods or token
+// guessing, even though the code and comments below always assumed the limiter covered
+// "the rest of /api", this route included.
 app.use('/api', apiRateLimiter);
 
-// Publiczny health-check (BEZ autoryzacji sesyjnej) - musi być zamontowany PRZED
-// `app.use('/api', requireAuth)` poniżej, inaczej Docker/CI dostałby 401
-// zamiast realnego statusu aplikacji. Limit 120 zapytań/min/IP z limitera powyżej
-// jest na tyle wysoki, że nie zakłóca typowych, częstych odpytań healthchecku.
+// Public health-check (NO session authentication) - must be mounted BEFORE
+// `app.use('/api', requireAuth)` below, otherwise Docker/CI would get a 401 instead of
+// the real application status. The 120 req/min/IP limit above is high enough not to
+// interfere with the health-check's typical polling frequency.
 app.use(require('./routes/healthcheck'));
 
-// Webhook Apple Health (apka Health Auto Export) - również musi być zamontowany PRZED
-// requireAuth, ponieważ ma własną autoryzację per-żądanie (sync_token w adresie URL,
-// patrz routes/appleHealth.js), a nie sesję/ciasteczko jak resztę /api/.
+// The Apple Health webhook (the Health Auto Export app) must likewise be mounted BEFORE
+// requireAuth, because it authenticates per request with a sync_token in the URL (see
+// routes/appleHealth.js) rather than with a session or cookie like the rest of /api/.
 app.use(require('./routes/appleHealth'));
 
-// Publiczny, nieuwierzytelniony odbiór udostępnionego raportu PDF (Produkt:
-// udostępnianie raportu linkiem) - z tych samych powodów musi być zamontowany PRZED
-// requireAuth: token w adresie URL (patrz routes/sharedReport.js i
-// services/sharedReports.js) jest jedyną autoryzacją tego endpointu, bo odbiorca
-// linku (lekarz/dietetyk) nie ma konta w aplikacji.
+// Public, unauthenticated retrieval of a shared PDF report (product feature: share a
+// report by link) - for the same reasons it must be mounted BEFORE requireAuth. The token
+// in the URL (see routes/sharedReport.js and services/sharedReports.js) is the endpoint's
+// only authorisation, because the recipient of the link - a doctor or dietician - has no
+// account in the app.
 app.use(require('./routes/sharedReport'));
 
-// Zabezpieczenie wszystkich tras /api/ za pomocą middleware
+// Protect every /api/ route with the auth middleware
 app.use('/api', requireAuth);
 
-// --- TRASY API (zamontowane jako routery, każdy definiuje pełne ścieżki /api/...) ---
+// --- API ROUTES (mounted as routers; each defines its full /api/... paths) ---
 app.use(require('./routes/auth'));
 app.use(require('./routes/meals'));
 app.use(require('./routes/account'));
@@ -99,15 +97,15 @@ app.use(require('./routes/admin'));
 app.use(require('./routes/dashboard'));
 app.use(require('./routes/chat'));
 
-// Serwowanie index.html dla wszystkich pozostałych tras (obsługa SPA w React)
+// Serve index.html for every remaining route (React SPA routing)
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Centralny handler błędów - musi być zarejestrowany jako ostatni middleware.
-// Zapewnia, że błędy nieobsłużone w trasach (np. niepoprawny JSON w żądaniu,
-// rzucony przez express.json()) zwracają czysty JSON zamiast domyślnej strony
-// błędu Express ze stack trace'em i ścieżkami plików serwera.
+// Central error handler - must be registered as the last middleware. It ensures that
+// errors not handled inside routes (malformed request JSON thrown by express.json(), for
+// example) return clean JSON rather than Express's default error page, which would leak a
+// stack trace and server file paths.
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   
@@ -115,7 +113,7 @@ app.use((err, req, res, next) => {
   const level = status >= 500 ? 'ERROR' : 'WARN';
   
   logger[level.toLowerCase()](
-    `Błąd HTTP ${status}: ${err.message}`,
+    `HTTP error ${status}: ${err.message}`,
     'HTTP_SERVER',
     err,
     req.ip,
@@ -125,56 +123,56 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: 'Nieprawidłowe żądanie.' });
 });
 
-// Uruchomienie serwera
+// Start the server
 async function start() {
   await db.initDb();
 
-  // Uruchomienie czyszczenia starych zdjęć, logów i wygasłych sesji przy starcie
+  // Clean up old photos, logs and expired sessions at startup
   await db.cleanupExpiredSessions();
   await db.cleanupOldImages();
   await db.cleanupOldLogs();
 
-  // Pierwsza kopia zapasowa bazy danych przy starcie (patrz db.js, backupDatabase) -
-  // dzięki temu kopia istnieje od razu, a nie tylko po 24h działania kontenera.
+  // First database backup at startup (see backupDatabase in db.js), so a copy exists
+  // immediately rather than only after the container has run for 24h.
   await db.backupDatabase();
 
-  // Uruchomienie czyszczenia i kopii zapasowej co 24 godziny
+  // Run the cleanup and the backup every 24 hours
   setInterval(async () => {
-    console.log('[CRON] Uruchomienie okresowego czyszczenia starych zdjęć, logów i wygasłych sesji...');
+    console.log('[CRON] Running the periodic cleanup of old photos, logs and expired sessions...');
     await db.cleanupExpiredSessions();
     await db.cleanupOldImages();
     await db.cleanupOldLogs();
   }, 24 * 60 * 60 * 1000);
 
   setInterval(async () => {
-    console.log('[CRON] Uruchomienie okresowej kopii zapasowej bazy danych...');
+    console.log('[CRON] Running the periodic database backup...');
     await db.backupDatabase();
   }, 24 * 60 * 60 * 1000);
 
-  // Synchronizacja danych (Oura, Withings) oraz sprawdzanie podsumowań: co godzinę,
-  // tylko w oknie 5:00-22:00. Sprawdzamy co 5 minut, czy minęła pełna godzina
-  // zegarowa i czy jesteśmy w oknie aktywności - dzięki temu działa też odpornie
-  // na restart serwera w trakcie dnia (zsynchronizuje się od razu po starcie).
+  // Data sync (Oura, Withings) and summary checks: hourly, and only within the
+  // 05:00-22:00 window. We check every 5 minutes whether a new clock hour has begun and
+  // whether we are inside the active window - which also makes this robust to a server
+  // restart mid-day, since it syncs immediately after startup.
   await runHourlySyncIfDue();
   setInterval(runHourlySyncIfDue, 5 * 60 * 1000);
 
   app.listen(PORT, () => {
-    console.log(`Serwer Dietetyk AI działa na porcie ${PORT}`);
+    console.log(`Dietetyk AI server listening on port ${PORT}`);
   });
 }
 
 start();
 
-// Globalne przechwytywanie błędów procesu
+// Global process-level error handling
 process.on('uncaughtException', (err) => {
-  logger.error(`Uncaught Exception (nieobsłużony wyjątek): ${err.message}`, 'SYSTEM', err);
-  // Dajemy logom czas na zapisanie się przed wyjściem z procesu
+  logger.error(`Uncaught exception: ${err.message}`, 'SYSTEM', err);
+  // Give the logs time to flush before exiting the process
   setTimeout(() => process.exit(1), 1000);
 });
 
 process.on('unhandledRejection', (reason) => {
   logger.error(
-    `Unhandled Rejection (nieobsłużona obietnica): ${reason}`,
+    `Unhandled promise rejection: ${reason}`,
     'SYSTEM',
     reason instanceof Error ? reason : new Error(String(reason))
   );

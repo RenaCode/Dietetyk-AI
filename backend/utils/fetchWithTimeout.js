@@ -1,17 +1,15 @@
-// Wspólny helper do wywołań fetch() z limitem czasu.
+// Shared helper for fetch() calls with a timeout.
 //
-// UWAGA: natywny fetch() w Node.js NIE ma żadnego domyślnego timeoutu - jeśli
-// zewnętrzne API (Oura, Withings, Google Fit, Mailgun) "zawiesi się" i nigdy nie
-// odpowie, await fetch(...) czeka w nieskończoność. Ponieważ synchronizacja
-// wielu użytkowników (sync.js/scheduler.js) przetwarza ich SEKWENCYJNIE w pętli
-// for...of (jeden po drugim, await w każdej iteracji), zawieszone zapytanie dla
-// JEDNEGO użytkownika blokowałoby godzinową synchronizację dla WSZYSTKICH
-// pozostałych użytkowników bezterminowo - kolejny harmonogram (`runHourlySyncIfDue`,
-// wywoływany co 5 minut) i tak nie odpalił by się ponownie, bo `lastSyncedHourKey`
-// zostaje ustawiony PRZED wykonaniem synchronizacji, ale poprzednie wywołanie
-// nigdy by się nie zakończyło. Limit czasu poniżej gwarantuje, że pojedyncze
-// zawieszone zapytanie nie zablokuje całego procesu - zostanie przerwane i
-// potraktowane jak błąd (catch w syncOura/syncWithings/syncGoogleFit/mailgun.js).
+// NOTE: the native fetch() in Node.js has NO default timeout - if an external API
+// (Oura, Withings, Google Fit, Mailgun) hangs and never responds, await fetch(...) waits
+// forever. Because syncing multiple users (sync.js/scheduler.js) processes them
+// SEQUENTIALLY in a for...of loop (one after another, awaiting each iteration), a hung
+// request for ONE user would block the hourly sync for ALL the others indefinitely - and
+// the next scheduler tick (`runHourlySyncIfDue`, called every 5 minutes) would not rerun
+// it either, because `lastSyncedHourKey` is set BEFORE the sync executes while the
+// previous call never finishes. The timeout below guarantees that a single hung request
+// cannot stall the whole process: it is aborted and treated as an error (caught in
+// syncOura/syncWithings/syncGoogleFit/mailgun.js).
 const DEFAULT_TIMEOUT_MS = 15000;
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
@@ -21,7 +19,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_M
     return await fetch(url, { ...options, signal: controller.signal });
   } catch (err) {
     if (err.name === 'AbortError') {
-      throw new Error(`Przekroczono limit czasu żądania (${timeoutMs}ms): ${url}`);
+      throw new Error(`Request timed out after ${timeoutMs}ms: ${url}`);
     }
     throw err;
   } finally {

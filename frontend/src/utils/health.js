@@ -1,12 +1,12 @@
 import { t } from './i18n';
 
-// Helpery związane z interpretacją metryk zdrowotnych (a nie czystym formatowaniem
-// tekstu - patrz utils/format.js) - wydzielone, bo próg ±0.5°C dla odchylenia
-// temperatury (Oura) był wcześniej powtórzony inline w kilku komponentach.
+// Helpers for interpreting health metrics (as opposed to plain text formatting - see
+// utils/format.js) - extracted because the ±0.5 °C threshold for temperature deviation
+// (Oura) used to be repeated inline across several components.
 
-// Status odchylenia temperatury ciała (Oura daily_readiness, temperature_deviation)
-// względem normy ±0.5°C. Zwraca, czy wartość jest w normie, oraz gotową etykietę
-// w języku wybranym przez użytkownika.
+// Status of body temperature deviation (Oura daily_readiness, temperature_deviation)
+// against the ±0.5 °C range. Returns whether the value is within range, plus a ready
+// label in the language the user selected.
 export function getTemperatureStatus(deviation) {
   const inRange = Math.abs(deviation) <= 0.5;
   return {

@@ -16,11 +16,11 @@ async function main() {
     const data = await res.json();
     
     if (data.error) {
-      console.error("Błąd API Google:", data.error);
+      console.error("Google API error:", data.error);
       return;
     }
 
-    console.log("\nDostępne modele obsługujące generateContent:");
+    console.log("\nModels that support generateContent:");
     if (data.models && data.models.length > 0) {
       data.models
         .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
@@ -28,10 +28,10 @@ async function main() {
           console.log(`  - ${m.name.replace('models/', '')} (${m.displayName})`);
         });
     } else {
-      console.log("Brak modeli lub błąd odpowiedzi:", data);
+      console.log("No models returned, or the response was an error:", data);
     }
   } catch (err) {
-    console.error("Wystąpił błąd podczas zapytania:", err);
+    console.error("The request failed:", err);
   }
 }
 

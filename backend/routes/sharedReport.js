@@ -3,25 +3,25 @@ const router = express.Router();
 const { getActiveShareByToken } = require('../services/sharedReports');
 const { buildHealthReportPdf } = require('../services/pdfReport');
 
-// Publiczny, NIEUWIERZYTELNIONY endpoint do odbierania udostępnionego raportu PDF
-// (Produkt: udostępnianie raportu linkiem, read-only) - odbiorca linku (lekarz/
-// dietetyk) nie ma konta w aplikacji, więc autoryzacja sesją/Bearer tokenem tu nie
-// działa. Zamiast tego token w samym adresie URL (patrz services/sharedReports.js)
-// jednoznacznie identyfikuje i użytkownika, i konkretne udostępnienie.
+// Public, UNAUTHENTICATED endpoint for retrieving a shared PDF report (product feature:
+// share a report by link, read-only). The recipient (a doctor or dietician) has no
+// account in the app, so session/Bearer authentication does not apply. Instead the token
+// in the URL itself (see services/sharedReports.js) uniquely identifies both the user and
+// the specific share.
 //
-// Dlatego ten router MUSI być zamontowany w server.js PRZED `app.use('/api', requireAuth)` -
-// tak samo jak routes/healthcheck.js i routes/appleHealth.js. Ścieżka zaczyna się od
-// `/api/public/` (a nie `/api/user/...` jak resztą tras account.js), żeby z samego
-// adresu URL było widać, że to świadomie publiczny endpoint, a nie przeoczony brak
+// This router MUST therefore be mounted in server.js BEFORE `app.use('/api', requireAuth)`,
+// like routes/healthcheck.js and routes/appleHealth.js. The path starts with
+// `/api/public/` (rather than `/api/user/...` like the rest of account.js) so that the URL
+// alone makes it obvious this endpoint is public by design, not by an overlooked missing
 // autoryzacji.
 //
-// Limiter zapytań (apiRateLimiter w server.js) jest zamontowany na '/api' PRZED tym
-// routerem, więc nadal obejmuje tę trasę - ważne, bo token jest jedyną barierą
-// dostępu, a limiter utrudnia jego zgadywanie/bruteforce.
+// The rate limiter (apiRateLimiter in server.js) is mounted on '/api' BEFORE this
+// router, so it still covers this route - which matters, because the token is the only
+// access barrier and the limiter makes guessing or brute-forcing it much harder.
 router.get('/api/public/shared-reports/:token', async (req, res) => {
   try {
     const share = await getActiveShareByToken(req.params.token);
-    // Identyczna odpowiedź 404 dla "nie istnieje", "odwołany" i "wygasł" - patrz
+    // Identical 404 for "does not exist", "revoked" and "expired" - see
     // komentarz w getActiveShareByToken.
     if (!share) {
       return res.status(404).json({ error: 'Link jest nieprawidłowy, wygasł albo został odwołany.' });
@@ -29,8 +29,8 @@ router.get('/api/public/shared-reports/:token', async (req, res) => {
 
     const pdfBuffer = await buildHealthReportPdf(share.userId, share.days);
     res.setHeader('Content-Type', 'application/pdf');
-    // inline (nie attachment) - odbiorca linku zwykle chce po prostu zobaczyć raport
-    // w przeglądarce, a nie wymusić pobranie pliku.
+    // inline (not attachment) - a link recipient usually just wants to view the report
+    // in the browser rather than be forced to download a file.
     res.setHeader('Content-Disposition', 'inline; filename="dietetyk-ai-raport.pdf"');
     res.send(pdfBuffer);
   } catch (err) {

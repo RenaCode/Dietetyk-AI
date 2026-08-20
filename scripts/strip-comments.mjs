@@ -40,6 +40,11 @@ export function strip(src) {
   return out.split('\n').map(l => l.replace(/\s+$/, '')).join('\n');
 }
 
-if (process.argv[2]) {
+// CLI mode only when this file is the entry point. Without the guard, importing
+// strip() from another script that takes its own argv (verify-language-pass.mjs with
+// explicit refs, for instance) made this block try to read that argument as a file
+// path and throw ENOENT - which then looked like the verification had passed.
+import { fileURLToPath } from 'url';
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1] && process.argv[2]) {
   console.log(strip(fs.readFileSync(process.argv[2], 'utf8')));
 }

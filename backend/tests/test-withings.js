@@ -28,19 +28,19 @@ async function testWithingsConnection() {
   const clientId = envClientId || dbClientId;
   const clientSecret = envClientSecret || dbClientSecret;
 
-  console.log(`Zmienne środowiskowe (.env): Client ID: ${envClientId ? 'obecny' : 'brak'}, Client Secret: ${envClientSecret ? 'obecny' : 'brak'}`);
+  console.log(`Environment (.env): Client ID: ${envClientId ? 'present' : 'missing'}, Client Secret: ${envClientSecret ? 'present' : 'missing'}`);
   console.log(`Baza danych (ustawienia admin): Client ID: ${dbClientId ? 'obecny' : 'brak'}, Client Secret: ${dbClientSecret ? 'obecny' : 'brak'}`);
 
   if (!clientId || !clientSecret) {
-    console.error('❌ Błąd: Brak Client ID lub Client Secret dla Withings w .env lub bazie danych.');
-    console.log('\nAby to naprawić, dodaj do pliku backend/.env następujące linie:');
+    console.error('❌ Error: no Withings Client ID or Client Secret in .env or the database.');
+    console.log('\nTo fix this, add the following lines to backend/.env:');
     console.log('WITHINGS_CLIENT_ID=twoj_client_id_withings');
     console.log('WITHINGS_CLIENT_SECRET=twoj_client_secret_withings');
     process.exit(1);
   }
 
-  console.log(`Używane Client ID: ${clientId}`);
-  console.log('Wysyłam próbne zapytanie do Withings API w celu weryfikacji sieci...');
+  console.log(`Using Client ID: ${clientId}`);
+  console.log('Sending a probe request to the Withings API to verify connectivity...');
 
   try {
     const response = await fetch('https://wbsapi.withings.net/v2/oauth2', {
@@ -58,23 +58,23 @@ async function testWithingsConnection() {
 
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`Błąd połączenia HTTP z Withings API: ${response.status} - ${errText}`);
+      throw new Error(`HTTP connection error talking to the Withings API: ${response.status} - ${errText}`);
     }
 
     const resJson = await response.json();
-    console.log('Otrzymano odpowiedź z Withings API:', resJson);
+    console.log('Response from the Withings API:', resJson);
 
-    // Błędy autoryzacji oznaczają poprawne nawiązanie połączenia (kod / client_secret są wysyłane, DNS działa)
+    // An authorisation error means the connection itself worked: the code/client_secret were sent and DNS resolved
     if (resJson.status === 293 || resJson.status === 100 || resJson.status === 200 || resJson.status === 503) {
-      console.log('\n✅ Połączenie z Withings API powiodło się! (Otrzymano odpowiedź o statusie sieciowym/autoryzacji).');
+      console.log('\n✅ Reached the Withings API successfully (received a network/authorisation status response).');
       console.log('Integracja Withings jest poprawnie skonfigurowana od strony sieciowej.');
       process.exit(0);
     } else {
-      console.warn('\n⚠️ Otrzymano nietypową odpowiedź z Withings API. Sprawdź poprawność kluczy.');
+      console.warn('\n⚠️ Unexpected response from the Withings API. Check that the keys are correct.');
       process.exit(0);
     }
   } catch (err) {
-    console.error('\n❌ Błąd połączenia z Withings API:', err.message);
+    console.error('\n❌ Failed to reach the Withings API:', err.message);
     process.exit(1);
   }
 }

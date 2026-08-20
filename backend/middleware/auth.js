@@ -1,7 +1,7 @@
 const db = require('../db');
 
 async function requireAuth(req, res, next) {
-  // Wyjątek dla publicznych tras logowania/zaproszeń/rejestracji/callbacków
+  // Exception for the public login/invitation/registration/callback routes
   if (
     req.path === '/login' ||
     req.path === '/verify-2fa-setup' ||
@@ -15,15 +15,16 @@ async function requireAuth(req, res, next) {
     req.path === '/auth/google-fit/callback' ||
     req.path === '/auth/google' ||
     req.path === '/auth/google/callback' ||
-    // Trasy INICJUJĄCE połączenie z Oura/Withings/Google Fit oraz linkowanie konta
-    // Google (frontend wywołuje je przez window.location.href, bo tylko nawigacja
-    // najwyższego poziomu może przekierować przeglądarkę do ekranu zgody dostawcy
-    // OAuth - fetch() z nagłówkiem Authorization nie da takiego przekierowania).
-    // Token trafia więc do nich przez ?token= w query, NIE przez nagłówek Bearer.
-    // Każda z tych 4 tras sama waliduje req.query.token względem tabeli sessions
-    // (patrz routes/integrations.js i routes/auth.js) - nie korzystają z req.user,
-    // więc wymaganie tu nagłówka Authorization tylko je blokowało (regresja
-    // wprowadzona razem z usunięciem ogólnego fallbacku query.token powyżej).
+    // Routes that INITIATE a connection to Oura/Withings/Google Fit, plus Google account
+    // linking. The frontend navigates to these via window.location.href, because only a
+    // top-level navigation can redirect the browser to the OAuth provider's consent
+    // screen - a fetch() with an Authorization header cannot produce that redirect.
+    // The token therefore reaches them through ?token= in the query string, NOT through
+    // the Bearer header. Each of these four routes validates req.query.token against the
+    // sessions table itself (see routes/integrations.js and routes/auth.js) and does not
+    // use req.user, so requiring an Authorization header here only blocked them - a
+    // regression introduced together with removing the general query.token fallback
+    // below.
     req.path === '/auth/oura' ||
     req.path === '/auth/withings' ||
     req.path === '/auth/google-fit' ||
@@ -32,12 +33,12 @@ async function requireAuth(req, res, next) {
     return next();
   }
 
-  // Token akceptujemy WYŁĄCZNIE z nagłówka Authorization. Wcześniej istniał tu
-  // fallback na req.query.token, ale token sesji w query stringu trafiał
-  // niezaszyfrowany do logów morgan('dev') (logującego pełny URL żądania) oraz
-  // do historii przeglądarki/nagłówka Referer. Front-end (App.jsx) i tak zawsze
-  // wysyła token przez nagłówek Bearer - fallback był martwym kodem zwiększającym
-  // powierzchnię ataku, nie realnie wykorzystywaną funkcją.
+  // The token is accepted ONLY from the Authorization header. There used to be a
+  // fallback to req.query.token, but a session token in the query string ended up
+  // unencrypted in morgan('dev') logs (which log the full request URL), in browser
+  // history and in the Referer header. The frontend (App.jsx) always sends the token via
+  // the Bearer header anyway - the fallback was dead code that widened the attack surface
+  // without being a feature anyone used.
   let token = null;
   const authHeader = req.headers.authorization;
   if (authHeader) {
@@ -59,14 +60,14 @@ async function requireAuth(req, res, next) {
       return res.status(401).json({ error: 'Sesja wygasła lub jest niepoprawna. Zaloguj się ponownie.' });
     }
 
-    // Zablokuj dostęp, jeśli użytkownik ma włączone 2FA, ale sesja nie jest zweryfikowana
+    // Deny access when the user has 2FA enabled but the session is not yet verified
     if (session.totp_enabled === 1 && session.is_verified_2fa === 0) {
       return res.status(401).json({ error: 'Wymagana weryfikacja 2FA. Uzupełnij kod.' });
     }
 
-    // Przedłuż sesję o 7 dni tylko, jeśli do wygaśnięcia zostało mniej niż 6 dni
-    // (zapobiega to ciągłym zapisom w SQLite przy każdym zapytaniu API, co mogło
-    // powodować locki bazy SQLITE_BUSY przy równoległych żądaniach z dashboardu).
+    // Extend the session by 7 days only when fewer than 6 days remain before expiry
+    // (this avoids writing to SQLite on every single API request, which could cause
+    // SQLITE_BUSY locks under the dashboard's parallel requests).
     const expiresAtMs = new Date(session.expires_at.replace(' ', 'T') + 'Z').getTime();
     const nowMs = Date.now();
     const remainingTimeMs = expiresAtMs - nowMs;
@@ -81,14 +82,14 @@ async function requireAuth(req, res, next) {
       id: session.user_id,
       username: session.username,
       role: session.role,
-      // Imię/nazwisko (opcjonalne, ustawiane w Ustawieniach) - używane do
-      // personalizacji zwrotów AI dietetyka ("Cześć Marcin" zamiast username).
+      // First/last name (optional, set in Settings) - used to personalise the AI
+      // dietician's phrasing ("Hi Marcin" rather than the username).
       first_name: session.first_name,
       last_name: session.last_name
     };
     next();
   } catch (err) {
-    console.error('Błąd w middleware requireAuth:', err);
+    console.error('Error in the requireAuth middleware:', err);
     res.status(500).json({ error: 'Błąd autoryzacji serwera.' });
   }
 }

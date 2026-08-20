@@ -1,22 +1,23 @@
-// Runda 12 (audyt): listy kluczy "sekretnych" (maskowanych jako '********' przy odczycie
-// i nigdy nie nadpisywanych, gdy frontend odeśle z powrotem samą maskę) były niezależnie
-// duplikowane wewnątrz dwóch plików - routes/account.js (3 miejsca: GET/POST /api/settings
-// oraz GET /api/user/export) i routes/admin.js (2 miejsca: GET/POST /api/admin/config).
-// Realne ryzyko duplikacji: ktoś dodaje nowy sekret (np. nowy klucz integracji) i
-// aktualizuje tylko jedno z kilku miejsc w danym pliku - efekt to sekret wyciekający
-// w plaintext z jednego z endpointów, mimo że pozostałe go maskują.
+// Round 12 (audit): the lists of "secret" keys (masked as '********' on read
+// and never overwritten when the frontend sends the mask back) were duplicated
+// independently inside two files - routes/account.js (3 places: GET/POST /api/settings
+// and GET /api/user/export) and routes/admin.js (2 places: GET/POST /api/admin/config).
+// The real risk of that duplication: someone adds a new secret (a new integration key,
+// say) and updates only one of several places in the file - the result is a secret
+// leaking in plaintext from one endpoint while the others still mask it.
 //
-// Dwie OSOBNE listy (nie jedna wspólna), bo dotyczą dwóch różnych domen ustawień:
-// - USER_SECRET_SETTING_KEYS: sekrety integracji PER UŻYTKOWNIK, w tabeli `settings`
-//   (każdy użytkownik konfiguruje własne klucze Oura/Withings/Gemini).
+// Two SEPARATE lists (not one shared list), because they cover two different settings
+// domains:
+// - USER_SECRET_SETTING_KEYS: PER-USER integration secrets, in the `settings` table
+//   (each user configures their own Oura/Withings/Gemini keys).
 // - APP_SECRET_CONFIG_KEYS: sekrety konfiguracji GLOBALNEJ aplikacji, w tabeli
-//   `app_config` (Mailgun/Google OAuth konfigurowane raz przez admina dla całej appki).
+//   `app_config` (Mailgun/Google OAuth, configured once by an admin for the whole app).
 
 const USER_SECRET_SETTING_KEYS = ['gemini_api_key', 'oura_client_secret', 'withings_client_secret'];
 const APP_SECRET_CONFIG_KEYS = ['mailgun_api_key', 'google_client_secret'];
 
-// Zwraca zamaskowaną wartość ('********'), jeśli `key` jest sekretem z podanej listy
-// i ma niepustą wartość - w przeciwnym razie zwraca wartość bez zmian.
+// Returns a masked value ('********') when `key` is a secret from the given list and has
+// a non-empty value - otherwise returns the value unchanged.
 function maskSecretValue(key, value, secretKeys) {
   if (secretKeys.includes(key) && value) {
     return '********';
@@ -24,8 +25,8 @@ function maskSecretValue(key, value, secretKeys) {
   return value;
 }
 
-// Sprawdza, czy dany zapis powinien zostać POMINIĘTY przy zapisie (POST) - tj. czy
-// to sekret, dla którego frontend odesłał z powrotem samą maskę (a nie nową wartość).
+// Checks whether a given entry should be SKIPPED on save (POST) - that is, whether it is
+// a secret for which the frontend sent back just the mask rather than a new value.
 function isMaskedSecretWrite(key, value, secretKeys) {
   return secretKeys.includes(key) && value === '********';
 }

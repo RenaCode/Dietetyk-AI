@@ -1,20 +1,20 @@
-// Priorytet źródeł danych o AKTYWNOŚCI (kroki, kalorie, dystans, minuty aktywności).
+// Priority of ACTIVITY data sources (steps, calories, distance, active minutes).
 //
-// Problem, który to rozwiązuje: do tabeli health_metrics piszą trzy niezależne
-// źródła - webhook/HealthKit Apple Health, aktywne pobieranie z Google Fit i
-// aktywne pobieranie z Oura. Wcześniej każdy z upsertów bronił się wyłącznie
+// The problem this solves: three independent sources write to health_metrics - the Apple
+// Health webhook/HealthKit, active polling of Google Fit, and active polling of Oura.
+// Each upsert used to guard only
 // przed nadpisaniem danych z 'apple' (CASE WHEN activity_source = 'apple' ...),
-// a Google Fit i Oura były traktowane jako równorzędne. Efekt: dla tej samej
-// doby wynik zależał od KOLEJNOŚCI synchronizacji w danej godzinie - Oura
-// potrafiła nadpisać świeższe kroki z Google Fit i odwrotnie, więc ta sama data
-// pokazywała różne liczby przy kolejnych odświeżeniach.
+// while Google Fit and Oura were treated as equals. The effect: for the same day the
+// result depended on the ORDER of syncs within that hour - Oura could overwrite fresher
+// step counts from Google Fit and vice versa, so the same date showed different numbers
+// on successive refreshes.
 //
-// Hierarchia (od najwyższego): apple > google_fit > oura.
-// Uzasadnienie jest takie samo jak to, które README podaje dla Apple Health:
-// źródła telefonowe/zegarkowe raportują na bieżąco, a Oura domyka dobę dopiero
-// następnego ranka - więc przy konflikcie dane z telefonu są bliższe prawdzie.
-// Źródło nieznane (NULL, np. wiersz założony wyłącznie przez Withings) ma rangę
-// 0, czyli każde realne źródło aktywności może je uzupełnić.
+// Hierarchy (highest first): apple > google_fit > oura.
+// The reasoning is the same one the README gives for Apple Health: phone and watch
+// sources report continuously, while Oura only finalises a day the next morning - so on
+// conflict the phone data is closer to the truth.
+// An unknown source (NULL, e.g. a row created solely by Withings) has rank 0, meaning any
+// real activity source may fill it in.
 const ACTIVITY_SOURCE_RANK = {
   apple: 3,
   google_fit: 2,
@@ -25,24 +25,25 @@ function getActivitySourceRank(source) {
   return ACTIVITY_SOURCE_RANK[source] || 0;
 }
 
-// Fragment SQL liczący rangę źródła JUŻ ZAPISANEGO w wierszu (kolumna activity_source).
-// Trzymamy to jako string, bo SQLite nie ma mapy/CASE-in-parameter - lista musi być
-// wygenerowana z tej samej stałej co strona JS, żeby nie rozjechały się przy zmianie.
+// SQL fragment computing the rank of the source ALREADY STORED in the row (the
+// activity_source column). It is kept as a string because SQLite has no map or
+// CASE-in-parameter - the list must be generated from the same constant as the JS side so
+// the two cannot drift apart.
 const EXISTING_RANK_SQL = `CASE activity_source ${Object.entries(ACTIVITY_SOURCE_RANK)
   .map(([name, rank]) => `WHEN '${name}' THEN ${rank}`)
   .join(' ')} ELSE 0 END`;
 
 /**
- * Buduje wyrażenie SQL dla jednej kolumny metryki aktywności w klauzuli
+ * Builds the SQL expression for one activity metric column inside the
  * ON CONFLICT ... DO UPDATE SET.
  *
- * Zasada: zachowaj istniejącą wartość tylko wtedy, gdy zapisana w wierszu jest
- * z WYŻEJ notowanego źródła ORAZ faktycznie coś zawiera (> 0). Samo wyższe
- * źródło nie wystarczy - dzień, w którym Apple Health nie zaraportowało dystansu,
- * nadal powinien dać się uzupełnić danymi z Oury.
+ * Rule: keep the existing value only when the row's stored value comes from a
+ * HIGHER-ranked source AND actually contains something (> 0). A higher source alone is
+ * not enough - a day where Apple Health reported no distance should still be fillable
+ * from Oura.
  *
  * @param {string} column nazwa kolumny (np. 'steps')
- * @param {number} incomingRank ranga źródła, które właśnie zapisuje
+ * @param {number} incomingRank rank of the source currently writing
  */
 function preserveHigherPriority(column, incomingRank) {
   return `${column} = CASE
@@ -52,14 +53,14 @@ function preserveHigherPriority(column, incomingRank) {
 }
 
 /**
- * Wyrażenie SQL dla samej kolumny activity_source: etykieta źródła zmienia się na
- * nowe źródło tylko wtedy, gdy realnie coś nadpisaliśmy. Jeśli wiersz należy do
- * wyżej notowanego źródła i ma w podanych kolumnach jakiekolwiek dane, etykieta
- * zostaje - inaczej dzień "należący" do Apple Health zostałby po cichu podpisany
- * jako 'oura' tylko dlatego, że Oura dołożyła metrykę, której Apple nie ma.
+ * SQL expression for the activity_source column itself: the label changes to the new
+ * source only when something was actually overwritten. If the row belongs to a
+ * higher-ranked source and holds any data in the given columns, the label stays - the
+ * alternative is that a day "owned" by Apple Health gets silently relabelled 'oura'
+ * merely because Oura contributed a metric Apple does not provide.
  *
- * @param {number} incomingRank ranga źródła, które właśnie zapisuje
- * @param {string[]} columns kolumny decydujące o tym, czy stare źródło "ma dane"
+ * @param {number} incomingRank rank of the source currently writing
+ * @param {string[]} columns columns that decide whether the previous source "has data"
  */
 function preserveSourceLabel(incomingRank, columns) {
   const hasData = columns.map(c => `COALESCE(${c}, 0) > 0`).join(' OR ');

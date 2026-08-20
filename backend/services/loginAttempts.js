@@ -1,24 +1,24 @@
-// Prosta, bezzależnościowa blokada brute-force logowania / weryfikacji 2FA.
-// Śledzi nieudane próby po kluczu (IP + login lub IP + tempToken) i blokuje
-// dalsze próby na pewien czas po przekroczeniu limitu.
-// Nie wymaga żadnej dodatkowej biblioteki npm.
+// Simple, dependency-free brute-force protection for login and 2FA verification.
+// Tracks failed attempts by key (IP + username, or IP + tempToken) and blocks further
+// attempts for a while once the limit is exceeded.
+// Requires no additional npm package.
 //
-// Stan trzymany jest w tabeli `login_attempts` w bazie SQLite (nie w pamięci
-// procesu), żeby blokady przetrwały restart/redeploy kontenera backendu -
-// inaczej atakujący mógłby ominąć blokadę, wywołując restart (np. crashując
-// proces) albo czekając na rutynowy redeploy.
+// State lives in the `login_attempts` table in SQLite rather than in process memory, so
+// that blocks survive a restart or redeploy of the backend container - otherwise an
+// attacker could clear a block by forcing a restart (crashing the process, say) or
+// simply waiting for a routine redeploy.
 
 const db = require('../db');
 
 const MAX_ATTEMPTS = 5;
-const WINDOW_MS = 15 * 60 * 1000;   // okno czasowe, w którym liczymy nieudane próby
+const WINDOW_MS = 15 * 60 * 1000;   // window over which failed attempts are counted
 const LOCKOUT_MS = 15 * 60 * 1000;  // czas blokady po przekroczeniu limitu
 
 function buildKey(ip, identifier) {
   return `${ip || 'unknown'}::${(identifier || '').toString().toLowerCase()}`;
 }
 
-// Zwraca liczbę ms blokady pozostałych (0 jeśli nie zablokowano)
+// Returns the number of milliseconds left on the block (0 when not blocked)
 async function isLocked(ip, identifier) {
   const key = buildKey(ip, identifier);
   const rec = await db.get(`SELECT * FROM login_attempts WHERE key = ?`, [key]);
@@ -60,13 +60,13 @@ async function recordSuccess(ip, identifier) {
   await db.run(`DELETE FROM login_attempts WHERE key = ?`, [buildKey(ip, identifier)]);
 }
 
-// Okresowe czyszczenie wygasłych wpisów, aby tabela nie rosła w nieskończoność
+// Periodic cleanup of expired entries so the table does not grow without bound
 setInterval(async () => {
   try {
     const now = Date.now();
     await db.run(`DELETE FROM login_attempts WHERE locked_until < ? AND first_at < ?`, [now, now - WINDOW_MS]);
   } catch (err) {
-    console.error('[LOGIN ATTEMPTS] Błąd czyszczenia wygasłych wpisów:', err.message);
+    console.error('[LOGIN ATTEMPTS] Failed to clean up expired entries:', err.message);
   }
 }, 10 * 60 * 1000);
 

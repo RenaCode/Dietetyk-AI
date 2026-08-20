@@ -1,18 +1,17 @@
 const db = require('../db');
 
-// Runda 12 (audyt): ai-explanation-insight (patrz routes/dashboard.js) cache'uje
-// wygenerowane przez AI wyjaśnienie przyczyny w health_metrics.ai_explanation, a dla dni
-// PRZESZŁYCH traktuje ten cache jako "świeży na zawsze" (dane historyczne są z założenia
-// niezmienne). Problem: aplikacja POZWALA edytować dane przeszłych dni po fakcie -
-// dodanie/usunięcie posiłku (routes/meals.js), zmiana wody/suplementów (routes/health.js)
-// dla daty z przeszłości. Bez invalidacji, wyjaśnienie AI wygenerowane PRZED edycją
-// pozostawało w cache'u i mogło sprzecznie odnosić się do danych, które już nie
-// odpowiadają stanowi bazy (np. wyjaśnienie wspominające "nie zjadłeś dziś śniadania",
-// mimo że posiłek został dodany retroaktywnie po wygenerowaniu wyjaśnienia).
+// Round 12 (audit): ai-explanation-insight (see routes/dashboard.js) caches the
+// AI-generated explanation in health_metrics.ai_explanation, and for PAST days treats
+// that cache as "fresh forever" (historical data is assumed immutable). The problem: the
+// app DOES allow editing past days after the fact - adding or deleting a meal
+// (routes/meals.js), changing water or supplements (routes/health.js) for a past date.
+// Without invalidation, an explanation generated BEFORE the edit stayed in the cache and
+// could contradict the data actually in the database - for example still saying "you
+// skipped breakfast today" after the meal was added retroactively.
 //
-// Czyścimy WYŁĄCZNIE cache (ai_explanation/ai_explanation_generated_at) - kolejne
-// wejście na dashboard dla tej daty samo wygeneruje nowe wyjaśnienie na bazie
-// aktualnych danych (patrz logika isFresh w ai-explanation-insight).
+// We clear ONLY the cache (ai_explanation/ai_explanation_generated_at). The next visit to
+// the dashboard for that date regenerates the explanation from current data (see the
+// isFresh logic in ai-explanation-insight).
 async function invalidateAiExplanationCache(userId, date) {
   if (!date) return;
   try {
@@ -22,10 +21,10 @@ async function invalidateAiExplanationCache(userId, date) {
       [userId, date]
     );
   } catch (err) {
-    // Nieudana invalidacja cache nie powinna psuć głównej operacji (zapis posiłku/wody/
-    // suplementów) - w najgorszym przypadku użytkownik zobaczy nieaktualne wyjaśnienie
-    // do najbliższego naturalnego odświeżenia (30 min) lub przejścia dnia.
-    console.error('[AI EXPLANATION CACHE] Błąd invalidacji cache:', err);
+    // A failed cache invalidation must not break the main operation (saving a meal,
+    // water or supplements) - at worst the user sees a stale explanation until the next
+    // natural refresh (30 min) or until the day rolls over.
+    console.error('[AI EXPLANATION CACHE] Cache invalidation failed:', err);
   }
 }
 

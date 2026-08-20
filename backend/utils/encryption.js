@@ -1,25 +1,25 @@
 const crypto = require('crypto');
 
-// Szyfrowanie sekretów trzymanych w bazie SQLite (tokeny OAuth Oura/Withings/Google Fit
-// w `oauth_tokens`, oraz sekrety per-użytkownik i globalne w `settings`/`app_config` -
-// patrz utils/secretKeys.js dla listy kluczy uznawanych za sekretne). Wcześniej wszystkie
-// te wartości leżały w bazie jawnym tekstem - ktoś z dostępem do samego pliku .db
-// (np. przez kontener dietetyk-db / backup) miał od razu gotowe tokeny dostępu do
-// kont Oura/Withings użytkowników i klucze API Gemini/Mailgun/Google.
+// Encryption of secrets stored in SQLite (OAuth tokens for Oura/Withings/Google Fit in
+// `oauth_tokens`, plus per-user and global secrets in `settings`/`app_config` - see
+// utils/secretKeys.js for the list of keys treated as secret). All of these used to sit
+// in the database as plain text: anyone with access to the .db file alone (via the
+// dietetyk-db container or a backup) had ready-to-use access tokens for users' Oura and
+// Withings accounts, plus the Gemini/Mailgun/Google API keys.
 //
-// Klucz wyprowadzamy z APP_PASSWORD (scrypt + stały, unikalny "context" string), a nie
-// z nowej, osobnej zmiennej środowiskowej (np. ENCRYPTION_KEY) - APP_PASSWORD jest już
-// dziś WYMAGANY do startu backendu (patrz OAUTH_STATE_SECRET w oauthHelpers.js) i jest
-// ręcznie zarządzany w .env na produkcyjnym VPS (docker-compose.yml montuje
-// backend/.env do kontenera). Dodanie nowego wymaganego sekretu ryzykowałoby, że
-// backend przestanie startować po najbliższym deployu, dopóki ktoś ręcznie nie
-// zaktualizuje pliku na serwerze. Osobny "context" string w scrypt zapewnia separację
-// kluczy - klucz szyfrowania pól jest inny niż OAUTH_STATE_SECRET, mimo wspólnego
-// sekretu bazowego.
+// The key is derived from APP_PASSWORD (scrypt + a fixed, unique "context" string)
+// rather than from a new dedicated environment variable such as ENCRYPTION_KEY.
+// APP_PASSWORD is ALREADY required for the backend to start (see OAUTH_STATE_SECRET in
+// oauthHelpers.js) and is maintained by hand in the .env on the production VPS
+// (docker-compose.yml mounts backend/.env into the container). Introducing another
+// required secret would risk the backend refusing to start after the next deploy until
+// someone updated that file on the server. The separate "context" string in scrypt keeps
+// the keys isolated - the field-encryption key differs from OAUTH_STATE_SECRET even
+// though both derive from the same base secret.
 const APP_SECRET = process.env.APP_PASSWORD;
 if (!APP_SECRET) {
   throw new Error(
-    'Brak APP_PASSWORD w zmiennych środowiskowych - wymagany m.in. do szyfrowania sekretów w bazie danych.'
+    'APP_PASSWORD is missing from the environment - it is required, among other things, to encrypt secrets in the database.'
   );
 }
 
@@ -38,10 +38,10 @@ function encrypt(plaintext) {
   return ENC_PREFIX + Buffer.concat([iv, authTag, ciphertext]).toString('base64');
 }
 
-// Zwraca wartość bez zmian, jeśli nie ma prefiksu ENC_PREFIX - obejmuje to zarówno
-// puste/brakujące wartości, jak i dane zapisane PRZED wdrożeniem tego szyfrowania
-// (legacy plaintext). Dzięki temu nie potrzeba osobnego skryptu migracyjnego: stare
-// wartości dalej czytają się poprawnie i zostają zaszyfrowane przy najbliższym zapisie.
+// Returns the value untouched when the ENC_PREFIX is absent - this covers both
+// empty/missing values and data written BEFORE this encryption was introduced (legacy
+// plaintext). That removes the need for a separate migration script: old values still
+// read correctly and get encrypted on their next write.
 function decrypt(value) {
   if (typeof value !== 'string' || !value.startsWith(ENC_PREFIX)) return value;
   const raw = Buffer.from(value.slice(ENC_PREFIX.length), 'base64');

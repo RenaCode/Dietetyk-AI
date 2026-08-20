@@ -64,3 +64,11 @@ backend/backups/
 # Playwright test artifacts
 test-results/
 playwright-report/
+
+# The global ignore file on some machines carries a Python-venv template rule
+# ("[Ss]cripts") that excludes this entire directory. Git never even descends into an
+# excluded directory, so `git add -A` dropped every new file here SILENTLY - three
+# commits claimed to add scripts that never actually entered the repository.
+# This negation re-includes the directory for this repo regardless of the global file.
+!scripts/
+!scripts/**

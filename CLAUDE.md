@@ -73,6 +73,7 @@ Do not write comments that restate the code (`// increment counter`).
 
 ## Conventions
 
+- **After adding a new file, confirm it actually entered the commit.** A global ignore file (`~/.gitignore_global`) on at least one dev machine carries a Python-venv template rule, `[Ss]cripts`, which excludes the whole `scripts/` directory — in this repo *and* `frontend/scripts/`. Git does not even descend into an excluded directory, so `git add -A` skipped those files **silently**: four scripts were "added" across three merged PRs and none of them reached the repository, while the README went on documenting commands that a fresh clone could not run. The repo `.gitignore` now negates that rule, but the general lesson stands — `git show --stat HEAD` after committing costs nothing and catches this class of mistake immediately.
 - Never commit secrets. Integration credentials belong in the Settings tab (encrypted via `utils/encryption.js`), never in files.
 - `main` is protected — work on a branch and open a PR.
 - Do not add dependencies without a clear reason; the project deliberately hand-rolls charts and has a small dependency surface.

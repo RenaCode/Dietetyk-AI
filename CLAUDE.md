@@ -20,13 +20,30 @@
 
 When in doubt: if a Polish speaker with no access to the code would never see the string, it must be English.
 
+### Current state
+
+`node scripts/check-language.js` reports where the codebase stands. As of the commit that introduced this file:
+
+| Category | Lines | Status |
+|---|---|---|
+| Comments | ~2830 | violation — to translate |
+| Log / console messages | ~256 | violation — to translate |
+| Identifiers | ~29 | almost all false positives; **no real Polish identifiers exist** |
+| UI text, API errors, prompts, i18n | ~1740 | allowed, stays Polish |
+
+The good news is that the part that would be genuinely painful to change is already done: **every variable, function, file name, database column and API route is already English.** What remains is prose inside comments and log strings, which can be translated file by file without touching behaviour.
+
+`scripts/check-language.js --file <path>` lists the flagged lines in one file, with the category for each.
+
 ### Migrating existing Polish
 
-The codebase predates this rule and is still largely Polish-commented. Do **not** launch a repo-wide translation sweep on your own — it produces enormous, unreviewable diffs and destroys `git blame`. Instead:
+The codebase predates this rule. Do **not** launch a repo-wide translation sweep on your own — it produces an enormous, unreviewable diff and wrecks `git blame` on ~3000 lines at once. Instead:
 
 - Translate comments in any block you are already modifying for another reason.
 - When you add a new file, it is English-only from the start.
-- If asked to translate a specific file or directory, do it as its own commit that changes *nothing* but language, so the diff stays reviewable.
+- If asked to translate a specific file or directory, do it as its own commit that changes *nothing* but language, so the diff stays reviewable and the behaviour change is provably empty.
+
+The comments carry a lot of hard-won reasoning (bug post-mortems, why a threshold is what it is). Translating must preserve that reasoning in full — a shorter English comment that drops the "why" is worse than the Polish one it replaced.
 
 ## Comment style
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { formatHoursMins } from '../utils/format';
+import { t } from '../utils/i18n';
 
 export default function Trends({ selectedDate, sessionToken, onLogout }) {
   const [historyData, setHistoryData] = useState([]);
@@ -118,7 +119,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
   // Pełna etykieta dnia używana w podpowiedzi (tooltip), np. "śr 17.06"
   const getFullDayLabel = (dateStr) => {
     const d = parseLocalDate(dateStr);
-    const names = ['niedz', 'pon', 'wt', 'śr', 'czw', 'pt', 'sob'];
+    const names = ['niedz', 'pon', 'wt', 'śr', 'czw', 'pt', 'sob'].map(t);
     const dd = String(d.getDate()).padStart(2, '0');
     const mm = String(d.getMonth() + 1).padStart(2, '0');
     return `${names[d.getDay()]} ${dd}.${mm}`;
@@ -620,7 +621,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     return (
       <div className="premium-card" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.9rem', color: 'var(--text-dim)', fontWeight: '600' }}>Ciśnienie tętnicze</span>
+          <span style={{ fontSize: '0.9rem', color: 'var(--text-dim)', fontWeight: '600' }}>{t("Ciśnienie tętnicze")}</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '0.7rem' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'rgba(255,255,255,0.5)' }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#ffffff', display: 'inline-block' }}></span>
@@ -804,7 +805,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.68rem' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'rgba(255,255,255,0.5)' }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: colors.deep, display: 'inline-block' }}></span>
-              Głęboki
+              {t("Głęboki")}
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: 'rgba(255,255,255,0.5)' }}>
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: colors.rem, display: 'inline-block' }}></span>
@@ -1048,9 +1049,9 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsActivityGroupOpen(o => !o); } }}
           style={{ padding: '0 4px', cursor: 'pointer' }}
         >
-          <span className="premium-title" style={{ fontSize: '1.05rem' }}>Aktywność i ciało</span>
+          <span className="premium-title" style={{ fontSize: '1.05rem' }}>{t("Aktywność i ciało")}</span>
           <span style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>
-            {isActivityGroupOpen ? 'Zwiń ▲' : 'Pokaż ▼'}
+            {isActivityGroupOpen ? t('Zwiń ▲') : t('Pokaż ▼')}
           </span>
         </div>
         {isActivityGroupOpen && (

@@ -189,13 +189,13 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         // kończyła się ciche pustymi/domyślnymi formularzami, bez wylogowania
         // i bez informacji dla użytkownika, czemu nic się nie zapisuje.
         if (onLogout) onLogout();
-        setMessage({ type: 'error', text: 'Sesja wygasła. Zaloguj się ponownie.' });
+        setMessage({ type: 'error', text: t('Sesja wygasła. Zaloguj się ponownie.') });
       } else {
-        setMessage({ type: 'error', text: 'Nie udało się wczytać ustawień.' });
+        setMessage({ type: 'error', text: t('Nie udało się wczytać ustawień.') });
       }
     } catch (err) {
       console.error('Błąd pobierania ustawień:', err);
-      setMessage({ type: 'error', text: 'Błąd połączenia z serwerem podczas wczytywania ustawień.' });
+      setMessage({ type: 'error', text: t('Błąd połączenia z serwerem podczas wczytywania ustawień.') });
     }
   };
 
@@ -212,13 +212,13 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       if (res.status === 401) { if (onLogout) onLogout(); return; }
       if (res.ok) {
         const data = await res.json();
-        let statusText = 'Synchronizacja zakończona pomyślnie!';
+        let statusText = t('Synchronizacja zakończona pomyślnie!');
         const parts = [];
         if (data.oura) {
-          parts.push(`Oura: ${data.oura.success ? '✅ Zsynchronizowano' : '❌ Błąd (' + data.oura.error + ')'}`);
+          parts.push(`Oura: ${data.oura.success ? t('✅ Zsynchronizowano') : t('❌ Błąd ({error})', { error: data.oura.error })}`);
         }
         if (data.withings) {
-          parts.push(`Withings: ${data.withings.success ? '✅ Zsynchronizowano' : '❌ Błąd (' + data.withings.error + ')'}`);
+          parts.push(`Withings: ${data.withings.success ? t('✅ Zsynchronizowano') : t('❌ Błąd ({error})', { error: data.withings.error })}`);
         }
         if (parts.length > 0) {
           statusText += ` (${parts.join(', ')})`;
@@ -226,10 +226,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         setMessage({ type: 'success', text: statusText });
         setTimeout(() => setMessage({ type: '', text: '' }), 10000);
       } else {
-        setMessage({ type: 'error', text: 'Wystąpił błąd podczas manualnej synchronizacji.' });
+        setMessage({ type: 'error', text: t('Wystąpił błąd podczas manualnej synchronizacji.') });
       }
     } catch (err) {
-      setMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsSyncing(false);
     }
@@ -248,7 +248,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       setMessage({ type: 'success', text: 'Skopiowano URL webhooka Apple Health do schowka!' });
       setTimeout(() => setMessage({ type: '', text: '' }), 5000);
     } catch (err) {
-      setMessage({ type: 'error', text: 'Nie udało się skopiować URL do schowka.' });
+      setMessage({ type: 'error', text: t('Nie udało się skopiować URL do schowka.') });
     }
   };
 
@@ -290,10 +290,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         if (onProfileUpdate) onProfileUpdate();
       } else {
         const data = await res.json().catch(() => ({}));
-        setMessage({ type: 'error', text: data.error || 'Błąd generowania nowego tokenu.' });
+        setMessage({ type: 'error', text: data.error || t('Błąd generowania nowego tokenu.') });
       }
     } catch (err) {
-      setMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsRegeneratingToken(false);
     }
@@ -331,14 +331,14 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
       if (res.status === 401) { if (onLogout) onLogout(); return; }
       if (res.ok) {
-        setMessage({ type: 'success', text: 'Ustawienia zostały pomyślnie zaktualizowane!' });
+        setMessage({ type: 'success', text: t('Ustawienia zostały pomyślnie zaktualizowane!') });
         onProfileUpdate();
         setTimeout(() => setMessage({ type: '', text: '' }), 5000);
       } else {
-        setMessage({ type: 'error', text: 'Wystąpił błąd podczas zapisywania ustawień.' });
+        setMessage({ type: 'error', text: t('Wystąpił błąd podczas zapisywania ustawień.') });
       }
     } catch (err) {
-      setMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsSaving(false);
     }
@@ -362,16 +362,16 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       if (res.status === 401) { if (onLogout) onLogout(); return; }
       const data = await res.json();
       if (!res.ok) {
-        setLocationMessage({ type: 'error', text: data.error || 'Błąd wyszukiwania lokalizacji.' });
+        setLocationMessage({ type: 'error', text: data.error || t('Błąd wyszukiwania lokalizacji.') });
         return;
       }
       if (!data.results || data.results.length === 0) {
-        setLocationMessage({ type: 'error', text: 'Nie znaleziono takiej miejscowości. Spróbuj wpisać nazwę większego, pobliskiego miasta.' });
+        setLocationMessage({ type: 'error', text: t('Nie znaleziono takiej miejscowości. Spróbuj wpisać nazwę większego, pobliskiego miasta.') });
         return;
       }
       setLocationResults(data.results);
     } catch (err) {
-      setLocationMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setLocationMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsSearchingLocation(false);
     }
@@ -398,7 +398,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       weather_location_label: ''
     }));
     setLocationResults([]);
-    setLocationMessage({ type: 'success', text: 'Przywrócono domyślną lokalizację. Kliknij "Zapisz ustawienia", żeby zapisać.' });
+    setLocationMessage({ type: 'success', text: t('Przywrócono domyślną lokalizację. Kliknij "Zapisz ustawienia", żeby zapisać.') });
   };
 
   const handleAvatarUpload = (e) => {
@@ -455,21 +455,21 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
 
       if (res.ok) {
-        setAvatarMessage({ type: 'success', text: 'Avatar został zaktualizowany!' });
+        setAvatarMessage({ type: 'success', text: t('Avatar został zaktualizowany!') });
         onProfileUpdate();
         setTimeout(() => setAvatarMessage({ type: '', text: '' }), 5000);
       } else {
-        setAvatarMessage({ type: 'error', text: 'Błąd podczas wgrywania avatara.' });
+        setAvatarMessage({ type: 'error', text: t('Błąd podczas wgrywania avatara.') });
       }
     } catch (err) {
-      setAvatarMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setAvatarMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     } finally {
       setIsUploadingAvatar(false);
     }
   };
 
   const handleRemoveAvatar = async () => {
-    if (!confirm('Czy chcesz usunąć swoje zdjęcie profilowe?')) return;
+    if (!confirm(t('Czy chcesz usunąć swoje zdjęcie profilowe?'))) return;
     setIsUploadingAvatar(true);
     submitAvatar(null);
   };
@@ -533,22 +533,22 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
 
       if (res.ok) {
-        setBodyGoalPhotoMessage({ type: 'success', text: 'Zdjęcie celu sylwetki zostało zapisane!' });
+        setBodyGoalPhotoMessage({ type: 'success', text: t('Zdjęcie celu sylwetki zostało zapisane!') });
         onProfileUpdate();
         setTimeout(() => setBodyGoalPhotoMessage({ type: '', text: '' }), 5000);
       } else {
         const data = await res.json().catch(() => ({}));
-        setBodyGoalPhotoMessage({ type: 'error', text: data.error || 'Błąd podczas wgrywania zdjęcia.' });
+        setBodyGoalPhotoMessage({ type: 'error', text: data.error || t('Błąd podczas wgrywania zdjęcia.') });
       }
     } catch (err) {
-      setBodyGoalPhotoMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setBodyGoalPhotoMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     } finally {
       setIsUploadingBodyGoalPhoto(false);
     }
   };
 
   const handleRemoveBodyGoalPhoto = async () => {
-    if (!confirm('Czy chcesz usunąć zdjęcie celu sylwetki?')) return;
+    if (!confirm(t('Czy chcesz usunąć zdjęcie celu sylwetki?'))) return;
     setIsUploadingBodyGoalPhoto(true);
     submitBodyGoalPhoto(null);
   };
@@ -558,7 +558,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     setPasswordMessage({ type: '', text: '' });
 
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      setPasswordMessage({ type: 'error', text: 'Nowe hasła nie są identyczne!' });
+      setPasswordMessage({ type: 'error', text: t('Nowe hasła nie są identyczne!') });
       return;
     }
 
@@ -577,15 +577,15 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
 
       if (res.ok) {
-        setPasswordMessage({ type: 'success', text: 'Hasło zostało pomyślnie zmienione!' });
+        setPasswordMessage({ type: 'success', text: t('Hasło zostało pomyślnie zmienione!') });
         setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
         setTimeout(() => setPasswordMessage({ type: '', text: '' }), 5000);
       } else {
         const data = await res.json();
-        setPasswordMessage({ type: 'error', text: data.error || 'Błąd podczas zmiany hasła.' });
+        setPasswordMessage({ type: 'error', text: data.error || t('Błąd podczas zmiany hasła.') });
       }
     } catch (err) {
-      setPasswordMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setPasswordMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsChangingPassword(false);
     }
@@ -602,7 +602,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setExportMessage({ type: 'error', text: data.error || 'Błąd eksportu danych.' });
+        setExportMessage({ type: 'error', text: data.error || t('Błąd eksportu danych.') });
         return;
       }
       const blob = await res.blob();
@@ -615,7 +615,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      setExportMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setExportMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsExportingData(false);
     }
@@ -633,7 +633,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setPdfExportMessage({ type: 'error', text: data.error || 'Błąd generowania raportu PDF.' });
+        setPdfExportMessage({ type: 'error', text: data.error || t('Błąd generowania raportu PDF.') });
         return;
       }
       const blob = await res.blob();
@@ -646,7 +646,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (err) {
-      setPdfExportMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setPdfExportMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsExportingPdfReport(false);
     }
@@ -691,14 +691,14 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setShareLinkMessage({ type: 'error', text: data.error || 'Błąd tworzenia linku udostępniania.' });
+        setShareLinkMessage({ type: 'error', text: data.error || t('Błąd tworzenia linku udostępniania.') });
         return;
       }
       setLastCreatedShareUrl(data.url);
-      setShareLinkMessage({ type: 'success', text: 'Link utworzony. Skopiuj go poniżej - nie będzie ponownie wyświetlony.' });
+      setShareLinkMessage({ type: 'success', text: t('Link utworzony. Skopiuj go poniżej - nie będzie ponownie wyświetlony.') });
       fetchSharedReports();
     } catch (err) {
-      setShareLinkMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setShareLinkMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsCreatingShareLink(false);
     }
@@ -708,7 +708,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     if (!lastCreatedShareUrl) return;
     navigator.clipboard.writeText(lastCreatedShareUrl).then(
       () => setShareLinkMessage({ type: 'success', text: 'Link skopiowany do schowka.' }),
-      () => setShareLinkMessage({ type: 'error', text: 'Nie udało się skopiować linku - zaznacz i skopiuj go ręcznie.' })
+      () => setShareLinkMessage({ type: 'error', text: t('Nie udało się skopiować linku - zaznacz i skopiuj go ręcznie.') })
     );
   };
 
@@ -723,19 +723,19 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setShareLinkMessage({ type: 'error', text: data.error || 'Błąd odwoływania udostępnienia.' });
+        setShareLinkMessage({ type: 'error', text: data.error || t('Błąd odwoływania udostępnienia.') });
         return;
       }
       fetchSharedReports();
     } catch (err) {
-      setShareLinkMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setShareLinkMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     }
   };
 
   // Etykiety statusu udostępnienia (status liczony na backendzie, patrz
   // listSharesForUser w services/sharedReports.js) i okresu ważności - do
   // czytelnego wyświetlenia listy w UI.
-  const SHARE_STATUS_LABELS = { active: 'Aktywny', expired: 'Wygasł', revoked: 'Odwołany' };
+  const SHARE_STATUS_LABELS = { active: 'Aktywny', expired: t('Wygasł'), revoked: t('Odwołany') };
   const formatShareDate = (isoString) => {
     try {
       return new Date(isoString).toLocaleString('pl-PL');
@@ -776,10 +776,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         localStorage.removeItem('diet_session_token');
         window.location.href = '/';
       } else {
-        setDeleteMessage({ type: 'error', text: data.error || 'Błąd usuwania konta.' });
+        setDeleteMessage({ type: 'error', text: data.error || t('Błąd usuwania konta.') });
       }
     } catch (err) {
-      setDeleteMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setDeleteMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsDeletingAccount(false);
     }
@@ -817,15 +817,15 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
 
       if (res.ok) {
-        setAvatarMessage({ type: 'success', text: 'Profil został pomyślnie zaktualizowany!' });
+        setAvatarMessage({ type: 'success', text: t('Profil został pomyślnie zaktualizowany!') });
         onProfileUpdate();
         setTimeout(() => setAvatarMessage({ type: '', text: '' }), 5000);
       } else {
         const data = await res.json();
-        setAvatarMessage({ type: 'error', text: data.error || 'Wystąpił błąd podczas zapisywania profilu.' });
+        setAvatarMessage({ type: 'error', text: data.error || t('Wystąpił błąd podczas zapisywania profilu.') });
       }
     } catch (err) {
-      setAvatarMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setAvatarMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsSavingProfile(false);
     }
@@ -848,7 +848,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
       if (res.ok) {
         const data = await res.json();
-        const typeLabel = type === 'daily' ? 'Codzienne' : (type === 'monthly' ? 'Miesięczne' : 'Tygodniowe');
+        const typeLabel = type === 'daily' ? 'Codzienne' : (type === 'monthly' ? t('Miesięczne') : 'Tygodniowe');
         let successText = `${typeLabel} podsumowanie zostało wysłane na e-mail!`;
         if (data.previewUrl) {
           successText += ` (Podgląd testowy Ethereal: ${data.previewUrl})`;
@@ -857,10 +857,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         setTimeout(() => setAvatarMessage({ type: '', text: '' }), 15000);
       } else {
         const data = await res.json();
-        setAvatarMessage({ type: 'error', text: data.error || 'Błąd wysyłania e-maila.' });
+        setAvatarMessage({ type: 'error', text: data.error || t('Błąd wysyłania e-maila.') });
       }
     } catch (err) {
-      setAvatarMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setAvatarMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     } finally {
       setIsSendingEmail(false);
     }
@@ -885,10 +885,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         setIsSettingUp2fa(true);
       } else {
         const data = await res.json();
-        setTotpMessage({ type: 'error', text: data.error || 'Błąd inicjalizacji setupu 2FA.' });
+        setTotpMessage({ type: 'error', text: data.error || t('Błąd inicjalizacji setupu 2FA.') });
       }
     } catch (err) {
-      setTotpMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setTotpMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     }
   };
 
@@ -912,7 +912,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
 
       if (res.ok) {
-        setTotpMessage({ type: 'success', text: 'Dwuetapowa weryfikacja (2FA) została aktywowana!' });
+        setTotpMessage({ type: 'success', text: t('Dwuetapowa weryfikacja (2FA) została aktywowana!') });
         setIsSettingUp2fa(false);
         setTotpSetupCode('');
         onProfileUpdate();
@@ -922,14 +922,14 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         setTotpMessage({ type: 'error', text: data.error || 'Niepoprawny kod weryfikacyjny.' });
       }
     } catch (err) {
-      setTotpMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setTotpMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsVerifying2fa(false);
     }
   };
 
   const handleDisable2FA = async () => {
-    if (!confirm('Czy na pewno chcesz wyłączyć dwuetapową weryfikację (2FA) na swoim koncie? Obniży to bezpieczeństwo profilu.')) return;
+    if (!confirm(t('Czy na pewno chcesz wyłączyć dwuetapową weryfikację (2FA) na swoim koncie? Obniży to bezpieczeństwo profilu.'))) return;
     // Backend wymaga teraz ponownej weryfikacji aktualnym hasłem przed wyłączeniem 2FA
     // (patrz backend/routes/account.js) - samo posiadanie aktywnej sesji nie wystarczy.
     const password = prompt('Aby wyłączyć 2FA, potwierdź swoje aktualne hasło:');
@@ -948,15 +948,15 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
 
       if (res.ok) {
-        setTotpMessage({ type: 'success', text: 'Weryfikacja dwuetapowa została wyłączona.' });
+        setTotpMessage({ type: 'success', text: t('Weryfikacja dwuetapowa została wyłączona.') });
         onProfileUpdate();
         setTimeout(() => setTotpMessage({ type: '', text: '' }), 5000);
       } else {
         const data = await res.json();
-        setTotpMessage({ type: 'error', text: data.error || 'Błąd podczas wyłączania 2FA.' });
+        setTotpMessage({ type: 'error', text: data.error || t('Błąd podczas wyłączania 2FA.') });
       }
     } catch (err) {
-      setTotpMessage({ type: 'error', text: 'Problem z połączeniem z serwerem.' });
+      setTotpMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
     } finally {
       setIsDisabling2fa(false);
     }
@@ -976,11 +976,11 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         setMessage({ type: 'success', text: `Odłączono integrację z ${service === 'oura' ? 'Oura' : 'Withings'}!` });
         setTimeout(() => setMessage({ type: '', text: '' }), 5000);
       } else {
-        setMessage({ type: 'error', text: 'Nie udało się odłączyć integracji.' });
+        setMessage({ type: 'error', text: t('Nie udało się odłączyć integracji.') });
       }
     } catch (err) {
       console.error(err);
-      setMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     }
   };
 
@@ -1007,12 +1007,12 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
       if (!res.ok) {
         if (res.status === 401 && onLogout) onLogout();
-        setMessage({ type: 'error', text: 'Nie udało się zapisać poświadczeń integracji - połączenie przerwane.' });
+        setMessage({ type: 'error', text: t('Nie udało się zapisać poświadczeń integracji - połączenie przerwane.') });
         return;
       }
     } catch (err) {
       console.error('Błąd zapisu ustawień przed połączeniem:', err);
-      setMessage({ type: 'error', text: 'Błąd połączenia z serwerem - nie połączono z integracją.' });
+      setMessage({ type: 'error', text: t('Błąd połączenia z serwerem - nie połączono z integracją.') });
       return;
     }
     window.location.href = `${window.location.origin}/api/auth/${service}?token=${sessionToken}`;
@@ -1027,7 +1027,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   };
 
   const handleUnlinkGoogle = async () => {
-    if (!confirm('Czy na pewno chcesz odłączyć konto Google? Logowanie będzie wtedy możliwe tylko hasłem.')) return;
+    if (!confirm(t('Czy na pewno chcesz odłączyć konto Google? Logowanie będzie wtedy możliwe tylko hasłem.'))) return;
     try {
       const res = await fetch('/api/user/unlink-google', {
         method: 'POST',
@@ -1035,14 +1035,14 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
       if (res.ok) {
         onProfileUpdate();
-        setMessage({ type: 'success', text: 'Odłączono konto Google!' });
+        setMessage({ type: 'success', text: t('Odłączono konto Google!') });
         setTimeout(() => setMessage({ type: '', text: '' }), 5000);
       } else {
-        setMessage({ type: 'error', text: 'Nie udało się odłączyć konta Google.' });
+        setMessage({ type: 'error', text: t('Nie udało się odłączyć konta Google.') });
       }
     } catch (err) {
       console.error(err);
-      setMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     }
   };
 
@@ -1054,7 +1054,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   };
 
   const handleDisconnectGoogleFit = async () => {
-    if (!confirm('Czy na pewno chcesz odłączyć integrację z Google Fit?')) return;
+    if (!confirm(t('Czy na pewno chcesz odłączyć integrację z Google Fit?'))) return;
     try {
       const res = await fetch('/api/auth/google-fit/disconnect', {
         method: 'POST',
@@ -1062,14 +1062,14 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
       if (res.ok) {
         onProfileUpdate();
-        setMessage({ type: 'success', text: 'Odłączono integrację z Google Fit!' });
+        setMessage({ type: 'success', text: t('Odłączono integrację z Google Fit!') });
         setTimeout(() => setMessage({ type: '', text: '' }), 5000);
       } else {
-        setMessage({ type: 'error', text: 'Nie udało się odłączyć integracji.' });
+        setMessage({ type: 'error', text: t('Nie udało się odłączyć integracji.') });
       }
     } catch (err) {
       console.error(err);
-      setMessage({ type: 'error', text: 'Błąd połączenia z serwerem.' });
+      setMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     }
   };
 
@@ -1090,7 +1090,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <h3 className="card-title" style={{ margin: 0 }}>⚙️ Twoje Cele Dietetyczne</h3>
           <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-            {isDietGoalsOpen ? 'Zwiń ▲' : 'Pokaż ▼'}
+            {isDietGoalsOpen ? t('Zwiń ▲') : t('Pokaż ▼')}
           </span>
         </div>
       </div>
@@ -1133,13 +1133,13 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   onChange={handleInputChange}
                   min="500"
                   max="5000"
-                  title="Podstawowa przemiana materii - kalorie, które Twój organizm spala na samo przeżycie leżąc."
+                  title={t("Podstawowa przemiana materii - kalorie, które Twój organizm spala na samo przeżycie leżąc.")}
                   required
                 />
               </div>
 
               <div className="input-group">
-                <label className="input-label">Białko (g)</label>
+                <label className="input-label">{t("Białko (g)")}</label>
                 <input
                   type="number"
                   name="target_protein"
@@ -1153,7 +1153,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               </div>
 
               <div className="input-group">
-                <label className="input-label">Węglowodany (g)</label>
+                <label className="input-label">{t("Węglowodany (g)")}</label>
                 <input
                   type="number"
                   name="target_carbs"
@@ -1167,7 +1167,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               </div>
 
               <div className="input-group">
-                <label className="input-label">Tłuszcz (g)</label>
+                <label className="input-label">{t("Tłuszcz (g)")}</label>
                 <input
                   type="number"
                   name="target_fat"
@@ -1218,7 +1218,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             </p>
 
             <button type="submit" className="btn-primary" disabled={isSaving}>
-              {isSaving ? 'Zapisywanie...' : 'Zapisz cele'}
+              {isSaving ? t('Zapisywanie...') : t('Zapisz cele')}
             </button>
           </form>
         </div>
@@ -1235,7 +1235,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
         {/* Panel Profilu i Avatara */}
         <div className="glass-card">
-          <h3 className="card-title">👤 Twój Profil i Avatar</h3>
+          <h3 className="card-title">{t("👤 Twój Profil i Avatar")}</h3>
           <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '20px' }}>
             Wgraj zdjęcie profilowe, które będzie wyświetlane w nagłówku aplikacji.
           </p>
@@ -1261,7 +1261,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <label className="btn-primary" style={{ padding: '8px 16px', fontSize: '0.9rem', display: 'inline-block', cursor: 'pointer', textAlign: 'center' }}>
-                Wybierz zdjęcie
+                {t("Wybierz zdjęcie")}
                 <input 
                   type="file" 
                   accept="image/*" 
@@ -1277,7 +1277,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   onClick={handleRemoveAvatar}
                   style={{ padding: '6px 12px', fontSize: '0.8rem' }}
                 >
-                  Usuń zdjęcie
+                  {t("Usuń zdjęcie")}
                 </button>
               )}
             </div>
@@ -1286,7 +1286,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           <form onSubmit={handleSaveProfile} style={{ display: 'flex', flexDirection: 'column', gap: '16px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '16px' }}>
             <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
               <div className="input-group" style={{ flex: '1 1 140px' }}>
-                <label className="input-label">Imię</label>
+                <label className="input-label">{t("Imię")}</label>
                 <input
                   type="text"
                   className="input-field"
@@ -1297,7 +1297,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 />
               </div>
               <div className="input-group" style={{ flex: '1 1 140px' }}>
-                <label className="input-label">Nazwisko</label>
+                <label className="input-label">{t("Nazwisko")}</label>
                 <input
                   type="text"
                   className="input-field"
@@ -1308,7 +1308,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 />
               </div>
               <div className="input-group" style={{ flex: '1 1 140px' }}>
-                <label className="input-label">Rok urodzenia</label>
+                <label className="input-label">{t("Rok urodzenia")}</label>
                 <input
                   type="number"
                   className="input-field"
@@ -1326,7 +1326,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             </p>
 
             <div className="input-group">
-              <label className="input-label">Adres e-mail do raportów</label>
+              <label className="input-label">{t("Adres e-mail do raportów")}</label>
               <input 
                 type="email" 
                 className="input-field" 
@@ -1374,7 +1374,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 <div>
                   <strong style={{ display: 'block', color: '#fff' }}>Konto Google</strong>
                   <span style={{ fontSize: '0.8rem', color: userProfile.has_google ? 'var(--success-light)' : 'var(--text-dim)' }}>
-                    {userProfile.has_google ? '✅ Połączono z kontem Google' : '❌ Brak połączenia'}
+                    {userProfile.has_google ? t('✅ Połączono z kontem Google') : t('❌ Brak połączenia')}
                   </span>
                 </div>
               </div>
@@ -1416,25 +1416,25 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               {weeklySummaryEnabled && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '12px' }}>
                   <div className="input-group">
-                    <label className="input-label">Dzień wysyłki</label>
+                    <label className="input-label">{t("Dzień wysyłki")}</label>
                     <select 
                       className="input-field" 
                       value={weeklySummaryDay}
                       onChange={(e) => setWeeklySummaryDay(Number(e.target.value))}
                       style={{ background: 'rgba(0, 0, 0, 0.2)', color: 'white', border: '1px solid var(--border-glass)' }}
                     >
-                      <option value={1}>Poniedziałek</option>
+                      <option value={1}>{t("Poniedziałek")}</option>
                       <option value={2}>Wtorek</option>
-                      <option value={3}>Środa</option>
+                      <option value={3}>{t("Środa")}</option>
                       <option value={4}>Czwartek</option>
-                      <option value={5}>Piątek</option>
+                      <option value={5}>{t("Piątek")}</option>
                       <option value={6}>Sobota</option>
                       <option value={7}>Niedziela</option>
                     </select>
                   </div>
                   
                   <div className="input-group">
-                    <label className="input-label">Godzina wysyłki</label>
+                    <label className="input-label">{t("Godzina wysyłki")}</label>
                     <input 
                       type="time" 
                       className="input-field" 
@@ -1464,7 +1464,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               {monthlySummaryEnabled && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '12px' }}>
                   <div className="input-group">
-                    <label className="input-label">Dzień miesiąca</label>
+                    <label className="input-label">{t("Dzień miesiąca")}</label>
                     <input
                       type="number"
                       min="1"
@@ -1482,13 +1482,13 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                         const val = Number(e.target.value);
                         setMonthlySummaryDay(Math.min(31, Math.max(1, val)));
                       }}
-                      title="Jeśli dany miesiąc jest krótszy (np. luty), raport zostanie wysłany w ostatnim dniu tego miesiąca."
+                      title={t("Jeśli dany miesiąc jest krótszy (np. luty), raport zostanie wysłany w ostatnim dniu tego miesiąca.")}
                       required
                     />
                   </div>
 
                   <div className="input-group">
-                    <label className="input-label">Godzina wysyłki</label>
+                    <label className="input-label">{t("Godzina wysyłki")}</label>
                     <input
                       type="time"
                       className="input-field"
@@ -1503,10 +1503,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '16px' }}>
               <button type="submit" className="btn-primary" disabled={isSavingProfile} style={{ width: '100%' }}>
-                {isSavingProfile ? 'Zapisywanie...' : 'Zapisz profil'}
+                {isSavingProfile ? t('Zapisywanie...') : 'Zapisz profil'}
               </button>
               {/* minmax(0, 1fr) zamiast samego 1fr - bez tego kolumna nie skurczy się
-                  poniżej szerokości tekstu przycisku (np. "Wyślij tygodniowe") na
+                  poniżej szerokości tekstu przycisku (np. t("Wyślij tygodniowe")) na
                   wąskich ekranach, ten sam mechanizm co naprawiony .premium-grid-2 */}
               <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: '10px' }}>
                 <button
@@ -1516,7 +1516,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   disabled={isSendingEmail || !emailInput}
                   style={{ border: '1px solid var(--border-glass)', padding: '12px', fontSize: '0.85rem' }}
                 >
-                  {isSendingEmail ? 'Wysyłanie...' : 'Wyślij codzienne'}
+                  {isSendingEmail ? t('Wysyłanie...') : t('Wyślij codzienne')}
                 </button>
                 <button
                   type="button"
@@ -1525,7 +1525,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   disabled={isSendingEmail || !emailInput}
                   style={{ border: '1px solid var(--border-glass)', padding: '12px', fontSize: '0.85rem' }}
                 >
-                  {isSendingEmail ? 'Wysyłanie...' : 'Wyślij tygodniowe'}
+                  {isSendingEmail ? t('Wysyłanie...') : t('Wyślij tygodniowe')}
                 </button>
                 <button
                   type="button"
@@ -1534,7 +1534,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   disabled={isSendingEmail || !emailInput}
                   style={{ border: '1px solid var(--border-glass)', padding: '12px', fontSize: '0.85rem' }}
                 >
-                  {isSendingEmail ? 'Wysyłanie...' : 'Wyślij miesięczne'}
+                  {isSendingEmail ? t('Wysyłanie...') : t('Wyślij miesięczne')}
                 </button>
               </div>
             </div>
@@ -1576,7 +1576,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   <label className="btn-primary" style={{ padding: '8px 16px', fontSize: '0.9rem', display: 'inline-block', cursor: 'pointer', textAlign: 'center' }}>
-                    {isUploadingBodyGoalPhoto ? 'Wgrywanie...' : 'Wybierz zdjęcie'}
+                    {isUploadingBodyGoalPhoto ? 'Wgrywanie...' : t('Wybierz zdjęcie')}
                     <input
                       type="file"
                       accept="image/*"
@@ -1593,7 +1593,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                       disabled={isUploadingBodyGoalPhoto}
                       style={{ padding: '6px 12px', fontSize: '0.8rem' }}
                     >
-                      Usuń zdjęcie
+                      {t("Usuń zdjęcie")}
                     </button>
                   )}
                 </div>
@@ -1610,11 +1610,11 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   onChange={handleInputChange}
                   min="0"
                   placeholder="np. 75"
-                  title="Cel wagowy używany do prognozy daty osiągnięcia celu na Pulpicie."
+                  title={t("Cel wagowy używany do prognozy daty osiągnięcia celu na Pulpicie.")}
                 />
               </div>
               <div className="input-group">
-                <label className="input-label">Docelowy % tkanki tłuszczowej</label>
+                <label className="input-label">{t("Docelowy % tkanki tłuszczowej")}</label>
                 <input
                   type="number"
                   step="0.1"
@@ -1625,7 +1625,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   min="0"
                   max="60"
                   placeholder="np. 15"
-                  title="Docelowy procent tkanki tłuszczowej — używany przez algorytmy analiz."
+                  title={t("Docelowy procent tkanki tłuszczowej — używany przez algorytmy analiz.")}
                 />
               </div>
 
@@ -1635,7 +1635,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   className="input-field"
                   value={bodyGoalTextInput}
                   onChange={(e) => setBodyGoalTextInput(e.target.value)}
-                  placeholder="np. Redukcja tkanki tłuszczowej do ~15%, zachowanie masy mięśniowej"
+                  placeholder={t("np. Redukcja tkanki tłuszczowej do ~15%, zachowanie masy mięśniowej")}
                   maxLength={1000}
                   rows={3}
                   style={{ resize: 'vertical', minHeight: '80px' }}
@@ -1658,9 +1658,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               style={{ cursor: 'pointer' }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <h3 className="card-title" style={{ margin: 0 }}>🔑 Zmiana Hasła</h3>
+                <h3 className="card-title" style={{ margin: 0 }}>{t("🔑 Zmiana Hasła")}</h3>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                  {isPasswordOpen ? 'Zwiń ▲' : 'Pokaż ▼'}
+                  {isPasswordOpen ? t('Zwiń ▲') : t('Pokaż ▼')}
                 </span>
               </div>
             </div>
@@ -1679,7 +1679,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
                 <form onSubmit={handleChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div className="input-group">
-                    <label className="input-label">Obecne hasło</label>
+                    <label className="input-label">{t("Obecne hasło")}</label>
                     <input
                       type="password"
                       className="input-field"
@@ -1690,7 +1690,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   </div>
 
                   <div className="input-group">
-                    <label className="input-label">Nowe hasło</label>
+                    <label className="input-label">{t("Nowe hasło")}</label>
                     <input
                       type="password"
                       className="input-field"
@@ -1701,7 +1701,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   </div>
 
                   <div className="input-group">
-                    <label className="input-label">Powtórz nowe hasło</label>
+                    <label className="input-label">{t("Powtórz nowe hasło")}</label>
                     <input
                       type="password"
                       className="input-field"
@@ -1712,7 +1712,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   </div>
 
                   <button type="submit" className="btn-primary" disabled={isChangingPassword} style={{ marginTop: '8px' }}>
-                    {isChangingPassword ? 'Zmienianie...' : 'Zmień hasło'}
+                    {isChangingPassword ? 'Zmienianie...' : t('Zmień hasło')}
                   </button>
                 </form>
               </div>
@@ -1731,7 +1731,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h3 className="card-title" style={{ margin: 0 }}>🛡️ Dwuetapowa Weryfikacja (2FA)</h3>
                 <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                  {is2faOpen ? 'Zwiń ▲' : 'Pokaż ▼'}
+                  {is2faOpen ? t('Zwiń ▲') : t('Pokaż ▼')}
                 </span>
               </div>
             </div>
@@ -1761,7 +1761,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                       disabled={isDisabling2fa}
                       style={{ width: '100%', padding: '10px' }}
                     >
-                      {isDisabling2fa ? 'Wyłączanie...' : 'Wyłącz 2FA'}
+                      {isDisabling2fa ? t('Wyłączanie...') : t('Wyłącz 2FA')}
                     </button>
                   </div>
                 ) : !isSettingUp2fa ? (
@@ -1816,7 +1816,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                         onClick={() => setIsSettingUp2fa(false)}
                         style={{ flex: 1, padding: '8px' }}
                       >
-                        Anuluj
+                        {t("Anuluj")}
                       </button>
                       <button
                         type="submit"
@@ -1900,7 +1900,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   go bez konta w aplikacji. Token jest jedyną autoryzacją (patrz
                   backend/routes/sharedReport.js), więc link ma ograniczony czas
                   ważności i można go w każdej chwili odwołać poniżej. */}
-              <h4 style={{ fontSize: '1rem', color: 'var(--text-main)', marginBottom: '8px' }}>Udostępnij raport linkiem</h4>
+              <h4 style={{ fontSize: '1rem', color: 'var(--text-main)', marginBottom: '8px' }}>{t("Udostępnij raport linkiem")}</h4>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
                 Wygeneruj link do raportu, który można wysłać lekarzowi/dietetykowi - otworzy go bez logowania się do aplikacji.
               </p>
@@ -1920,7 +1920,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                     value={lastCreatedShareUrl}
                     onFocus={(e) => e.target.select()}
                     style={{ flex: '1 1 280px' }}
-                    aria-label="Link udostępniania raportu"
+                    aria-label={t("Link udostępniania raportu")}
                   />
                   <button type="button" className="btn-secondary" onClick={handleCopyShareLink} aria-label="Kopiuj link do schowka">
                     📋 Kopiuj
@@ -1931,7 +1931,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '16px' }}>
                 <select
                   className="input-field"
-                  aria-label="Okres danych w udostępnianym raporcie"
+                  aria-label={t("Okres danych w udostępnianym raporcie")}
                   value={shareLinkDays}
                   onChange={(e) => setShareLinkDays(Number(e.target.value))}
                   style={{ width: 'auto' }}
@@ -1943,15 +1943,15 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 </select>
                 <select
                   className="input-field"
-                  aria-label="Czas ważności linku"
+                  aria-label={t("Czas ważności linku")}
                   value={shareValidityKey}
                   onChange={(e) => setShareValidityKey(e.target.value)}
                   style={{ width: 'auto' }}
                   disabled={isCreatingShareLink}
                 >
-                  <option value="24h">Link ważny 24 godziny</option>
-                  <option value="7d">Link ważny 7 dni</option>
-                  <option value="30d">Link ważny 30 dni</option>
+                  <option value="24h">{t("Link ważny 24 godziny")}</option>
+                  <option value="7d">{t("Link ważny 7 dni")}</option>
+                  <option value="30d">{t("Link ważny 30 dni")}</option>
                 </select>
                 <button
                   type="button"
@@ -1959,7 +1959,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   onClick={handleCreateShareLink}
                   disabled={isCreatingShareLink}
                 >
-                  {isCreatingShareLink ? 'Tworzenie...' : '🔗 Utwórz link'}
+                  {isCreatingShareLink ? 'Tworzenie...' : t('🔗 Utwórz link')}
                 </button>
               </div>
 
@@ -2008,7 +2008,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 </p>
               )}
 
-              <h4 style={{ fontSize: '1rem', color: 'var(--danger)', marginBottom: '8px' }}>Usunięcie konta</h4>
+              <h4 style={{ fontSize: '1rem', color: 'var(--danger)', marginBottom: '8px' }}>{t("Usunięcie konta")}</h4>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
                 Trwale usuwa Twoje konto i wszystkie powiązane dane (posiłki, ustawienia, historię zdrowotną, połączenia Oura/Withings/Google). Tej operacji nie można odwrócić.
               </p>
@@ -2021,7 +2021,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
               <form onSubmit={handleDeleteAccount} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                 <div className="input-group">
-                  <label className="input-label">Potwierdź hasłem</label>
+                  <label className="input-label">{t("Potwierdź hasłem")}</label>
                   <input
                     type="password"
                     className="input-field"
@@ -2031,7 +2031,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   />
                 </div>
                 <button type="submit" className="btn-danger" disabled={isDeletingAccount}>
-                  {isDeletingAccount ? 'Usuwanie...' : 'Usuń moje konto na zawsze'}
+                  {isDeletingAccount ? 'Usuwanie...' : t('Usuń moje konto na zawsze')}
                 </button>
               </form>
             </div>
@@ -2043,7 +2043,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
       {/* 2. Integracje ze Źródłami Danych */}
       <div className="glass-card">
-        <h3 className="card-title">🔌 Integracje ze Źródłami Danych</h3>
+        <h3 className="card-title">{t("🔌 Integracje ze Źródłami Danych")}</h3>
         <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '4px' }}>
           Skonfiguruj swoje poświadczenia deweloperskie i połącz konto z API Oura Ring oraz Withings, aby automatycznie importować dane o aktywności, śnie, wadze i składzie ciała.
         </p>
@@ -2084,7 +2084,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               onClick={handleManualSync}
               disabled={isSyncing}
             >
-              {isSyncing ? '🔄 Synchronizowanie...' : '🔄 Wymuś ręczną synchronizację'}
+              {isSyncing ? '🔄 Synchronizowanie...' : t('🔄 Wymuś ręczną synchronizację')}
             </button>
           </div>
         )}
@@ -2109,7 +2109,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
                   {settings.weather_location_label
                     ? `Aktualnie: ${settings.weather_location_label}`
-                    : 'Aktualnie: domyślna lokalizacja serwera'}
+                    : t('Aktualnie: domyślna lokalizacja serwera')}
                 </span>
               </div>
             </div>
@@ -2120,7 +2120,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 value={locationQuery}
                 onChange={(e) => setLocationQuery(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSearchLocation(); } }}
-                placeholder="np. Trzebnica, Wrocław, Warszawa..."
+                placeholder={t("np. Trzebnica, Wrocław, Warszawa...")}
                 style={{ flex: '1 1 200px' }}
               />
               <button
@@ -2194,9 +2194,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <span style={{ fontSize: '2rem' }}>🏃</span>
                 <div>
-                  <strong style={{ display: 'block', color: '#fff' }}>Google Fit (Kroki, Kalorie, Aktywność)</strong>
+                  <strong style={{ display: 'block', color: '#fff' }}>{t("Google Fit (Kroki, Kalorie, Aktywność)")}</strong>
                   <span style={{ fontSize: '0.8rem', color: userProfile.has_google_fit ? 'var(--success-light)' : 'var(--text-dim)' }}>
-                    {userProfile.has_google_fit ? '✅ Połączono z Google Fit' : '❌ Brak połączenia'}
+                    {userProfile.has_google_fit ? t('✅ Połączono z Google Fit') : t('❌ Brak połączenia')}
                   </span>
                 </div>
               </div>
@@ -2238,9 +2238,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <span style={{ fontSize: '2rem' }}>💍</span>
                 <div>
-                  <strong style={{ display: 'block', color: '#fff' }}>Oura Ring (Sen, HRV, Aktywność)</strong>
+                  <strong style={{ display: 'block', color: '#fff' }}>{t("Oura Ring (Sen, HRV, Aktywność)")}</strong>
                   <span style={{ fontSize: '0.8rem', color: userProfile.has_oura ? 'var(--success-light)' : 'var(--text-dim)' }}>
-                    {userProfile.has_oura ? '✅ Połączono z kontem Oura' : '❌ Brak połączenia'}
+                    {userProfile.has_oura ? t('✅ Połączono z kontem Oura') : t('❌ Brak połączenia')}
                   </span>
                 </div>
               </div>
@@ -2261,7 +2261,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                     style={{ padding: '8px 16px' }}
                     onClick={() => handleConnect('oura')}
                     disabled={!settings.oura_client_id || !settings.oura_client_secret}
-                    title={(!settings.oura_client_id || !settings.oura_client_secret) ? 'Wpisz Client ID i Secret, aby połączyć' : ''}
+                    title={(!settings.oura_client_id || !settings.oura_client_secret) ? t('Wpisz Client ID i Secret, aby połączyć') : ''}
                   >
                     Połącz z Oura
                   </button>
@@ -2277,7 +2277,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsOuraAdvancedOpen(o => !o); } }}
               style={{ fontSize: '0.8rem', color: '#60a5fa', cursor: 'pointer', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '12px' }}
             >
-              {isOuraAdvancedOpen ? '▲ Zwiń ustawienia Oura' : '▼ Zaawansowane (Client ID/Secret)'}
+              {isOuraAdvancedOpen ? t('▲ Zwiń ustawienia Oura') : '▼ Zaawansowane (Client ID/Secret)'}
             </div>
             {isOuraAdvancedOpen && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -2308,10 +2308,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 </div>
               </div>
               <div style={{ fontSize: '0.8rem', color: '#fbbf24', background: 'rgba(251, 191, 36, 0.05)', border: '1px solid rgba(251, 191, 36, 0.15)', padding: '10px', borderRadius: '8px', marginTop: '4px', lineHeight: '1.4' }}>
-                ⚠️ <strong>Ważne:</strong> Upewnij się, że w konfiguracji Twojej aplikacji na
+                ⚠️ <strong>{t("Ważne:")}</strong> Upewnij się, że w konfiguracji Twojej aplikacji na
                 <a href="https://cloud.ouraring.com/developer/manage" target="_blank" rel="noopener noreferrer" style={{ color: '#60a5fa', textDecoration: 'underline', marginLeft: '4px', marginRight: '4px' }}>
                   Oura Developer Portal
-                </a> zaznaczyłeś zakresy (scopes) <strong>&quot;daily&quot;</strong> (dane dobowe), <strong>&quot;heartrate&quot;</strong> oraz <strong>&quot;personal&quot;</strong>. Bez tych zakresów API Oura zwróci błąd autoryzacji (401 - Token is not authorized access daily scope) i pobranie parametrów snu, gotowości oraz aktywności nie powiedzie się. Po zmianie zakresów na portalu Oura, odłącz i połącz Oura ponownie w aplikacji.
+                </a>{t("zaznaczyłeś zakresy (scopes)")}<strong>&quot;daily&quot;</strong> (dane dobowe), <strong>&quot;heartrate&quot;</strong> oraz <strong>&quot;personal&quot;</strong>. Bez tych zakresów API Oura zwróci błąd autoryzacji (401 - Token is not authorized access daily scope) i pobranie parametrów snu, gotowości oraz aktywności nie powiedzie się. Po zmianie zakresów na portalu Oura, odłącz i połącz Oura ponownie w aplikacji.
               </div>
             </div>
             )}
@@ -2331,9 +2331,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                 <span style={{ fontSize: '2rem' }}>⚖️</span>
                 <div>
-                  <strong style={{ display: 'block', color: '#fff' }}>Withings (Waga, Skład ciała)</strong>
+                  <strong style={{ display: 'block', color: '#fff' }}>{t("Withings (Waga, Skład ciała)")}</strong>
                   <span style={{ fontSize: '0.8rem', color: userProfile.has_withings ? 'var(--success-light)' : 'var(--text-dim)' }}>
-                    {userProfile.has_withings ? '✅ Połączono z kontem Withings' : '❌ Brak połączenia'}
+                    {userProfile.has_withings ? t('✅ Połączono z kontem Withings') : t('❌ Brak połączenia')}
                   </span>
                 </div>
               </div>
@@ -2354,7 +2354,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                     style={{ padding: '8px 16px' }}
                     onClick={() => handleConnect('withings')}
                     disabled={!settings.withings_client_id || !settings.withings_client_secret}
-                    title={(!settings.withings_client_id || !settings.withings_client_secret) ? 'Wpisz Client ID i Secret, aby połączyć' : ''}
+                    title={(!settings.withings_client_id || !settings.withings_client_secret) ? t('Wpisz Client ID i Secret, aby połączyć') : ''}
                   >
                     Połącz z Withings
                   </button>
@@ -2370,7 +2370,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsWithingsAdvancedOpen(o => !o); } }}
               style={{ fontSize: '0.8rem', color: '#60a5fa', cursor: 'pointer', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '12px' }}
             >
-              {isWithingsAdvancedOpen ? '▲ Zwiń ustawienia Withings' : '▼ Zaawansowane (Client ID/Secret)'}
+              {isWithingsAdvancedOpen ? t('▲ Zwiń ustawienia Withings') : '▼ Zaawansowane (Client ID/Secret)'}
             </div>
             {isWithingsAdvancedOpen && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -2432,7 +2432,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <span style={{ fontSize: '2rem' }}>🍏</span>
               <div>
-                <strong style={{ display: 'block', color: '#fff' }}>Apple Health (Kroki, Kalorie, Minuty Aktywności)</strong>
+                <strong style={{ display: 'block', color: '#fff' }}>{t("Apple Health (Kroki, Kalorie, Minuty Aktywności)")}</strong>
                 <span style={{ fontSize: '0.8rem', color: 'var(--success-light)' }}>
                   ✅ Webhook gotowy do skonfigurowania
                 </span>
@@ -2450,7 +2450,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   {/* syncToken jeszcze nie przyszedł z backendu (fetchSyncToken w App.jsx) -
                       pokazujemy informację o ładowaniu, a nie URL z puste/fałszywym tokenem. */}
                   <span style={!appleHealthWebhookUrl ? { color: 'var(--text-dim)', fontStyle: 'italic' } : undefined}>
-                    {appleHealthWebhookUrl || 'Ładowanie tokenu...'}
+                    {appleHealthWebhookUrl || t('Ładowanie tokenu...')}
                   </span>
                   <button type="button" className="btn-copy" onClick={handleCopyWebhookUrl} disabled={!appleHealthWebhookUrl}>
                     Kopiuj
@@ -2475,17 +2475,17 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsAppleHealthInstructionsOpen(o => !o); } }}
                 style={{ fontSize: '0.8rem', color: '#60a5fa', cursor: 'pointer' }}
               >
-                {isAppleHealthInstructionsOpen ? '▲ Zwiń instrukcję' : '▼ Pokaż instrukcję konfiguracji (Health Auto Export)'}
+                {isAppleHealthInstructionsOpen ? t('▲ Zwiń instrukcję') : t('▼ Pokaż instrukcję konfiguracji (Health Auto Export)')}
               </div>
               {isAppleHealthInstructionsOpen && (
               <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', lineHeight: '1.6' }}>
                 <strong style={{ color: 'var(--text-muted)' }}>Konfiguracja w apce Health Auto Export (iOS):</strong>
                 <ol style={{ margin: '6px 0 0', paddingLeft: '20px' }}>
-                  <li>Zainstaluj apkę <strong>Health Auto Export</strong> z App Store.</li>
-                  <li>Przejdź do zakładki <strong>Automations</strong> i utwórz nową automatyzację typu <strong>REST API</strong>.</li>
-                  <li>Wklej powyższy URL jako adres docelowy, format danych: <strong>JSON</strong>.</li>
+                  <li>{t("Zainstaluj apkę")}<strong>Health Auto Export</strong> z App Store.</li>
+                  <li>{t("Przejdź do zakładki")}<strong>Automations</strong>{t("i utwórz nową automatyzację typu")}<strong>REST API</strong>.</li>
+                  <li>{t("Wklej powyższy URL jako adres docelowy, format danych:")}<strong>JSON</strong>.</li>
                   <li>Wybierz metryki: <strong>Steps</strong>, <strong>Active Energy</strong>, <strong>Basal Energy Burned</strong>, <strong>Apple Exercise Time</strong>.</li>
-                  <li>Ustaw harmonogram automatycznego wysyłania (np. co godzinę) lub wysyłaj ręcznie.</li>
+                  <li>{t("Ustaw harmonogram automatycznego wysyłania (np. co godzinę) lub wysyłaj ręcznie.")}</li>
                 </ol>
               </div>
               )}
@@ -2505,7 +2505,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <span style={{ fontSize: '2rem' }}>🤖</span>
               <div>
-                <strong style={{ display: 'block', color: '#fff' }}>Gemini AI (Inteligentne Analizy i Wskazówki)</strong>
+                <strong style={{ display: 'block', color: '#fff' }}>{t("Gemini AI (Inteligentne Analizy i Wskazówki)")}</strong>
                 <span style={{ fontSize: '0.8rem', color: settings.gemini_api_key ? 'var(--success-light)' : 'var(--text-dim)' }}>
                   {settings.gemini_api_key ? '✅ Klucz skonfigurowany' : '❌ Brak skonfigurowanego klucza'}
                 </span>
@@ -2522,14 +2522,14 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   style={{ padding: '8px 12px', fontSize: '0.85rem' }}
                   value={settings.gemini_api_key || ''}
                   onChange={handleInputChange}
-                  placeholder="Wpisz swój klucz API Gemini..."
+                  placeholder={t("Wpisz swój klucz API Gemini...")}
                 />
               </div>
             </div>
           </div>
 
           <button type="submit" className="btn-primary" disabled={isSaving} style={{ width: '100%', padding: '12px', marginTop: '10px' }}>
-            {isSaving ? 'Zapisywanie...' : 'Zapisz poświadczenia integracji'}
+            {isSaving ? t('Zapisywanie...') : t('Zapisz poświadczenia integracji')}
           </button>
         </form>
       </div>

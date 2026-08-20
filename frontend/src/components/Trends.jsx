@@ -5,21 +5,21 @@ import { t } from '../utils/i18n';
 export default function Trends({ selectedDate, sessionToken, onLogout }) {
   const [historyData, setHistoryData] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
-  // Wspólny stan dla podpowiedzi (tooltip) po najechaniu/kliknięciu na słupek lub punkt
-  // wykresu. Identyfikowany przez klucz metryki (chartKey) + indeks dnia, żeby tylko
-  // właściwy wykres i właściwy słupek/punkt pokazywał swoją podpowiedź.
+  // Shared state for the tooltip shown when hovering or clicking a bar or point on a chart.
+  // Identified by the metric key (chartKey) plus the day index, so only the right chart and
+  // the right bar/point shows its tooltip.
   const [hoverInfo, setHoverInfo] = useState(null);
-  // Podział wykresów na dwie grupy (UX: runda 7 - 8 wykresów w jednej płaskiej
-  // siatce było za dużo na raz). "Aktywność i ciało" startuje zwinięta, sen i
-  // regeneracja (główny temat aplikacji) widoczne od razu.
+  // Charts are split into two groups (UX round 7 - 8 charts in one flat grid was too much at
+  // once). 'Activity and body' starts collapsed; sleep and recovery, the app's main subject,
+  // are visible immediately.
   const [isActivityGroupOpen, setIsActivityGroupOpen] = useState(false);
 
   useEffect(() => {
-    // Runda 12 (audyt): efekt zależy od `selectedDate` (zmiana dnia w nawigacji wyżej
-    // też przeładowuje historię), ale fetch zawsze pobiera te same "ostatnie 90 dni" -
-    // bez flagi `cancelled` szybka zmiana daty (np. kilka kliknięć "poprzedni dzień")
-    // mogła odłożyć starszą, wolniejszą odpowiedź NAD nowszą, jeśli ta pierwsza
-    // dociągnęła się jako ostatnia - dane na wykresach na chwilę "skakały" do tyłu.
+  // Round 12 (audit): the effect depends on `selectedDate` (changing the day in the
+  // navigation above also reloads the history), but the fetch always retrieves the same 'last
+  // 90 days'. Without a `cancelled` flag, rapidly changing the date (several clicks on
+  // 'previous day') could place an older, slower response OVER a newer one if it happened to
+  // arrive last - and the charts briefly 'jumped' backwards.
     let cancelled = false;
     const fetchHistory = async () => {
       if (!sessionToken) return;
@@ -33,22 +33,22 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
           const data = await res.json();
           if (!cancelled) setHistoryData(data);
         } else if (res.status === 401) {
-          // Wygasła sesja - bez tego Trends po prostu po cichu przestawał się odświeżać
-          // (interwał co godzinę nadal działał, ale fetch zawsze zwracał 401), podczas gdy
-          // resztę aplikacji (App.jsx) konsekwentnie wylogowuje i pokazuje komunikat
+          // Expired session - without this Trends simply stopped refreshing silently (the
+          // hourly interval kept running, but every fetch returned 401), while the rest of the
+          // app (App.jsx) consistently signs the user out and shows a message.
           // "Sesja wygasła" w tej sytuacji.
           if (onLogout) onLogout();
         }
       } catch (err) {
-        if (!cancelled) console.error('Błąd pobierania historii zdrowotnej:', err);
+        if (!cancelled) console.error('Failed to fetch the health history:', err);
       } finally {
         if (!cancelled) setIsLoading(false);
       }
     };
     fetchHistory();
 
-    // Odśwież dane co godzinę, zgodnie z godzinową synchronizacją po stronie backendu,
-    // żeby otwarte wykresy też pokazywały najnowsze dane z bazy bez przeładowania strony.
+    // Refresh hourly, matching the backend's hourly sync, so open charts also show the latest
+    // data from the database without a page reload.
     const intervalId = setInterval(fetchHistory, 60 * 60 * 1000);
     return () => {
       cancelled = true;
@@ -56,10 +56,10 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     };
   }, [sessionToken, selectedDate]);
 
-  // Bezpieczna konwersja daty bez przesunięć strefy czasowej - new Date(selectedDate)
-  // parsuje "YYYY-MM-DD" jako UTC, więc w strefach na zachód od UTC d.setDate()
-  // mogło dać dzień przesunięty o -1 po toISOString().slice(0,10). new Date(Y, M-1, D)
-  // tworzy datę w lokalnej strefie, więc takiego przesunięcia nie ma (patrz Dashboard.jsx).
+  // Safe date conversion with no timezone shift - new Date(selectedDate) parses 'YYYY-MM-DD'
+  // as UTC, so in timezones west of UTC d.setDate() could yield a day shifted by -1 after
+  // toISOString().slice(0,10). new Date(Y, M-1, D) creates the date in the local timezone, so
+  // there is no such shift (see Dashboard.jsx).
   const selectedDateParts = selectedDate.split('-');
   const selectedDateObj = new Date(
     Number(selectedDateParts[0]),
@@ -67,8 +67,8 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     Number(selectedDateParts[2])
   );
 
-  // toISOString() konwertuje do UTC, co samo w sobie mogłoby ponownie przesunąć
-  // dzień o -1 w strefach na zachód od UTC - kompensujemy offset przed konwersją,
+  // toISOString() converts to UTC, which by itself could again shift the day by -1 in
+  // timezones west of UTC - we compensate for the offset before converting,
   // analogicznie do getLocalDateString() w App.jsx.
   const toDateStr = (date) => {
     const tzOffset = date.getTimezoneOffset() * 60000;
@@ -79,7 +79,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
 
   const periodDaysCount = timeframe === '90d' ? 90 : (timeframe === '30d' ? 30 : 7);
 
-  // Generowanie dni dla aktualnego okresu (ostatnie N dni kończące się na selectedDate)
+  // Generate the days for the current period (the last N days ending at selectedDate)
   const currentWeekDays = [];
   for (let i = periodDaysCount - 1; i >= 0; i--) {
     const d = new Date(selectedDateObj);
@@ -87,7 +87,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     currentWeekDays.push(toDateStr(d));
   }
 
-  // Generowanie dni dla poprzedniego okresu (N dni przed aktualnym okresem)
+  // Generate the days for the previous period (the N days before the current one)
   const prevWeekDays = [];
   for (let i = (periodDaysCount * 2) - 1; i >= periodDaysCount; i--) {
     const d = new Date(selectedDateObj);
@@ -95,10 +95,10 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     prevWeekDays.push(toDateStr(d));
   }
 
-  // Bezpieczne parsowanie "YYYY-MM-DD" w lokalnej strefie czasowej (patrz komentarz przy
-  // selectedDateObj wyżej) - new Date(dateStr) parsuje string daty jako UTC północ, a getDay/
-  // getDate/getMonth czytają w strefie LOKALNEJ, więc w strefach na zachód od UTC dawałoby to
-  // dzień tygodnia/datę przesunięte o -1 (np. niedziela pokazana jako sobota na wykresach).
+  // Safe parsing of 'YYYY-MM-DD' in the local timezone (see the comment on selectedDateObj
+  // above) - new Date(dateStr) parses a date string as UTC midnight, while getDate/getMonth
+  // read in the LOCAL timezone, so in timezones west of UTC the weekday and date came out
+  // shifted by -1 (Sunday displayed as Saturday on the charts, for instance).
   const parseLocalDate = (dateStr) => {
     const [y, m, d] = dateStr.split('-').map(Number);
     return new Date(y, m - 1, d);
@@ -111,12 +111,12 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
       const mm = String(d.getMonth() + 1).padStart(2, '0');
       return `${dd}.${mm}`;
     }
-    const day = d.getDay(); // 0: niedziela, 1: poniedziałek...
+    const day = d.getDay(); // 0: Sunday, 1: Monday...
     const labels = ['n', 'p', 'w', 'ś', 'c', 'p', 's'];
     return labels[day];
   };
 
-  // Pełna etykieta dnia używana w podpowiedzi (tooltip), np. "śr 17.06"
+  // The full day label used in the tooltip, e.g. 'Wed 17.06'
   const getFullDayLabel = (dateStr) => {
     const d = parseLocalDate(dateStr);
     const names = ['niedz', 'pon', 'wt', 'śr', 'czw', 'pt', 'sob'].map(t);
@@ -141,9 +141,9 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     }
   };
 
-  // Wspólny komponent podpowiedzi (tooltip) renderowany jako nakładka HTML (div).
-  // anchorX/anchorY to punkt w układzie współrzędnych SVG (viewBox), do którego
-  // "przyklejony" jest dymek (np. góra słupka/punktu).
+// Shared tooltip component, rendered as an HTML overlay (a div).
+// anchorX/anchorY is the point in the SVG coordinate system (viewBox) the bubble is pinned
+// to - the top of a bar or point, for instance.
   const renderTooltip = (chartKey, idx, anchorX, anchorY, valueLabel, dateStr, svgWidth, customContent = null, svgHeight = 90) => {
     if (!hoverInfo || hoverInfo.chartKey !== chartKey || hoverInfo.idx !== idx) return null;
     const dateLabel = getFullDayLabel(dateStr);
@@ -195,11 +195,11 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     });
   };
 
-  // Obliczenie statystyk dla danej metryki.
-  // noFallbackToday: dla liczników dziennych (kroki, kalorie, sen), które mają zerować się
-  // każdego dnia, NIE podstawiamy wartości z poprzednich dni, gdy dzisiejszy wpis jeszcze
-  // nie istnieje w bazie (czyli zanim nadejdzie pierwsza dzisiejsza synchronizacja) - inaczej
-  // wykres pokazywałby wczorajsze kroki/kalorie jako dzisiejsze.
+  // Computes the statistics for a given metric.
+  // noFallbackToday: for daily counters (steps, calories, sleep) that reset each day, we do
+  // NOT substitute values from previous days when today's entry does not exist in the
+  // database yet (that is, before the first sync of the day arrives) - otherwise the chart
+  // would show yesterday's steps and calories as today's.
   const calculateStats = (key, noFallbackToday = false) => {
     const currValues = getMetricData(currentWeekDays, key).filter(v => v !== null && v !== undefined);
     const prevValues = getMetricData(prevWeekDays, key).filter(v => v !== null && v !== undefined);
@@ -212,11 +212,11 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     const currAvg = currValues.length > 0 ? currValues.reduce((a, b) => a + b, 0) / currValues.length : 0;
     const prevAvg = prevValues.length > 0 ? prevValues.reduce((a, b) => a + b, 0) / prevValues.length : 0;
 
-    // Gdy poprzedni tydzień nie ma żadnych danych (prevAvg === 0), dzielenie przez
-    // prevAvg dawałoby NaN/Infinity, więc wcześniej kod po prostu zostawiał pctChange=0 -
-    // co w renderComparisonPill wygląda identycznie jak "brak zmiany", mimo że w
-    // rzeczywistości użytkownik mógł właśnie zacząć aktywność po tygodniu przerwy
-    // (np. 0 -> 8000 kroków/dzień). Rozróżniamy te dwa przypadki przez isNewActivity.
+  // When the previous week has no data at all (prevAvg === 0), dividing by prevAvg would
+  // produce NaN/Infinity, so the code used to leave pctChange at 0 - which in
+  // renderComparisonPill looks identical to 'no change', even though in reality the user may
+  // have just resumed activity after a week off (0 -> 8000 steps/day). isNewActivity tells
+  // those two cases apart.
     let pctChange = 0;
     let isNewActivity = false;
     let isNoData = false; // F-N3: brak danych w obu tygodniach → nie pokazuj "0%"
@@ -238,23 +238,23 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
   };
 
   // Logika formatowania "Xh Ym" przeniesiona do utils/format.js (formatHoursMins),
-  // żeby nie duplikować jej w Dashboard.jsx/Trends.jsx/ActivityTracker.jsx.
-  // formatDuration zachowuje swoje dotychczasowe zachowanie dla 0/null/undefined
-  // ("0h 0m" - inaczej niż formatHoursMins, które zwraca '--'), żeby nie zmieniać
-  // wyglądu istniejących wykresów w tym pliku.
+// so it is not duplicated across Dashboard.jsx / Trends.jsx / ActivityTracker.jsx.
+// formatDuration keeps its existing behaviour for 0/null/undefined ('0h 0m', unlike
+// formatHoursMins which returns '--') so the appearance of the existing charts in this file
+// does not change.
   const formatDuration = (hoursDecimal) => {
     if (hoursDecimal === null || hoursDecimal === undefined || hoursDecimal === 0) return '0h 0m';
     return formatHoursMins(hoursDecimal);
   };
 
-  // Renderowanie wykresu słupkowego (Kroki, Kalorie, Czas Snu)
+// Renders a bar chart (steps, calories, sleep duration)
   const renderBarChart = (title, key, unit, ticks, formatFn = (v) => v) => {
     const stats = calculateStats(key, true);
     const currentWeekVals = getMetricData(currentWeekDays, key);
 
-    // Max do skalowania wysokości słupków. Filtr musi odrzucać też `undefined` (nie tylko
-    // `null`) - dzień bez wpisu danej metryki w bazie zwracał undefined, co psowało
-    // Math.max(...) do NaN i całe skalowanie wykresu (analogicznie do renderLineChart niżej).
+  // Max value for scaling the bar heights. The filter must reject `undefined` as well as
+  // `null` - a day with no entry for a metric returned undefined, which turned Math.max(...)
+  // into NaN and broke the whole chart scale (as in renderLineChart below).
     const maxVal = Math.max(...currentWeekVals.filter(v => v !== null && v !== undefined), ...ticks, 1);
 
     const svgWidth = 240;
@@ -286,7 +286,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
         <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginTop: '8px', position: 'relative', width: '100%' }}>
           {/* Wykres SVG */}
           <svg width="100%" height={svgHeight} viewBox={`0 0 ${svgWidth} ${svgHeight}`} style={{ overflow: 'visible' }}>
-            {/* Tło siatki - poziome linie pomocnicze */}
+        {/* Grid background - horizontal guide lines */}
             {ticks.map((t, idx) => {
               const y = svgHeight - topMargin - ((t / maxVal) * (svgHeight - topMargin - 15));
               return (
@@ -299,7 +299,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
               );
             })}
 
-            {/* Słupki */}
+        {/* Bars */}
             {currentWeekDays.map((day, idx) => {
               const val = currentWeekVals[idx] || 0;
               const h = (val / maxVal) * (svgHeight - topMargin - 15);
@@ -321,9 +321,9 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
                   onMouseLeave={() => setHoverInfo(prev => (prev && prev.chartKey === key && prev.idx === idx) ? null : prev)}
                   onClick={toggleHover}
                 >
-                  {/* Niewidoczne, szersze pole "trafienia" - ułatwia kliknięcie/hover na wąski słupek */}
+              {/* An invisible, wider hit area - makes a narrow bar easier to click or hover */}
                   <rect x={x - gap / 2} y={0} width={barWidth + gap} height={svgHeight} fill="transparent" />
-                  {/* Słupek z zaokrąglonymi rogami na górze */}
+              {/* Bar with rounded top corners */}
                   <rect
                     x={x}
                     y={y}
@@ -358,7 +358,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
 
           </svg>
 
-          {/* Podpowiedź (tooltip) dla aktywnego słupka */}
+      {/* Tooltip for the active bar */}
           {hoverInfo && hoverInfo.chartKey === key && (() => {
             const idx = hoverInfo.idx;
             const day = currentWeekDays[idx];
@@ -382,8 +382,8 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     const validVals = currentWeekVals.filter(v => v !== null && v !== undefined);
     const hasData = validVals.length > 0;
 
-    // Zakresy y-skalowania - liczone z validVals (już odfiltrowanych z null/undefined,
-    // patrz wyżej), a nie z || 9999 / || 0, które myliłyby brak danych z realnym zerem
+  // Y-scale bounds - computed from validVals (already filtered of null/undefined, see above)
+  // rather than from || 9999 / || 0, which would confuse missing data with a real zero.
     // (analogicznie do getMinMax w ActivityTracker.jsx).
     const minVal = Math.min(...(validVals.length ? validVals : [0]), ...ticks, 1);
     const maxVal = Math.max(...(validVals.length ? validVals : [0]), ...ticks, 1);
@@ -397,7 +397,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     const chartWidth = svgWidth - leftMargin - rightMargin;
     const chartHeight = svgHeight - topMargin - 15;
 
-    // Budowanie punktów dla linii
+  // Build the points for the line
     const points = currentWeekDays.map((day, idx) => {
       const val = currentWeekVals[idx];
       if (val === null || val === undefined) return null;
@@ -408,7 +408,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
 
     const activePoints = points.filter(p => p !== null);
 
-    // Budowanie ścieżki SVG dla linii
+  // Build the SVG path for the line
     let linePath = '';
     let areaPath = '';
     if (activePoints.length > 0) {
@@ -416,7 +416,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
       areaPath = `${linePath} L ${activePoints[activePoints.length - 1].x} ${svgHeight - topMargin} L ${activePoints[0].x} ${svgHeight - topMargin} Z`;
     }
 
-    // Średnia wartość rzutowana na oś Y
+  // The average value projected onto the Y axis
     const avgY = svgHeight - topMargin - ((stats.avg - minVal) / range) * chartHeight;
 
     // Znajdowanie ostatniego punktu do postawienia kropki
@@ -468,7 +468,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
               );
             })}
 
-            {/* Pozioma linia średniej tygodniowej (dashed) */}
+        {/* Horizontal weekly-average line (dashed) */}
             {hasData && (
               <line
                 x1={leftMargin}
@@ -503,7 +503,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
               />
             )}
 
-            {/* Interaktywne punkty - hover/klik pokazuje podpowiedź z dokładną wartością i dniem */}
+            {/* Interactive points - hover or click shows a tooltip with the exact value and day */}
             {points.map((p, idx) => {
               if (!p) return null;
               const isActive = hoverInfo && hoverInfo.chartKey === key && hoverInfo.idx === idx;
@@ -521,7 +521,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
                   onClick={toggleHover}
                   onTouchStart={(e) => { e.stopPropagation(); toggleHover(); }}
                 >
-                  {/* Niewidoczne, większe pole "trafienia" wokół punktu */}
+              {/* An invisible, larger hit area around the point */}
                   <circle cx={p.x} cy={p.y} r="9" fill="transparent" />
                   <circle
                     cx={p.x}
@@ -560,7 +560,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
 
           </svg>
 
-          {/* Podpowiedź (tooltip) dla aktywnego punktu */}
+      {/* Tooltip for the active point */}
           {hoverInfo && hoverInfo.chartKey === key && points[hoverInfo.idx] && (() => {
             const p = points[hoverInfo.idx];
             return renderTooltip(key, hoverInfo.idx, p.x, p.y, `${formatFn(p.val)} ${unit}`, p.day, svgWidth, null, svgHeight);
@@ -570,9 +570,8 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     );
   };
 
-  // Wykres ciśnienia tętniczego (Withings) - dwie linie (skurczowe/rozkurczowe) na
-  // wspólnej osi mmHg, na bazie renderLineChart, ale bez pojedynczego "key" bo
-  // potrzebujemy dwóch serii naraz.
+// Blood pressure chart (Withings) - two lines (systolic/diastolic) on a shared mmHg axis,
+// based on renderLineChart but without a single 'key', because we need both series at once.
   const renderBloodPressureChart = () => {
     const chartKey = 'blood_pressure';
     const sysVals = getMetricData(currentWeekDays, 'blood_pressure_systolic');
@@ -658,7 +657,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
             {hasData && sysPath && <path d={sysPath} stroke="#ffffff" strokeWidth="2" fill="none" strokeLinecap="round" />}
             {hasData && diaPath && <path d={diaPath} stroke="#38bdf8" strokeWidth="2" fill="none" strokeLinecap="round" />}
 
-            {/* Interaktywne punkty - hover/klik pokazuje podpowiedź z dokładną wartością i dniem */}
+            {/* Interactive points - hover or click shows a tooltip with the exact value and day */}
             {sysPoints.map((p, idx) => {
               const isActive = hoverInfo && hoverInfo.chartKey === chartKey && hoverInfo.idx === idx;
               const diaP = diaPoints.find(dp => dp.day === p.day);
@@ -733,7 +732,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
           </div>
         )}
 
-        {/* Podpowiedź (tooltip) dla ciśnienia tętniczego */}
+      {/* Tooltip for blood pressure */}
         {hoverInfo && hoverInfo.chartKey === chartKey && sysPoints[hoverInfo.idx] && (() => {
           const p = sysPoints[hoverInfo.idx];
           const diaP = diaPoints.find(dp => dp.day === p.day);
@@ -764,12 +763,12 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     );
   };
 
-  // Wykres (Runda 8) historii faz snu - słupek skumulowany (głęboki/REM/lekki) na dzień,
-  // z ostatnich 7 dni. Dane sleep_deep/sleep_rem/sleep_duration są już dostępne w
-  // historyData (patrz /api/health/history), tylko nigdzie wcześniej nie były pokazane
-  // razem jako historia - tylko jako wartość "dziś" na Dashboardzie (SleepStageBar).
-  // sleep_deep/sleep_rem są w bazie w GODZINACH (services/sync.js), więc liczymy
-  // wszystko w godzinach i formatujemy przez formatDuration na końcu.
+// Chart (round 8) of sleep stage history - a stacked bar (deep/REM/light) per day over the
+// last 7 days. The sleep_deep/sleep_rem/sleep_duration data is already available in
+// historyData (see /api/health/history), it was simply never shown together as a history -
+// only as today's value on the Dashboard (SleepStageBar).
+// sleep_deep/sleep_rem are stored in HOURS (services/sync.js), so we compute everything in
+// hours and format through formatDuration at the end.
   const renderSleepStagesChart = () => {
     const chartKey = 'sleep_stages';
     const durVals = getMetricData(currentWeekDays, 'sleep_duration');
@@ -897,7 +896,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
 
           </svg>
 
-          {/* Podpowiedź (tooltip) - rozbicie godzin głęboki/REM/lekki dla aktywnego dnia */}
+      {/* Tooltip - the deep/REM/light hour breakdown for the active day */}
           {hoverInfo && hoverInfo.chartKey === chartKey && dayBreakdowns[hoverInfo.idx] && (() => {
             const idx = hoverInfo.idx;
             const b = dayBreakdowns[idx];
@@ -939,7 +938,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
   };
 
   const renderComparisonPill = (pctChange, isNewActivity = false, isNoData = false) => {
-    // F-N3: Brak danych w obu tygodniach — nie pokazuj mylącego "0%"
+  // F-N3: no data in either week - do not show a misleading '0%'
     if (isNoData) {
       return (
         <span style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '12px', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.3)', fontWeight: '600', display: 'inline-flex', alignItems: 'center' }}>

@@ -1,23 +1,19 @@
 #!/usr/bin/env node
 
-// Ocenia wynik `npm audit --json` i decyduje, czy zablokować pipeline.
+// Evaluates the output of `npm audit --json` and decides whether to block the pipeline.
 //
-// Dlaczego ten skrypt istnieje: `npm audit` traktuje WSZYSTKIE podatności
-// "high"/"critical" jednakowo, niezależnie od tego, czy dotyczą kodu, który
-// faktycznie działa w produkcji, czy tylko narzędzi używanych przez `npm ci`
-// do skompilowania natywnego bindingu (np. łańcuch sqlite3 -> node-gyp ->
-// tar/make-fetch-happen/cacache/http-proxy-agent/@tootallnate/once). Te
-// narzędzia kompilacyjne NIE trafiają do działającej aplikacji i nie są
-// nigdy wywoływane w runtime - są używane wyłącznie raz, podczas instalacji
-// zależności. Jedyny realny sposób ich "naprawienia" wymagałby podbicia
-// sqlite3 na wersję główną, której prebuildowany binarz wymaga nowszego
-// glibc niż ma obraz produkcyjny (node:20-slim) - co faktycznie WYSADZIŁO
-// produkcję (ERR_DLOPEN_FAILED / GLIBC_2.38 not found) przy próbie tego
-// fixu. Dlatego pakiety z tego konkretnego, udokumentowanego łańcucha są
-// jawnie odłożone na białą listę poniżej - każda INNA podatność high/
-// critical (czyli realna zależność runtime) wciąż blokuje pipeline.
+// Why this script exists: `npm audit` treats ALL "high"/"critical" vulnerabilities alike,
+// regardless of whether they affect code that actually runs in production or only tooling
+// used by `npm ci` to compile a native binding (the sqlite3 -> node-gyp -> ... chain).
+// Build-time tooling NEVER reaches the running application and is never invoked at runtime -
+// it is used exactly once, during dependency installation. The only real way to "fix" those
+// findings would be bumping sqlite3 to a major version whose prebuilt binary needs a newer
+// glibc than the production image (node:20-slim) provides - which actually BROKE production
+// (ERR_DLOPEN_FAILED / GLIBC_2.38 not found) when that fix was attempted. Packages from that
+// specific, documented chain are therefore explicitly whitelisted below; any OTHER
+// high/critical vulnerability, meaning a real runtime dependency, still blocks the pipeline.
 //
-// Użycie: node check-npm-audit.js <plik-audit.json> [dozwolony-pakiet,...]
+// Usage: node check-npm-audit.js <audit-file.json> [allowed-package,...]
 
 const fs = require('fs');
 
@@ -25,7 +21,7 @@ const auditPath = process.argv[2];
 const allowList = (process.argv[3] || '').split(',').map(s => s.trim()).filter(Boolean);
 
 if (!auditPath) {
-  console.error('Użycie: node check-npm-audit.js <plik-audit.json> [dozwolony-pakiet,...]');
+  console.error('Usage: node check-npm-audit.js <audit-file.json> [allowed-package,...]');
   process.exit(1);
 }
 
@@ -53,16 +49,16 @@ for (const [pkgName, info] of Object.entries(vulns)) {
 }
 
 if (accepted.length > 0) {
-  console.log('Zaakceptowane podatności (znana, udokumentowana wyjątkowa lista - tylko build-time, nigdy w runtime):');
+  console.log('Accepted vulnerabilities (the known, documented exception list - build-time only, never at runtime):');
   accepted.forEach(p => console.log(`  - ${p}`));
 }
 
 if (blocking.length > 0) {
-  console.error('\nBlokujące podatności high/critical (NIE na białej liście):');
+  console.error('\nBlocking high/critical vulnerabilities (NOT whitelisted):');
   blocking.forEach(p => console.error(`  - ${p}`));
-  console.error('\nnpm audit nie przechodzi. Jeśli to nowa, realna podatność w zależności runtime - napraw ją (podbicie wersji / usunięcie zależności). Jeśli to kolejny build-time-only pakiet analogiczny do tych na białej liście - dodaj go do listy w kroku workflow, z uzasadnieniem.');
+  console.error('\nnpm audit failed. If this is a new, real vulnerability in a runtime dependency, fix it (update the package).');
   process.exit(1);
 }
 
-console.log('\nOK - brak blokujących podatności high/critical poza zaakceptowaną listą.');
+console.log('\nOK - no blocking high/critical vulnerabilities outside the accepted list.');
 process.exit(0);

@@ -43,10 +43,20 @@ const PL_WORDS = /\b(nie|jest|sie|dla|przez|zeby|tego|ktore|ktory|oraz|albo|jako
 
 const PL = PL_DIACRITICS;
 const isCommentLine = (trimmed) => /^(\/\/|\*|\/\*|#)/.test(trimmed) || /\{\s*\/\*/.test(trimmed);
-// A comment line counts as Polish if either detector fires.
+// Polish inside quotation marks within an otherwise English comment is quoted DATA, not
+// prose: a comment documenting which exact strings caused a bug has to name them. Stripping
+// quoted spans before testing keeps those out of the report - otherwise the only way to
+// "fix" the violation would be deleting the example that makes the comment useful.
+const stripQuoted = (line) => line
+  .replace(/"[^"]*"/g, '""')
+  .replace(/'[^']*'/g, "''")
+  .replace(/`[^`]*`/g, '``');
+
+// A comment line counts as Polish if either detector fires on its unquoted text.
 const commentIsPolish = (line) => {
-  if (PL_DIACRITICS.test(line)) return true;
-  return isCommentLine(line.trim()) && PL_WORDS.test(line);
+  const bare = isCommentLine(line.trim()) ? stripQuoted(line) : line;
+  if (PL_DIACRITICS.test(bare)) return true;
+  return isCommentLine(line.trim()) && PL_WORDS.test(bare);
 };
 
 // Files whose Polish string content is product content by design.
@@ -54,6 +64,10 @@ const CONTENT_FILES = [
   'frontend/src/utils/i18n.js',    // dictionary keys ARE the Polish source strings
   'backend/utils/mealPrompts.js'   // prompt body drives Gemini's output language
 ];
+
+// Replaces the contents of string literals with spaces, preserving the line's length so that
+// indices computed on the result still address the original line.
+const blankStrings = (line) => line.replace(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g, (m) => ' '.repeat(m.length));
 
 const LOG_CALL = /(console\.(log|warn|error|info|debug)|logger\.(info|warn|error|debug))\s*\(/;
 const API_ERROR = /res\.(status\(\d+\)\.)?json\(\s*\{\s*error|throw new Error|error:\s*['"]/;
@@ -87,12 +101,21 @@ function classify(line, inBlockComment, opts) {
   const trimmed = line.trim();
 
   if (inBlockComment) return 'comment';
-  if (/^(\/\/|\*|#)/.test(trimmed)) return 'comment';
+  // A leading `*` only means "comment" INSIDE a block comment - the tracker above already
+  // reported that via inBlockComment. Outside one it is ordinary text, and in JSX it is a
+  // footnote rendered to the user ("* Height is optional, but without it..."). Treating a
+  // bare `*` line as a comment flagged those two UI footnotes in Settings.jsx as permanent
+  // violations whose only "fix" would be translating text the user reads.
+  if (/^(\/\/|#)/.test(trimmed)) return 'comment';
   if (/^\/\*/.test(trimmed)) return 'comment';
   if (/\{\s*\/\*/.test(line)) return 'comment';
 
-  // Trailing comment carrying all the Polish on the line.
-  const slash = line.indexOf('//');
+  // Trailing comment carrying all the Polish on the line. The search runs on a copy with the
+  // string literals blanked out, because a URL inside a string contains `//` too - the footer
+  // in App.jsx (`href="https://renacode.com"` followed by Polish link captions) was reported
+  // as a Polish COMMENT for exactly that reason, and the only way to "fix" it would have been
+  // translating product copy.
+  const slash = blankStrings(line).indexOf('//');
   if (slash > -1 && PL.test(line.slice(slash)) && !PL.test(line.slice(0, slash))) return 'comment';
 
   if (opts.isContentFile) return 'content';
@@ -105,6 +128,14 @@ function classify(line, inBlockComment, opts) {
   // assembled (a fallback label interpolated into a Gemini prompt, for example). Those stay
   // Polish by the same rule as the prompt bodies themselves.
   if (line.includes('`')) return 'content';
+  // `${...}` interpolation can only appear inside a template literal, so a Polish line
+  // carrying one is prompt text being assembled across several lines.
+  if (line.includes('${')) return 'content';
+  // A line of bare prose carrying no JS syntax at all cannot be code: in a .js file it can
+  // only be the body of a multi-line template literal, i.e. prompt text. Backtick-parity
+  // tracking alone missed these, because the opening backtick sits many lines above and any
+  // stray backtick in a comment skews the count.
+  if (!/[=;(){}[\]]|=>|\bconst\b|\blet\b|\bfunction\b/.test(trimmed)) return 'content';
   if (LOG_CALL.test(line)) return 'log';
   if (API_ERROR.test(line)) return 'content';
 
@@ -152,7 +183,11 @@ function auditFile(file) {
   return { file: rel, hits, violations, flagged, total: lines.length };
 }
 
-const files = ROOTS.flatMap(r => walk(path.join(REPO_ROOT, r)));
+// This file is skipped: it necessarily contains Polish - the detector's own character class
+// and the examples in the comments explaining why the detector needs to exist. Scanning it
+// would report permanent "violations" whose only fix would be breaking the detector.
+const SELF = path.join(REPO_ROOT, 'scripts', 'check-language.js');
+const files = ROOTS.flatMap(r => walk(path.join(REPO_ROOT, r))).filter(f => f !== SELF);
 const results = files.map(auditFile).filter(r => r.violations + r.hits.content > 0);
 
 const args = process.argv.slice(2);

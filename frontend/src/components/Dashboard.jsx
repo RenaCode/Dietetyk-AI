@@ -4,23 +4,23 @@ import { formatHoursMins } from '../utils/format';
 import { t } from '../utils/i18n';
 import { useInsights } from '../utils/useInsights';
 
-// Insighty pobierane JEDNYM zbiorczym żądaniem (/api/dashboard/insights).
-// Wcześniej każdy z nich miał własny useEffect i własny fetch - wejście na
-// dashboard to było ok. 50 równoległych żądań HTTP i tyle samo osobnych serii
-// zapytań do SQLite.
+// Insights are fetched with ONE batched request (/api/dashboard/insights).
+// Previously each of them had its own useEffect and its own fetch - opening the
+// dashboard meant about 50 parallel HTTP requests and just as many separate series
+// of SQLite queries.
 //
-// Poza tą listą zostają świadomie dwa przypadki:
-//   - calorie-target-suggestion: ma dodatkową zależność (caloriesTrigger), bo musi
-//     się odświeżyć po kliknięciu "Zastosuj", nie tylko po zmianie daty;
-//   - dane dnia/historii (/api/dashboard, /api/health/history), które mają własny
-//     cykl życia i inne zależności.
-// ai-explanation-insight i training-plan-insight SĄ we wsadzie, ale mają dodatkowo
-// nakładkę pozwalającą nadpisać wynik (polling generowania w tle / przycisk
-// "Odśwież") - patrz komentarze przy nich w komponencie.
+// Two cases are deliberately left out of this list:
+//   - calorie-target-suggestion: it has an extra dependency (caloriesTrigger), because
+//     it must refresh after clicking "Apply", not only when the date changes;
+//   - the day/history data (/api/dashboard, /api/health/history), which have their own
+//     lifecycle and different dependencies.
+// ai-explanation-insight and training-plan-insight ARE in the batch, but they also have
+// an overlay that can override the result (polling for background generation / the
+// "Refresh" button) - see the comments next to them in the component.
 //
-// Stała jest zdefiniowana poza komponentem celowo: useInsights sprowadza listę do
-// stringa jako klucz zależności, a nowa referencja tablicy przy każdym renderze
-// odpalałaby pobieranie w kółko.
+// The constant is defined outside the component on purpose: useInsights reduces the list
+// to a string as its dependency key, and a new array reference on every render would fire
+// the fetch over and over.
 const BATCHED_INSIGHT_IDS = [
   'energy-battery',
   'wellness-score',
@@ -72,9 +72,9 @@ const BATCHED_INSIGHT_IDS = [
   'workout-variety-insight'
 ];
 
-// Kolor paska/liczby baterii energii. Progi zgodne z etykietami zwracanymi przez
-// backend (Naładowana / Dobra / Niska / Na rezerwie), żeby kolor i słowo nigdy nie
-// mówiły dwóch różnych rzeczy.
+// Colour of the energy battery bar and number. The thresholds match the labels returned
+// by the backend (Naladowana / Dobra / Niska / Na rezerwie), so the colour and the word
+// never say two different things.
 const batteryColor = (value) => {
   if (value >= 75) return 'var(--success-light)';
   if (value >= 50) return '#4ade80';
@@ -143,8 +143,8 @@ const SleepStageBar = ({ label, durationText, percentage, typicalStart, typicalE
 };
 
 const getWorkoutIcon = (type) => {
-  // type może nie przyjść z backendu (trening bez przypisanej kategorii) -
-  // bez fallbacku do '' aplikacja wywaliłaby się na .toLowerCase() na undefined.
+// type may not come from the backend (a workout with no assigned category) - without a
+// fallback to '' the app would crash on .toLowerCase() of undefined.
   const t = (type || '').toLowerCase();
   if (t.includes('run') || t.includes('bieg')) return '🏃';
   if (t.includes('walk') || t.includes('spacer') || t.includes('marsz')) return '🚶';
@@ -255,8 +255,8 @@ const getSupplementIconsForText = (text) => {
 
 const getLast7Days = (endDateStr) => {
   const days = [];
-  // Parsujemy lokalnie, nie jako UTC (new Date("YYYY-MM-DD") traktuje jako UTC
-  // i w strefach zachodnich może dać dzień -1)
+// We parse locally, not as UTC (new Date("YYYY-MM-DD") is treated as UTC and in
+// timezones west of UTC can give a day of -1)
   const [ey, em, ed] = endDateStr.split('-').map(Number);
   const endDate = new Date(ey, em - 1, ed);
   for (let i = 6; i >= 0; i--) {
@@ -275,30 +275,30 @@ const getLast7Days = (endDateStr) => {
 
 export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDate, onNavigate, onRefresh, onLogout, userProfile = {}, language = 'pl' }) {
   const [historyData, setHistoryData] = useState([]);
-  // Centralny sygnał wygaśnięcia sesji dla ~40 insight useEffectów — zamiast
-  // wywoływać onLogout() bezpośrednio (co wymagałoby dodania go do dep-array każdego
-  // effectu i groziło pętlami re-render), effekty ustawiają flagę, a jeden centralny
-  // useEffect wywołuje onLogout() gdy flaga jest true.
+// A central session-expiry signal for the ~40 insight useEffects - instead of calling
+// onLogout() directly (which would require adding it to every effect's dep array and risk
+// re-render loops), the effects set a flag and one central useEffect calls onLogout() when
+// the flag is true.
   const [sessionExpired, setSessionExpired] = useState(false);
   useEffect(() => {
     if (sessionExpired) onLogout();
   }, [sessionExpired, onLogout]);
 
-  // Jedno żądanie zamiast kilkudziesięciu - patrz BATCHED_INSIGHT_IDS wyżej.
-  // setSessionExpired pochodzi z useState, więc jego referencja jest stabilna
-  // i nie restartuje efektu w useInsights.
+// One request instead of several dozen - see BATCHED_INSIGHT_IDS above.
+// setSessionExpired comes from useState, so its reference is stable and does not restart
+// the effect in useInsights.
   const {
     data: batchedInsights,
     isLoading: isLoadingBatchedInsights
   } = useInsights(sessionToken, selectedDate, BATCHED_INSIGHT_IDS, setSessionExpired);
   const [historyTrigger, setHistoryTrigger] = useState(0);
-  // isLoadingHistory celowo usunięte (stan był ustawiany ale nigdy nie odczytywany
-  // w renderze - martwy kod, wykryty w audycie rundy 17)
+// isLoadingHistory deliberately removed (the state was set but never read in the render -
+// dead code, found in the audit of round 17)
   const [isAddingWater, setIsAddingWater] = useState(false);
   const [customWaterAmount, setCustomWaterAmount] = useState('');
   const [waterMessage, setWaterMessage] = useState('');
   
-  // Stany dla suplementacji
+  // Supplementation state
   const [supplementsText, setSupplementsText] = useState('');
   const [isSavingSupplements, setIsSavingSupplements] = useState(false);
   const [supplementsMessage, setSupplementsMessage] = useState({ type: '', text: '' });
@@ -327,9 +327,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     return sup.match.some(keyword => lowerText.includes(keyword));
   };
 
-  // Inicjalizacja tekstu suplementów przy zmianie daty lub wartości z backendu
-  // Celowo NIE używamy [summary] — summary to nowy obiekt na każdy re-render parenta,
-  // co resetowałoby tekst wpisany przez użytkownika przy niezwiązanych odświeżeniach.
+  // Initialise the supplements text when the date or the value from the backend changes.
+  // We deliberately do NOT use [summary] - summary is a new object on every re-render of the
+  // parent, which would reset text the user had typed on unrelated refreshes.
   useEffect(() => {
     if (summary) {
       setSupplementsText(summary.supplements || '');
@@ -357,11 +357,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         setSupplementsMessage({ type: 'success', text: 'Zapisano suplementy!' });
         setHistoryTrigger(prev => prev + 1);
         if (onRefresh) {
-          onRefresh(); // Odśwież dane dashboardu (i wyzwalaj generowanie nowej porady AI w tle)
+          onRefresh(); // Refresh the dashboard data (and trigger background generation of new AI advice)
         }
         setTimeout(() => setSupplementsMessage({ type: '', text: '' }), 5000);
       } else {
-        // F-S4: Obsługa 401 — wygasła sesja
+        // F-S4: handle 401 - an expired session
         if (res.status === 401) { onLogout(); return; }
         setSupplementsMessage({ type: 'error', text: t('Błąd zapisu.') });
       }
@@ -373,13 +373,13 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     }
   };
 
-  // Stany dla trackera samopoczucia (energia i nastrój, skala 1–5)
+  // State for the wellbeing tracker (energy and mood, scale 1-5)
   const [energyLevel, setEnergyLevel] = useState(null);
   const [moodLevel, setMoodLevel] = useState(null);
   const [isSavingFeeling, setIsSavingFeeling] = useState(false);
   const [feelingMessage, setFeelingMessage] = useState({ type: '', text: '' });
 
-  // Inicjalizacja z danych z backendu przy zmianie dnia
+  // Initialise from the backend data when the day changes
   useEffect(() => {
     if (summary) {
       setEnergyLevel(summary.energy_level ?? null);
@@ -425,35 +425,35 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     }
   };
 
-  // Porównanie odżywiania tydzień/miesiąc i bilans kaloryczny narastająco
+  // Week/month nutrition comparison and the cumulative calorie balance
   const nutritionComparison = batchedInsights['nutrition-comparison'];
   const calorieBalance = batchedInsights['calorie-balance'];
   const isLoadingComparison = isLoadingBatchedInsights;
 
-  // Insight: sen -> kalorie/cukier następnego dnia (porównanie opisowe średnich
-  // z ostatnich 90 dni, patrz endpoint /api/dashboard/sleep-insight).
+  // Insight: sleep -> next day's calories/sugar (a descriptive comparison of the averages
+  // over the last 90 days, see the /api/dashboard/sleep-insight endpoint).
   const sleepInsight = batchedInsights['sleep-insight'];
   const isLoadingSleepInsight = isLoadingBatchedInsights;
 
 
-  // Alert/insight: sód -> ciśnienie (patrz endpoint /api/dashboard/sodium-bp-insight).
+  // Alert/insight: sodium -> blood pressure (see the /api/dashboard/sodium-bp-insight endpoint).
   const sodiumBpInsight = batchedInsights['sodium-bp-insight'];
 
 
-  // Wskaźnik regeneracji: HRV/RHR następnego dnia po znaczącym treningu
-  // (patrz endpoint /api/dashboard/recovery-insight).
+  // Recovery indicator: HRV/RHR on the day after a significant workout
+  // (see the /api/dashboard/recovery-insight endpoint).
   const recoveryInsight = batchedInsights['recovery-insight'];
 
 
-  // Insight: suplementy (wolny tekst) vs sen/regeneracja TEGO SAMEGO dnia
-  // (patrz endpoint /api/dashboard/supplements-sleep-insight) - własna analiza
-  // danych już zbieranych przez aplikację (suplementy + Oura), bez kopiowania
+  // Insight: supplements (free text) vs sleep/recovery on THE SAME day
+  // (see the /api/dashboard/supplements-sleep-insight endpoint) - our own analysis of data
+  // the app already collects (supplements + Oura), without copying
   // niczego z konkurencyjnych apek.
   const supplementsSleepInsight = batchedInsights['supplements-sleep-insight'];
 
 
-  // Runda 7: 8 nowych insightów na bazie danych już zbieranych przez aplikację -
-  // ten sam wzorzec fetch/state co powyżej (sleepInsight, sodiumBpInsight, itd.).
+  // Round 7: 8 new insights based on data the app already collects -
+  // the same fetch/state pattern as above (sleepInsight, sodiumBpInsight, and so on).
   const hydrationInsight = batchedInsights['hydration-readiness-insight'];
 
   const sedentaryInsight = batchedInsights['sedentary-sleep-insight'];
@@ -476,86 +476,86 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 
   const bpTrendInsight = batchedInsights['bp-trend-insight'];
 
-  // Realne strefy kardio (Karvonen) zsumowane z treningów Apple Health z ostatnich 14 dni
-  // - w przeciwieństwie do statycznej tabeli referencyjnej "Strefy Tętna" (wzór, nie pomiar),
-  // to są minuty faktycznie zmierzone tętnem podczas treningu (wymaga włączonego "Include
-  // Workout Metrics" w Health Auto Export). Patrz /api/dashboard/hr-zones-insight.
+  // Real cardio zones (Karvonen) summed from the Apple Health workouts of the last 14 days
+  // - unlike the static "Strefy Tetna" reference table (a formula, not a measurement),
+  // these are minutes actually measured by heart rate during a workout (it requires "Include
+  // Workout Metrics" enabled in Health Auto Export). See /api/dashboard/hr-zones-insight.
   const hrZonesInsight = batchedInsights['hr-zones-insight'];
 
-  // Trend jakości posiłków (health_rating 1-10 z analysis_json) - ostatnie 14 dni
-  // vs poprzedzające 30 dni. Patrz /api/dashboard/meal-quality-trend-insight.
+  // Meal quality trend (health_rating 1-10 from analysis_json) - the last 14 days
+  // vs the preceding 30 days. See /api/dashboard/meal-quality-trend-insight.
   const mealQualityTrendInsight = batchedInsights['meal-quality-trend-insight'];
 
-  // "Efekt weekendu" - kalorie/aktywność/sen w dni robocze vs weekend, ostatnie
-  // 4 tygodnie. Patrz /api/dashboard/weekend-effect-insight.
+  // The "weekend effect" - calories/activity/sleep on weekdays vs the weekend, over the
+  // last 4 weeks. See /api/dashboard/weekend-effect-insight.
   const weekendEffectInsight = batchedInsights['weekend-effect-insight'];
 
-  // Efektywność kalorii per typ treningu (kcal/min) z ostatnich 90 dni.
-  // Patrz /api/dashboard/workout-efficiency-insight.
+  // Calorie efficiency per workout type (kcal/min) over the last 90 days.
+  // See /api/dashboard/workout-efficiency-insight.
   const workoutEfficiencyInsight = batchedInsights['workout-efficiency-insight'];
 
-  // Prognoza daty osiągnięcia celu wagi (regresja 60 dni + target_weight_kg) - stała
-  // karta na dashboardzie (wcześniej widoczna tylko w okresowych mailach).
-  // Patrz /api/dashboard/weight-goal-forecast.
+  // Forecast of the date the weight goal will be reached (a 60-day regression +
+  // target_weight_kg) - a permanent card on the dashboard (previously visible only in the
+  // periodic e-mails). See /api/dashboard/weight-goal-forecast.
   const weightGoalForecast = batchedInsights['weight-goal-forecast'];
 
-  // Stabilność ulubionych (powtarzających się) posiłków - dryf kalorii między
-  // starszą a nowszą połową wystąpień. Patrz /api/dashboard/favorite-meal-drift-insight.
+  // Stability of favourite (repeated) meals - the calorie drift between the older and the
+  // newer half of the occurrences. See /api/dashboard/favorite-meal-drift-insight.
   const favoriteMealDriftInsight = batchedInsights['favorite-meal-drift-insight'];
 
-  // Trend SpO2 (saturacja krwi) - ostatnie 7 dni vs poprzedzający baseline 28 dni.
-  // Patrz /api/dashboard/spo2-trend-insight.
+  // SpO2 (blood oxygen saturation) trend - the last 7 days vs the preceding 28-day baseline.
+  // See /api/dashboard/spo2-trend-insight.
   const spo2TrendInsight = batchedInsights['spo2-trend-insight'];
 
-  // Wskaźnik WHR (obwód pasa / obwód bioder) - uznany wskaźnik ryzyka
-  // sercowo-naczyniowego. Patrz /api/dashboard/whr-insight.
+  // WHR (waist circumference / hip circumference) - an established cardiovascular risk
+  // indicator. See /api/dashboard/whr-insight.
   const whrInsight = batchedInsights['whr-insight'];
 
-  // Symetria bicepsów (lewy vs prawy) z pomiarów obwodów ciała.
-  // Patrz /api/dashboard/body-symmetry-insight.
+  // Biceps symmetry (left vs right) from the body measurements.
+  // See /api/dashboard/body-symmetry-insight.
   const bodySymmetryInsight = batchedInsights['body-symmetry-insight'];
 
-  // Trend tempa biegu/marszu (min/km, przybliżony) - dni z jednym treningiem
-  // run/walk/hike. Patrz /api/dashboard/pace-trend-insight.
+  // Running/walking pace trend (min/km, approximate) - days with a single run/walk/hike
+  // workout. See /api/dashboard/pace-trend-insight.
   const paceTrendInsight = batchedInsights['pace-trend-insight'];
 
-  // Różnorodność treningów (rozkład workout_type, ostatnie 60 dni).
-  // Patrz /api/dashboard/workout-variety-insight.
+  // Workout variety (the distribution of workout_type over the last 60 days).
+  // See /api/dashboard/workout-variety-insight.
   const workoutVarietyInsight = batchedInsights['workout-variety-insight'];
 
-  // Composite Wellness Score (0-100) - syntetyzuje sen/gotowość/RHR/dietę/nawodnienie
-  // w jeden nagłówkowy wskaźnik dnia. Patrz /api/dashboard/wellness-score.
-  // Bateria energii (0-100): ile zasobu zostało NA TERAZ. Ładowana snem i gotowością,
-  // rozładowywana obciążeniem, upływem dnia i stresem, obniżana skumulowanym długiem
-  // snu. Patrz /api/dashboard/energy-battery.
+  // Composite Wellness Score (0-100) - synthesises sleep/readiness/RHR/diet/hydration into
+  // one headline indicator for the day. See /api/dashboard/wellness-score.
+  // Energy battery (0-100): how much of the resource is left AS OF NOW. Charged by sleep and
+  // readiness, discharged by load, the passing of the day and stress, lowered by accumulated
+  // sleep debt. See /api/dashboard/energy-battery.
   const energyBattery = batchedInsights['energy-battery'];
 
   const wellnessScore = batchedInsights['wellness-score'];
 
-  // AI tłumaczące przyczyny (Runda 11, styl Oura Advisor/Whoop Coach) - wykrywa
-  // największe dzisiejsze odchylenie sen/gotowość/HRV/RHR i prosi AI o krótkie
-  // wyjaśnienie przyczyny. Patrz /api/dashboard/ai-explanation-insight.
-  // Ten insight, w odróżnieniu od pozostałych, jest AKTUALIZOWANY po pobraniu wsadu -
-  // backend generuje wyjaśnienie w tle i trzeba je doczytać (polling niżej). Wsad daje
-  // wartość początkową, a nakładka nadpisuje ją świeższym wynikiem. Nakładka jest
-  // trzymana razem z datą, dla której powstała, żeby po przełączeniu dnia nie pokazać
-  // wyjaśnienia z poprzedniej daty.
+  // AI that explains the causes (round 11, in the style of Oura Advisor / Whoop Coach) - it
+  // detects today's largest sleep/readiness/HRV/RHR deviation and asks the AI for a short
+  // explanation of the cause. See /api/dashboard/ai-explanation-insight.
+  // Unlike the others, this insight is UPDATED after the batch arrives - the backend
+  // generates the explanation in the background and it has to be fetched afterwards (polling
+  // below). The batch provides the initial value and the overlay replaces it with a fresher
+  // result. The overlay is kept together with the date it was produced for, so that switching
+  // days does not show an explanation from the previous date.
   const [aiExplanationOverride, setAiExplanationOverride] = useState(null);
   const aiExplanationInsight = aiExplanationOverride && aiExplanationOverride.date === selectedDate
     ? aiExplanationOverride.data
     : batchedInsights['ai-explanation-insight'];
-  // Runda 12 (audyt): jawny stan ładowania - bez tego karta po prostu nie renderowała
-  // się NIC (ani treści, ani komunikatu) między mountem komponentu a odpowiedzią API,
-  // co na wolniejszym połączeniu wyglądało jak zniknięcie/brak karty, a nie jej ładowanie.
+  // Round 12 (audit): an explicit loading state - without it the card simply rendered
+  // NOTHING (neither content nor a message) between the component mounting and the API
+  // response, which on a slower connection looked like a missing card rather than a loading one.
   const isLoadingAiExplanation = isLoadingBatchedInsights;
 
-  // Backend generuje wyjaśnienie AI W TLE i zwraca `generating: true` zanim tekst jest
-  // gotowy (patrz /api/dashboard/ai-explanation-insight w dashboard.js). Wcześniej karta
-  // pokazywała statyczny tekst "wyjaśnienie pojawi się po odświeżeniu" i wymagała od
-  // użytkownika RĘCZNEGO przeładowania strony, żeby zobaczyć wynik. Tu odpytujemy
-  // ponownie co kilka sekund, dopóki backend nie zwróci `generating: false` (gotowe albo
-  // poddane, np. brak klucza AI) - maks. ograniczona liczba prób, żeby nie odpytywać
-  // w nieskończoność, gdyby generowanie w tle z jakiegoś powodu nigdy się nie zakończyło.
+    // The backend generates the AI explanation IN THE BACKGROUND and returns `generating: true`
+    // before the text is ready (see /api/dashboard/ai-explanation-insight in dashboard.js).
+    // Previously the card showed the static text "the explanation will appear after a refresh"
+    // and required the user to reload the page MANUALLY to see the result. Here we poll again
+    // every few seconds until the backend returns `generating: false` (either done or given
+    // up, a missing AI key for instance) - capped at a limited number of attempts, so we do
+    // not poll forever if the background generation never finished for some reason.
   const MAX_AI_EXPLANATION_POLL_ATTEMPTS = 10;
   useEffect(() => {
     if (!aiExplanationInsight || !aiExplanationInsight.generating || !sessionToken) return;
@@ -577,7 +577,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           }
         }
       } catch (err) {
-        console.error('Błąd odpytywania o status generowania wyjaśnienia AI:', err);
+        console.error('Failed to poll the AI explanation generation status:', err);
       }
       if (attempts >= MAX_AI_EXPLANATION_POLL_ATTEMPTS) {
         clearInterval(intervalId);
@@ -585,19 +585,19 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     }, 4000);
     return () => { cancelled = true; clearInterval(intervalId); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [aiExplanationInsight?.generating, sessionToken, selectedDate]); // F-S1: optional chaining zamiast wyrażenia boolowskiego
+  }, [aiExplanationInsight?.generating, sessionToken, selectedDate]); // F-S1: optional chaining instead of a boolean expression
 
   // Benchmark "Ty dziś vs Ty w przeszłości" (Runda 11, prywatna wersja Whoop
-  // "people like you" - WYŁĄCZNIE własna historia, bez porównań z innymi
-  // użytkownikami). Patrz /api/dashboard/self-benchmark-insight.
+  // "people like you" - EXCLUSIVELY the user's own history, with no comparison to other
+  // users). See /api/dashboard/self-benchmark-insight.
   const selfBenchmarkInsight = batchedInsights['self-benchmark-insight'];
   const isLoadingSelfBenchmark = isLoadingBatchedInsights;
 
-  // Runda 13, nowa funkcja 1: typ treningu -> jakość snu tej samej nocy.
+  // Round 13, new feature 1: workout type -> the quality of that same night's sleep.
   const workoutTypeSleepInsight = batchedInsights['workout-type-sleep-insight'];
   const isLoadingWorkoutTypeSleep = isLoadingBatchedInsights;
 
-  // Runda 13, nowa funkcja 2: masa mięśniowa vs spożycie białka.
+  // Round 13, new feature 2: muscle mass vs protein intake.
   const muscleProteinInsight = batchedInsights['muscle-protein-insight'];
   const isLoadingMuscleProtein = isLoadingBatchedInsights;
 
@@ -605,15 +605,15 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const temperatureDivergenceInsight = batchedInsights['temperature-divergence-insight'];
   const isLoadingTemperatureDivergence = isLoadingBatchedInsights;
 
-  // Runda 13, nowa funkcja 4: proporcje obwodów ciała (barki/talia, klatka/talia).
+  // Round 13, new feature 4: body circumference proportions (shoulders/waist, chest/waist).
   const bodyProportionsInsight = batchedInsights['body-proportions-insight'];
   const isLoadingBodyProportions = isLoadingBatchedInsights;
 
-  // Runda 13, nowa funkcja 5: aktywność dnia -> apetyt tego samego dnia.
+  // Round 13, new feature 5: the day's activity -> appetite on the same day.
   const activityAppetiteInsight = batchedInsights['activity-appetite-insight'];
   const isLoadingActivityAppetite = isLoadingBatchedInsights;
 
-  // Runda 13, nowa funkcja 6: jakość diety jako modyfikator tempa zmiany wagi.
+  // Round 13, new feature 6: diet quality as a modifier of the rate of weight change.
   const dietQualityWeightPaceInsight = batchedInsights['diet-quality-weight-pace-insight'];
   const isLoadingDietQualityWeightPace = isLoadingBatchedInsights;
 
@@ -621,26 +621,26 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const streakWeightEffectInsight = batchedInsights['streak-weight-effect-insight'];
   const isLoadingStreakWeightEffect = isLoadingBatchedInsights;
 
-  // Runda 13, nowa funkcja 8: siedzenie -> wydajność treningu tego dnia.
+  // Round 13, new feature 8: sitting -> workout performance that day.
   const sedentaryPerformanceInsight = batchedInsights['sedentary-performance-insight'];
   const isLoadingSedentaryPerformance = isLoadingBatchedInsights;
 
-  // Insight: Hydratacja (water_ml) a jakość snu (sleep_score) — korelacja z ostatnich
-  // 60 dni. Analogiczny wzorzec do hydration-readiness-insight, ale fokus na sen,
-  // nie gotowość. Patrz /api/dashboard/water-sleep-insight.
+  // Insight: hydration (water_ml) vs sleep quality (sleep_score) - a correlation over the
+  // last 60 days. The same pattern as hydration-readiness-insight, but focused on sleep
+  // rather than readiness. See /api/dashboard/water-sleep-insight.
   const waterSleepInsight = batchedInsights['water-sleep-insight'];
   const isLoadingWaterSleep = isLoadingBatchedInsights;
 
-  // Gotowość do treningu dziś (deterministyczny composite score z Oury + Apple Health).
-  // Nie wymaga AI — szybkie, bez kosztu tokenów. Patrz /api/dashboard/training-readiness.
+  // Readiness to train today (a deterministic composite score from Oura + Apple Health).
+  // Needs no AI - fast, with no token cost. See /api/dashboard/training-readiness.
   const trainingReadiness = batchedInsights['training-readiness'];
 
-  // Analiza planu treningowego AI (Gemini, cache 7 dni). ?refresh=1 wymusza regenerację.
-  // Dane: 4 tygodnie treningów + cel sylwetki + skład ciała + 7d avg regeneracji.
-  // Patrz /api/dashboard/training-plan-insight.
-  // Jak przy wyjaśnieniu AI: wartość startowa pochodzi ze wsadu, ale przycisk
-  // "Odśwież" (refresh=1, wymusza ponowne wygenerowanie po stronie AI) musi móc ją
-  // nadpisać. Nakładka pamięta datę, dla której powstała.
+  // AI training plan analysis (Gemini, cached for 7 days). ?refresh=1 forces regeneration.
+  // Data: 4 weeks of workouts + the body goal + body composition + a 7-day recovery average.
+  // See /api/dashboard/training-plan-insight.
+  // As with the AI explanation: the initial value comes from the batch, but the "Refresh"
+  // button (refresh=1, which forces the AI to regenerate) has to be able to override it.
+  // The overlay remembers the date it was produced for.
   const [trainingPlanOverride, setTrainingPlanOverride] = useState(null);
   const [isRefreshingTrainingPlan, setIsRefreshingTrainingPlan] = useState(false);
   const trainingPlanInsight = trainingPlanOverride && trainingPlanOverride.date === selectedDate
@@ -649,8 +649,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const isLoadingTrainingPlan = isLoadingBatchedInsights || isRefreshingTrainingPlan;
   const fetchTrainingPlanInsight = async (refresh = false) => {
     if (!sessionToken) return;
-    // Guard: nie wysyłaj kolejnego żądania gdy poprzednie jeszcze trwa
-    // (kliknięcie "Odśwież" w trakcie ładowania).
+      // Guard: do not send another request while the previous one is still in flight
+      // (clicking "Refresh" during loading).
     if (isLoadingTrainingPlan && !refresh) return;
     setIsRefreshingTrainingPlan(true);
     try {
@@ -662,35 +662,35 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
       if (res.status === 401) { setSessionExpired(true); return; }
       if (res.ok) setTrainingPlanOverride({ date: selectedDate, data: await res.json() });
     } catch (err) {
-      console.error('Błąd pobierania analizy planu treningowego AI:', err);
+      console.error('Failed to fetch the AI training plan analysis:', err);
     } finally {
       setIsRefreshingTrainingPlan(false);
     }
   };
-  // Auto-fetch ograniczony do 1×/godzinę przez localStorage, żeby nie bić
-  // w endpoint przy każdym odświeżeniu strony (backend ma 7-dniowy cache AI,
-  // ale samo zapytanie HTTP też jest zbędne gdy danych nie ma zmienionych).
+    // Auto-fetch limited to once an hour via localStorage, so we do not hammer the endpoint
+    // on every page refresh (the backend has a 7-day AI cache, but the HTTP request itself is
+    // also unnecessary when the data has not changed).
 
   // === INSIGHTY TRENINGOWE (Runda 25): Oura + Apple Watch cross-device ===
 
-  // Sen Oura → wydajność treningu Apple Watch (dzień następny)
+  // Oura sleep -> Apple Watch workout performance (the following day)
   const sleepWorkoutPerfInsight = batchedInsights['sleep-workout-performance-insight'];
 
-  // Gotowość Oura → wydajność Apple Watch (ten sam dzień)
+  // Oura readiness -> Apple Watch performance (the same day)
   const readinessWorkoutInsight = batchedInsights['readiness-workout-insight'];
 
-  // Polaryzacja stref tętna 80/20 (Apple Watch only)
+  // 80/20 heart-rate zone polarisation (Apple Watch only)
   const hrPolarizationInsight = batchedInsights['hr-polarization-insight'];
 
-  // Ciężki trening Apple Watch → HRV/RHR Oura dzień +1/+2
+  // A hard Apple Watch workout -> Oura HRV/RHR on day +1/+2
   const workoutRecoveryHrvInsight = batchedInsights['workout-recovery-hrv-insight'];
 
-  // Przerwa między treningami → wydajność (Apple Watch only)
+  // The gap between workouts -> performance (Apple Watch only)
   const workoutRestPerfInsight = batchedInsights['workout-rest-performance-insight'];
 
-  // "Tag dnia" - zakresy dat oznaczone kontekstem (choroba/wakacje/późne zaśnięcie),
-  // które wybrane insighty powyżej wykluczają z liczenia własnej normy/baseline
-  // (patrz backend: routes/dayEvents.js + getExcludedDates w routes/dashboard.js).
+  // "Day tag" - date ranges marked with a context (illness/holiday/a late bedtime) that
+  // selected insights above exclude when computing the user's own norm or baseline
+  // (see the backend: routes/dayEvents.js + getExcludedDates in routes/dashboard.js).
   const DAY_EVENT_TYPES = [
     { value: 'illness', label: 'Choroba' },
     { value: 'vacation', label: 'Wakacje / urlop' },
@@ -725,7 +725,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         setDayEvents(Array.isArray(data) ? data : []);
       }
     } catch (err) {
-      console.error('Błąd pobierania zdarzeń dnia:', err);
+      console.error('Failed to fetch the day events:', err);
     } finally {
       if (!(cancelledRef && cancelledRef.current)) setIsLoadingDayEvents(false);
     }
@@ -764,7 +764,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         setNewEventEnd('');
         setNewEventNote('');
         setDayEventMessage({ type: 'success', text: 'Zapisano zdarzenie.' });
-        await fetchDayEvents({ current: false }); // F-S3: cancelledRef wymagany przez sygnaturę funkcji
+        await fetchDayEvents({ current: false }); // F-S3: cancelledRef is required by the function signature
         setTimeout(() => setDayEventMessage({ type: '', text: '' }), 4000);
       } else {
         const data = await res.json().catch(() => ({}));
@@ -789,34 +789,34 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         setDayEvents(prev => prev.filter(ev => ev.id !== id));
       }
     } catch (err) {
-      console.error('Błąd usuwania zdarzenia dnia:', err);
+      console.error('Failed to delete the day event:', err);
     }
   };
 
-  // Czy podana data (np. aktualnie wybrany dzień na dashboardzie) wpada w zakres
-  // któregoś zdarzenia o jednym z podanych typów - użyte do dopisku kontekstu
-  // ("oznaczony: choroba") w kartach insightów, które ten typ wyklucza z baseline.
+  // Whether the given date (the day currently selected on the dashboard, for instance) falls
+  // within the range of an event of one of the given types - used for the context note
+  // ("marked: illness") on the insight cards that exclude that type from the baseline.
   const getDayEventLabelForDate = (dateStr, types) => {
     if (!dateStr || dayEvents.length === 0) return null;
     const match = dayEvents.find(ev => types.includes(ev.type) && dateStr >= ev.start_date && dateStr <= ev.end_date);
     return match ? DAY_EVENT_TYPE_LABELS[match.type] : null;
   };
 
-  // Zwijalna sekcja "Analizy" (UX: rundy 7 - 12 kart insightów w jednym miejscu,
-  // domyślnie zwinięta, żeby nie zalewać dashboardu od razu po wejściu).
+  // Collapsible "Analizy" section (UX: round 7 - 12 insight cards in one place, collapsed by
+  // default so the dashboard is not flooded the moment it opens).
   const [isAnalizyOpen, setIsAnalizyOpen] = useState(false);
-  // Zwijalna tabela stref tętna (UX: rundy 7 - statyczna tabela referencyjna 5
-  // strefy, nie trzeba jej widzieć od razu, wystarczy link rozwijający).
+  // Collapsible heart-rate zone table (UX: round 7 - a static 5-zone reference table; there
+  // is no need to see it immediately, an expanding link is enough).
   const [isHrZonesOpen, setIsHrZonesOpen] = useState(false);
-  // Zwijalna historia suplementacji (UX: runda 7 - pasek 7 dni + lista "Ostatnio
-  // przyjmowane" domyślnie schowane za "Pokaż historię", widoczny tylko licznik).
+  // Collapsible supplementation history (UX: round 7 - the 7-day bar and the "Ostatnio
+  // przyjmowane" list hidden behind "Pokaz historie" by default, only the counter visible).
   const [isSupplementsHistoryOpen, setIsSupplementsHistoryOpen] = useState(false);
 
-  // Adaptacyjna korekta celu kalorycznego: porównanie deklarowanego bilansu
-  // (z zalogowanych posiłków) z bilansem wynikającym z realnej zmiany wagi
-  // (patrz endpoint /api/dashboard/calorie-target-suggestion). caloriesTrigger
-  // wymusza ponowne pobranie po kliknięciu "Zastosuj", żeby karta zniknęła/
-  // zaktualizowała się bez czekania na pełne odświeżenie strony.
+  // Adaptive correction of the calorie goal: comparing the declared balance (from the logged
+  // meals) with the balance implied by the real weight change (see the
+  // /api/dashboard/calorie-target-suggestion endpoint). caloriesTrigger forces a re-fetch
+  // after clicking "Apply", so the card disappears or updates without waiting for a full
+  // page refresh.
   const [calorieSuggestion, setCalorieSuggestion] = useState(null);
   const [caloriesTrigger, setCaloriesTrigger] = useState(0);
   const [isApplyingCalorieSuggestion, setIsApplyingCalorieSuggestion] = useState(false);
@@ -833,7 +833,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         if (!cancelled && res.status === 401) { setSessionExpired(true); return; }
         if (res.ok && !cancelled) setCalorieSuggestion(await res.json());
       } catch (err) {
-        console.error('Błąd pobierania korekty celu kalorycznego:', err);
+        console.error('Failed to fetch the calorie goal correction:', err);
       }
     };
     fetchCalorieSuggestion();
@@ -856,11 +856,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         if (onRefresh) onRefresh();
         setCaloriesTrigger(t => t + 1);
       } else if (res.status === 401) {
-        // F-S4: Obsługa 401 — wygasła sesja
+        // F-S4: handle 401 - an expired session
         onLogout();
       }
     } catch (err) {
-      console.error('Błąd zapisu nowego celu kalorycznego:', err);
+      console.error('Failed to save the new calorie goal:', err);
     } finally {
       setIsApplyingCalorieSuggestion(false);
     }
@@ -880,7 +880,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           setHistoryData(data);
         }
       } catch (err) {
-        console.error('Błąd pobierania historii:', err);
+        console.error('Failed to fetch the history:', err);
       }
     };
     fetchHistory();
@@ -896,8 +896,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     );
 
     if (validData.length === 0) {
-      // Brak rzeczywistych danych wagi/składu ciała w bazie - pokazujemy
-      // szczery komunikat o braku danych, bez generowania fałszywego wykresu.
+                // No real weight or body composition data in the database - we show an honest
+                // "no data" message rather than generating a fake chart.
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '10px', marginTop: '10px' }}>
           <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>
@@ -1007,32 +1007,32 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     );
   };
 
-  // Dane wyłącznie z bazy (backend) - bez sztucznych wartości demo.
-  // Gdy w bazie nie ma jeszcze wartości za dany dzień, pokazujemy 0 / brak danych.
+  // Data comes exclusively from the database (backend) - no artificial demo values.
+  // When the database has no value for a given day yet, we show 0 / no data.
   const sleepScore = summary.sleep_score ?? 0;
   const readinessScore = summary.readiness_score ?? 0;
 
-  // POPRAWKA (runda 4 audytu): cele dzienne (kroki, kalorie, sen, minuty ćwiczeń) mogą
-  // być świadomie zapisane jako 0 (cel wyłączony - patrz `??` w kartach celów niżej oraz
-  // poprawka w dashboard.js/ActivityTracker.jsx, gdzie `||` wcześniej bezpowrotnie
-  // nadpisywało takie 0 domyślną wartością). Samo dzielenie przez cel=0 dawałoby
-  // Infinity/NaN w procencie paska postępu - helper jawnie traktuje wyłączony cel jako
-  // "0% do pokazania" zamiast renderować NaN%.
+  // FIX (audit round 4): the daily goals (steps, calories, sleep, exercise minutes) may be
+  // deliberately stored as 0 (the goal is switched off - see `??` in the goal cards below and
+  // the fix in dashboard.js/ActivityTracker.jsx, where `||` used to irrecoverably overwrite
+  // such a 0 with a default). Dividing by goal=0 on its own would give Infinity/NaN in the
+  // progress bar percentage - the helper explicitly treats a disabled goal as "0% to show"
+  // instead of rendering NaN%.
   const goalProgressPct = (value, target) => target > 0 ? Math.min(Math.round((value / target) * 100), 100) : 0;
 
   const steps = summary.steps || 0;
-  // activeCalories: 0 i "brak danych" są tu równoważne (brak treningu = 0 kalorii
-  // aktywnych), więc || 0 zostaje - w odróżnieniu od rhr/hrv poniżej.
+  // activeCalories: 0 and "no data" are equivalent here (no workout = 0 active calories), so
+  // || 0 stays - unlike rhr/hrv below.
   const activeCalories = summary.calories_burned_active || 0;
-  // POPRAWKA (runda 4 audytu): effortScore liczył % wysiłku względem sztywnych 800
-  // kcal, a "Bateria energii" niżej liczy rozładowanie względem
-  // targetActiveCaloriesForBattery (cel z ustawień, domyślnie 500 kcal) - dwie karty
-  // opisujące tę samą aktywność dnia dawały niespójne, nieporównywalne ze sobą %,
-  // gdy cel użytkownika różnił się od 800 kcal. Ujednolicone na wspólny mianownik.
-  // POPRAWKA (runda 4 audytu): `||` nadpisywał świadomie zapisany cel=0 (wyłączony cel
-  // aktywnych kalorii, patrz dashboard.js/ActivityTracker.jsx) domyślnym 500. `??`
-  // zachowuje realne 0 - dzielenie przez nie jest bezpieczne tutaj, bo effortScore i
-  // batteryDepletion niżej mają osobne zabezpieczenie przed 0/0 (NaN).
+  // FIX (audit round 4): effortScore computed the effort % against a hard-coded 800 kcal,
+  // while the "energy battery" below computes discharge against targetActiveCaloriesForBattery
+  // (the goal from the settings, 500 kcal by default) - two cards describing the same day's
+  // activity gave inconsistent, mutually incomparable percentages whenever the user's goal
+  // differed from 800 kcal. Unified onto a common denominator.
+  // FIX (audit round 4): `||` overwrote a deliberately stored goal=0 (active calorie goal
+  // switched off, see dashboard.js/ActivityTracker.jsx) with the default 500. `??` preserves
+  // a real 0 - dividing by it is safe here, because effortScore and batteryDepletion below
+  // have their own separate guard against 0/0 (NaN).
   const targetActiveCaloriesForBattery = summary.target_active_calories ?? 500;
   const effortScore = activeCalories > 0 ? Math.round(Math.min((activeCalories / targetActiveCaloriesForBattery) * 100, 100)) : 0;
   const activeMinutes = summary.active_minutes || 0;
@@ -1040,15 +1040,15 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const sleepDurationHours = summary.sleep_duration ?? 0;
   const sleepDeepHours = summary.sleep_deep ?? 0;
   const sleepRemHours = summary.sleep_rem ?? 0;
-  // sleepAwakeMins nie jest jeszcze wyliczane z danych Oura (zawsze 0) - karta
-  // "Czas czuwania" jest dlatego ukrywana w renderze, żeby nie pokazywać fałszywego 0m.
+  // sleepAwakeMins is not computed from the Oura data yet (always 0) - the "Czas czuwania"
+  // card is therefore hidden in the render, so we do not show a fake 0m.
   const sleepAwakeMins = 0;
   const sleepLightHours = Math.max(sleepDurationHours - sleepDeepHours - sleepRemHours - (sleepAwakeMins / 60), 0);
-  // Rozbicie godz/min do karty "Czas snu" - ten sam wzorzec zaokrąglania co w
-  // formatHoursMins (utils/format.js), ale zwracający osobne liczby zamiast
-  // gotowego stringa (DailyGoalCard przyjmuje val1/val2 osobno). Bug fix: bez
-  // przeniesienia "min === 60" do kolejnej godziny, wartości blisko pełnej
-  // godziny (np. 7.995h) pokazywały się jako "7 godz 60 min" zamiast "8 godz 0 min".
+  // Hours/minutes breakdown for the "Czas snu" card - the same rounding pattern as in
+  // formatHoursMins (utils/format.js), but returning separate numbers rather than a ready
+  // string (DailyGoalCard takes val1/val2 separately). Bug fix: without carrying "min === 60"
+  // over to the next hour, values close to a full hour (7.995h, say) showed as
+  // "7 godz 60 min" instead of "8 godz 0 min".
   const sleepDurationDisplay = (() => {
     let hours = Math.floor(sleepDurationHours);
     let mins = Math.round((sleepDurationHours - hours) * 60);
@@ -1056,8 +1056,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     return { hours, mins };
   })();
 
-  // rhr/hrv: 0 byłoby fizjologicznie nierealną wartością, więc tu (w odróżnieniu od
-  // np. steps) używamy ?? null, żeby odróżnić "brak danych" od realnego pomiaru.
+  // rhr/hrv: 0 would be a physiologically impossible value, so here (unlike steps, for
+  // example) we use ?? null to tell "no data" apart from a real measurement.
   const rhr = summary.rhr ?? null;
   const hrv = summary.hrv ?? null;
 
@@ -1065,9 +1065,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const fatRatio = summary.fat_ratio ?? 0;
   const muscleMass = summary.muscle_mass ?? 0;
 
-  // BMI - liczone wyłącznie z realnego wzrostu użytkownika (Ustawienia -> Wzrost).
-  // Brak fałszywego domyślnego wzrostu 1.80m i brak fałszywego fallbacku "24.5".
-  // Gdy nie ma wagi lub wzrostu, BMI po prostu nie jest pokazywane.
+  // BMI - computed exclusively from the user's real height (Settings -> Height).
+  // No fake default height of 1.80m and no fake "24.5" fallback.
+  // When the weight or the height is missing, the BMI is simply not shown.
   const heightCm = summary.height_cm ?? null;
   const bmiValue = (weight > 0 && heightCm)
     ? Math.round((weight / ((heightCm / 100) * (heightCm / 100))) * 10) / 10
@@ -1079,14 +1079,14 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     : bmiValue < 30 ? 'Nadwaga'
     : t('Otyłość');
 
-  // Kalkulacja stref tętna (Karvonen) na bazie RHR z Oura.
-  // userMaxHr: realne HRmax (220 - wiek) liczone przez backend z roku urodzenia
-  // użytkownika (Ustawienia -> Rok urodzenia). Fallback 190 (~wiek 30 lat) tylko
-  // gdy użytkownik nie podał roku urodzenia.
+  // Heart-rate zone calculation (Karvonen) based on the RHR from Oura.
+  // userMaxHr: the real HRmax (220 - age) computed by the backend from the user's year of
+  // birth (Settings -> Year of birth). The 190 fallback (~age 30) applies only when the user
+  // has not given a year of birth.
   const userMaxHr = summary.user_max_hr || 190;
-  // rhr może być null (brak danych z Oura za ten dzień) - do samych obliczeń
-  // używamy lokalnego fallbacku 0, ale karta poniżej jest ukrywana, gdy rhr == null,
-  // żeby nie pokazywać stref wyliczonych z fałszywego RHR.
+  // rhr can be null (no Oura data for that day) - for the calculation itself we use a local
+  // fallback of 0, but the card below is hidden when rhr == null, so we never show zones
+  // computed from a fake RHR.
   const rhrForZones = rhr ?? 0;
   const hrReserve = userMaxHr - rhrForZones;
   const hrZone1Min = Math.round(hrReserve * 0.5 + rhrForZones);
@@ -1099,10 +1099,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const hrZone4Max = Math.round(hrReserve * 0.9 + rhrForZones);
   const hrZone5Min = Math.round(hrReserve * 0.9 + rhrForZones);
   
-  // Odżywianie
-  // Użyto ?? (nie ||), bo cel ustawiony świadomie na 0 (np. dieta eliminacyjna jednego
-  // makroskładnika) nie powinien być nadpisywany domyślną wartością - ten sam wzorzec
-  // błędu naprawiony już wcześniej dla target_steps/target_active_calories/itd.
+  // Nutrition
+  // We use ?? (not ||), because a goal deliberately set to 0 (an elimination diet for one
+  // macronutrient, say) should not be overwritten with a default - the same bug pattern
+  // already fixed earlier for target_steps/target_active_calories/etc.
   const targetCalories = summary.target_calories ?? 2000;
   const eatenCalories = summary.calories_eaten || 0;
   const targetProtein = summary.target_protein ?? 150;
@@ -1111,12 +1111,12 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const eatenProtein = summary.eaten_protein || 0;
   const eatenCarbs = summary.eaten_carbs || 0;
   const eatenFat = summary.eaten_fat || 0;
-  // POPRAWKA (runda 17 audytu): wcześniej procenty wypełnienia pasków liczyły
-  // `eatenX / (targetX || 2000)` itd. - `||` ponownie nadpisywał świadomie
-  // zapisane 0 (cel wyłączony/wyzerowany) domyślną wartością, mimo że targetX
-  // już jest poprawnie wyliczone przez `??` powyżej. Dodatkowo dzielenie przez 0
-  // (gdyby cel=0 trafił bezpośrednio do dzielenia) dawałoby Infinity/NaN. Wzorzec
-  // zabezpieczenia jak przy waterPct: cel<=0 -> procent 0, brak dzielenia przez 0.
+  // FIX (audit round 17): previously the bar fill percentages computed
+  // `eatenX / (targetX || 2000)` and so on - `||` again overwrote a deliberately stored 0
+  // (a disabled or zeroed goal) with a default, even though targetX is already computed
+  // correctly with `??` above. On top of that, dividing by 0 (had goal=0 reached the division
+  // directly) would give Infinity/NaN. The guard follows the waterPct pattern: goal<=0 ->
+  // percentage 0, no division by zero.
   const caloriesPct = targetCalories > 0 ? Math.min((eatenCalories / targetCalories) * 100, 100) : 0;
   const carbsPct = targetCarbs > 0 ? Math.min((eatenCarbs / targetCarbs) * 100, 100) : 0;
   const proteinPct = targetProtein > 0 ? Math.min((eatenProtein / targetProtein) * 100, 100) : 0;
@@ -1124,25 +1124,25 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 
   // Licznik wody
   const waterMl = summary.water_ml || 0;
-  // POPRAWKA (runda 4 audytu): jak wyżej - `??` zachowuje świadomie zapisane 0 (cel
-  // wyłączony), a waterPct dostaje jawne zabezpieczenie przed dzieleniem 0/0 (NaN),
-  // gdy cel=0 i nic jeszcze nie wypito.
+  // FIX (audit round 4): as above - `??` preserves a deliberately stored 0 (goal switched
+  // off), and waterPct gets an explicit guard against a 0/0 division (NaN) when goal=0 and
+  // nothing has been drunk yet.
   const targetWaterMl = summary.target_water_ml ?? 2500;
   const waterPct = targetWaterMl > 0 ? Math.min(Math.round((waterMl / targetWaterMl) * 100), 100) : 0;
 
-  // Aktualne obciążenie na suwaku (np. wysiłek)
-  const currentLoadPos = Math.max(Math.min(effortScore, 100), 5); // min 5% dla widoczności suwaka
+  // The current load on the slider (effort, for instance)
+  const currentLoadPos = Math.max(Math.min(effortScore, 100), 5); // at least 5% so the slider stays visible
   
-  // Bateria energii - realny algorytm, bez sztucznych przesunięć.
-  // Punkt startowy: readinessScore (realny wynik regeneracji z Oura/Apple Health).
-  // Rozładowanie: proporcjonalne do dzisiejszych aktywnych kalorii względem celu
-  // aktywności użytkownika (im więcej wysiłku względem celu, tym większy spadek -
-  // analogicznie do "Body Battery" w urządzeniach typu Garmin, ale z realnych danych).
-  // Brak readinessScore (brak synchronizacji urządzenia) = brak baterii, nie zgadujemy.
-  // POPRAWKA (runda 4 audytu): gdy cel aktywnych kalorii jest świadomie ustawiony na 0
-  // (patrz `??` powyżej), a użytkownik nie spalił żadnych aktywnych kalorii, samo
-  // dzielenie 0/0 dawało NaN i psuło całą "baterię energii" - dodane jawne
-  // zabezpieczenie: cel=0 oznacza brak rozładowania (rozładowanie tylko gdy jest realny
+  // Energy battery - a real algorithm, with no artificial offsets.
+  //
+  // Discharge: proportional to today's active calories relative to the user's activity goal
+  // (the more effort relative to the goal, the larger the drop - analogous to "Body Battery"
+  // in Garmin-style devices, but from real data).
+  // No readinessScore (the device has not synced) = no battery; we do not guess.
+  // FIX (audit round 4): when the active calorie goal is deliberately set to 0 (see `??`
+  // above) and the user burned no active calories, the bare 0/0 division gave NaN and broke
+  // the whole "energy battery" - hence an explicit guard: goal=0 means no discharge
+  // (discharge only when there is a real
   // cel do przekroczenia).
   const batteryDepletion = readinessScore > 0 && targetActiveCaloriesForBattery > 0
     ? Math.round(Math.min(activeCalories / targetActiveCaloriesForBattery, 1) * 20)
@@ -1151,8 +1151,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     ? Math.max(Math.min(readinessScore - batteryDepletion, 100), 0)
     : null;
 
-  // Porównanie z wczorajszym dniem - liczone z realnej historii (historyData),
-  // tym samym algorytmem co dzisiejsza bateria. Brak danych za wczoraj = brak etykiety.
+  // Comparison with yesterday - computed from the real history (historyData) using the same
+  // algorithm as today's battery. No data for yesterday = no label.
   const sortedHistoryForBattery = [...historyData].sort((a, b) => a.date.localeCompare(b.date));
   const todayHistoryIdx = selectedDate
     ? sortedHistoryForBattery.findIndex(d => d.date === selectedDate)
@@ -1169,8 +1169,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     ? batteryPct - yesterdayBatteryPct
     : null;
 
-  // Ostatnia synchronizacja i źródło danych aktywności - pole `last_sync` było już
-  // od dawna pobierane z backendu, ale nigdzie nie wyświetlane użytkownikowi.
+  // The last sync and the activity data source - the `last_sync` field had long been fetched
+  // from the backend, but was never displayed to the user anywhere.
   const lastSyncDate = summary.last_sync ? new Date(summary.last_sync) : null;
   const formatRelativeSync = (date) => {
     if (!date || isNaN(date.getTime())) return null;
@@ -1185,37 +1185,37 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const activitySourceLabels = { apple: '🍏 Apple Health', oura: '💍 Oura Ring', google_fit: '🟢 Google Fit' };
   const activitySourceLabel = summary.activity_source ? (activitySourceLabels[summary.activity_source] || summary.activity_source) : null;
 
-  // Dystans i rozbicie aktywności dnia (Oura daily_activity / Google Fit / Apple Health) -
-  // liczniki dzienne, zerujące się każdego dnia tak jak kroki (patrz backend dashboard.js).
+  // Distance and the day's activity breakdown (Oura daily_activity / Google Fit / Apple
+  // Health) - daily counters that reset every day, like steps (see the backend dashboard.js).
   const distanceMeters = summary.distance_meters || 0;
   const distanceKm = Math.round((distanceMeters / 1000) * 10) / 10;
   const sedentaryMinutes = summary.sedentary_minutes || 0;
   const lowActivityMinutes = summary.low_activity_minutes || 0;
   const hasActivityBreakdown = distanceMeters > 0 || sedentaryMinutes > 0 || lowActivityMinutes > 0 || activeMinutes > 0;
 
-  // Realny poziom stresu z Oury (endpoint daily_stress) - w przeciwieństwie do wcześniej
-  // usuniętej, w 100% fałszywej sekcji, ta karta pojawia się TYLKO gdy backend faktycznie
-  // ma realne dane (pierścionek z funkcją pomiaru stresu).
+  // The real stress level from Oura (the daily_stress endpoint) - unlike the section removed
+  // earlier, which was 100% fabricated, this card appears ONLY when the backend genuinely has
+  // real data (a ring with stress measurement).
   const stressHighMinutes = summary.stress_high_minutes;
   const stressRecoveryMinutes = summary.stress_recovery_minutes;
   const stressSummary = summary.stress_summary;
   const hasStressData = stressHighMinutes != null || stressRecoveryMinutes != null || stressSummary != null;
   const stressSummaryLabels = { restored: 'Zregenerowany', normal: 'Normalny', stressful: t('Stresujący') };
 
-  // Ostatni zapisany pomiar obwodów ciała - pełny CRUD i wykres trendu jest już w
-  // ActivityTracker, tu tylko skrót najnowszej wartości na głównym Dashboardzie.
+  // The last saved body measurement - the full CRUD and the trend chart are already in
+  // ActivityTracker; this is just a shortcut to the latest value on the main Dashboard.
   const latestBodyMeasurement = summary.latest_body_measurement || null;
 
-  // Streaki celów - liczone przez backend wyłącznie na bazie historii już zapisanej
-  // w bazie (meals + health_metrics), zero nowych integracji (punkt 9 z analizy).
+  // Goal streaks - computed by the backend exclusively from the history already stored in
+  // the database (meals + health_metrics), with zero new integrations (point 9 of the analysis).
   const calorieStreakDays = summary.calorie_streak_days || 0;
   const sleepStreakDays = summary.sleep_streak_days || 0;
 
-  // Lista ostatnich aktywności - tylko rzeczywiste treningi z bazy.
-  // Gdy brak treningów, lista jest pusta (patrz pusty stan w renderze).
-  // UWAGA: poprzednio dateLabel był zahardkodowany na 'dzisiaj' niezależnie od
-  // selectedDate - przy przeglądaniu dashboardu za inny dzień (date picker w App.jsx)
-  // karta treningu błędnie pokazywała "dzisiaj" dla treningów z tamtego dnia.
+  // List of recent activities - only real workouts from the database.
+  // When there are no workouts the list is empty (see the empty state in the render).
+  // NOTE: dateLabel used to be hard-coded to 'dzisiaj' regardless of selectedDate - when
+  // browsing the dashboard for another day (the date picker in App.jsx) the workout card
+  // incorrectly said "dzisiaj" for workouts from that other day.
   const todayLocalStr = (() => {
     const d = new Date();
     const tzOffset = d.getTimezoneOffset() * 60000;
@@ -1230,7 +1230,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
       }))
     : [];
 
-  // Stany dla wbudowanego czatu z asystentem Dietetyk AI
+  // State for the built-in chat with the Dietetyk AI assistant
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState([
@@ -1266,20 +1266,20 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     };
   }, [chatMessages, isChatOpen]);
 
-  // `overrideText` pozwala wysłać wiadomość bez przepisywania jej do pola input -
-  // używane przez chipy szybkich pytań (Runda 8), które wysyłają gotowy tekst od razu
-  // po kliknięciu, zamiast najpierw wstawiać go do <input> i czekać na osobny submit.
+  // `overrideText` allows sending a message without writing it into the input field - used by
+  // the quick-question chips (round 8), which send ready-made text immediately on click
+  // instead of first inserting it into the <input> and waiting for a separate submit.
   const handleSendChat = async (e, overrideText) => {
     if (e && e.preventDefault) e.preventDefault();
     const userMsg = (overrideText !== undefined ? overrideText : chatInput).trim();
     if (!userMsg || isSendingChat) return;
 
     setChatInput('');
-    // Budujemy nową historię jawnie (a nie przez closure na `chatMessages`) - setChatMessages
-    // poniżej jest asynchroniczny, więc zmienna `chatMessages` w tym wywołaniu funkcji
-    // wciąż wskazywałaby na stan SPRZED dodania aktualnej wiadomości użytkownika (stale
-    // closure). Bez tej poprawki backend (routes/chat.js) dostawał historię, w której
-    // brakowało właśnie wysłanej wiadomości - AI odpowiadał bez kontekstu ostatniego pytania.
+    // We build the new history explicitly (rather than through a closure over `chatMessages`) -
+    // setChatMessages below is asynchronous, so the `chatMessages` variable inside this call
+    // would still point at the state from BEFORE the current user message was added (a stale
+    // closure). Without this fix the backend (routes/chat.js) received a history missing the
+    // message that had just been sent - the AI answered without the context of the last question.
     const updatedHistory = [...chatMessages, { sender: 'user', text: userMsg }];
     setChatMessages(updatedHistory);
     setIsSendingChat(true);
@@ -1307,7 +1307,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     }
   };
 
-  // Dodanie wypitej wody (przyciski szybkiego dodawania + własna ilość)
+  // Adding water drunk (the quick-add buttons + a custom amount)
   const handleAddWater = async (amountMl) => {
     const amount = Number(amountMl);
     if (!amount || isNaN(amount) || amount <= 0 || isAddingWater) return;
@@ -1364,25 +1364,24 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     }
   };
 
-  // formatHoursMins przeniesione do utils/format.js (import na górze pliku) -
-  // ta sama logika była duplikowana też w Trends.jsx i potencjalnie ActivityTracker.jsx.
+  // formatHoursMins moved to utils/format.js (imported at the top of this file) -
+  // the same logic was also duplicated in Trends.jsx and potentially ActivityTracker.jsx.
 
-  // Renderowanie porady AI jako Markdown (pogrubienia, listy punktowane).
-  // dashboard.js prosi Gemini o odpowiedź w Markdown - bez tej konwersji
-  // React wyświetliłby "**tekst**" dosłownie, z gwiazdkami na ekranie.
-  // Najpierw escapujemy HTML (tekst generuje LLM, mógł przepisać coś od
-  // użytkownika), potem zamieniamy tylko znane znaczniki Markdown na HTML.
+  // Rendering the AI advice as Markdown (bold, bullet lists).
+  // dashboard.js asks Gemini for a Markdown answer - without this conversion React would
+  // display "**text**" literally, with the asterisks on screen.
+  // We escape the HTML first (the text is LLM-generated and could have copied something from
+  // the user), then convert only the known Markdown markers into HTML.
   const escapeHtml = (str) => str
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 
-  // Rozpoznaje nagłówki (## Analiza / ### Coś), listy punktowane ("- "/"* ") ORAZ
-  // numerowane ("1. ") - poprzednia wersja obsługiwała tylko listy punktowane i
-  // akapity, więc nowa, ustrukturyzowana odpowiedź AI (nagłówki "## Analiza" /
-  // "## Rekomendacje" z promptu w dashboard.js) renderowała się jako zwykły tekst
-  // z widocznymi "##" na ekranie. Domykamy każdą listę/nagłówek przy zmianie typu
-  // linii, żeby nigdy nie zostawić otwartego <ul>/<ol>.
+  // Recognises headings (## Analiza / ### Cos), bullet lists ("- "/"* ") AND numbered ones
+  // ("1. ") - the previous version handled only bullet lists and paragraphs, so the new,
+  // structured AI answer (the "## Analiza" / "## Rekomendacje" headings from the prompt in
+  // dashboard.js) rendered as plain text with visible "##" on screen. We close every
+  // list/heading when the line type changes, so an open <ul>/<ol> is never left behind.
   const renderAdviceMarkdown = (text) => {
     if (!text) return '';
     const lines = escapeHtml(text).split('\n');
@@ -1434,7 +1433,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   return (
     <div className="premium-dashboard-container">
       
-      {/* NAGŁÓWEK REGENERACJI AI */}
+      {/* AI RECOVERY HEADER */}
       <div className="dietetyk-ai-banner" style={{ boxShadow: getReadinessColor(), border: getReadinessBorder() }}>
         <div className="premium-title-row">
           <span className="dietetyk-greeting">
@@ -1455,7 +1454,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           />
         ) : (
           <p className="dietetyk-ai-advice-text">
-            {/* F-W1: Guard dla null HRV — wypisanie 'null ms' zamiast wartości */}
+            {/* F-W1: guard for a null HRV - it printed 'null ms' instead of a value */}
             {`Twoja regeneracja trzyma stabilny poziom (${readinessScore}%). HRV wynosi ${hrv != null ? hrv + ' ms' : '(brak danych)'} i mieści się w normie, więc organizm nie protestuje przeciwko aktywności. Dobrym wyborem będzie lekki tlenowy wysiłek kardio lub sesja mobility.`}
           </p>
         )}
@@ -1464,8 +1463,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         </button>
       </div>
 
-      {/* STATUS SYNCHRONIZACJI - dane już dawno zbierane (last_sync, activity_source),
-          ale wcześniej nigdzie nie ujawnione użytkownikowi. */}
+      {/* SYNC STATUS - data that had long been collected (last_sync, activity_source)
+          but was never surfaced to the user before. */}
       <div data-testid="status-sync-bar" style={{ gridColumn: 'span 2', display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', padding: '0 4px', marginTop: '-6px', marginBottom: '4px', fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>
         <span>
           {lastSyncLabel ? `🔄 Zsynchronizowano: ${lastSyncLabel}` : '🔄 Brak jeszcze synchronizacji'}
@@ -1475,9 +1474,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         )}
       </div>
 
-      {/* KOLUMNY DASHBOARDU DLA ZAPEWNIENIA MASONRY / BRAKU CZARNYCH PRZESTRZENI */}
+      {/* DASHBOARD COLUMNS, TO KEEP THE MASONRY LAYOUT FREE OF EMPTY BLACK AREAS */}
       <div className="dashboard-column">
-        {/* POTRÓJNE RINGI: SEN, REGENERACJA, WYSIŁEK */}
+        {/* THE THREE RINGS: SLEEP, RECOVERY, EFFORT */}
         <div className="premium-card">
           <div className="premium-title-row">
             <span className="premium-title">⚡ Regeneracja i Stan</span>
@@ -1507,7 +1506,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               <span className="ring-item-label" style={{ fontWeight: '700', color: '#fff' }}>⚡ Regeneracja</span>
             </div>
 
-            {/* Wysiłek */}
+            {/* Effort */}
             <div className="ring-item">
               <div style={{ position: 'relative', width: 84, height: 84, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <RenderProgressCircle size={84} strokeWidth={7} percentage={effortScore} color={effortScore > 0 ? "var(--danger)" : "rgba(255,255,255,0.08)"} />
@@ -1589,8 +1588,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         </div>
 
-        {/* GOTOWOŚĆ DO TRENINGU DZIŚ — pod celami dziennymi, jako bezpośrednia
-            odpowiedź na pytanie "co robić dziś z aktywnością?". */}
+        {/* READINESS TO TRAIN TODAY - below the daily goals, as a direct answer to the
+            question "what should I do about activity today?". */}
         {summary?.has_oura && trainingReadiness && trainingReadiness.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -1636,7 +1635,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* PORÓWNANIE TYDZIEŃ/MIESIĄC I BILANS KALORYCZNY NARASTAJĄCO */}
+        {/* WEEK/MONTH COMPARISON AND THE CUMULATIVE CALORIE BALANCE */}
         <div className="premium-card">
           <div className="premium-title-row">
             <span className="premium-title">{t("📊 Porównanie i bilans")}</span>
@@ -1698,11 +1697,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           )}
         </div>
 
-        {/* BATERIA ENERGII (0-100) - jedna liczba "ile mam dziś paliwa", ładowana snem
-            i rozładowywana obciążeniem oraz upływem dnia. Celowo NAD Wellness Score:
-            Wellness Score ocenia, jak dobry był dzień (zachowanie), bateria mówi, ile
-            zasobu zostało NA TERAZ - i to jest pierwsza rzecz, po którą sięga się
-            rano. Patrz /api/dashboard/energy-battery. */}
+        {/* ENERGY BATTERY (0-100) - one number for "how much fuel do I have today", charged
+            by sleep and discharged by load and the passing of the day. Deliberately ABOVE the
+            Wellness Score: the Wellness Score rates how good the day was (behaviour), while
+            the battery says how much of the resource is left AS OF NOW - and that is the first
+            thing anyone reaches for in the morning. See /api/dashboard/energy-battery. */}
         {energyBattery && energyBattery.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -1723,8 +1722,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               </span>
             </div>
 
-            {/* Pasek naładowania. Rola progressbar + wartości ARIA, żeby czytnik ekranu
-                podawał liczbę, a nie tylko kolorowy prostokąt. */}
+            {/* Charge bar. A progressbar role plus ARIA values, so a screen reader announces
+                the number rather than just a coloured rectangle. */}
             <div
               role="progressbar"
               aria-valuenow={energyBattery.battery}
@@ -1749,8 +1748,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               {energyBattery.recommendation}
             </p>
 
-            {/* Rozbicie: co naładowało, co zużyło. Bez tego liczba jest nieweryfikowalna
-                dla użytkownika, a to podważa zaufanie do całej karty. */}
+            {/* The breakdown: what charged it, what used it. Without this the number is
+                unverifiable for the user, which undermines trust in the whole card. */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', fontSize: '0.72rem', color: 'rgba(255,255,255,0.55)' }}>
               <span>noc +{energyBattery.components.nightCharge}</span>
               {energyBattery.components.activityDrain > 0 && (
@@ -1816,8 +1815,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* ANALIZA PLANU TRENINGOWEGO AI (Gemini, cache 7 dni). Ocenia, czy Twój plan
-            jest optymalny pod cel sylwetki. t("Odśwież") → ?refresh=1 → nowa analiza. */}
+        {/* AI TRAINING PLAN ANALYSIS (Gemini, cached for 7 days). It assesses whether your
+            plan is optimal for the body goal. t("Odśwież") -> ?refresh=1 -> a new analysis. */}
         {(trainingPlanInsight || isLoadingTrainingPlan) && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -1893,8 +1892,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* "TAG DNIA" - zakresy dat oznaczone kontekstem (choroba/wakacje/późne
-            zaśnięcie), wykluczane z liczenia normy w wybranych analizach powyżej. */}
+        {/* "DAY TAG" - date ranges marked with a context (illness/holiday/a late bedtime),
+            excluded from the norm calculation in selected analyses above. */}
         <div
           className="premium-card"
           role="button"
@@ -2009,9 +2008,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* ZWIJALNA SEKCJA "ANALIZY" - 12 kart opisowych porównań (sen, sód,
-            regeneracja, suplementy + 8 nowych z rundy 7), domyślnie zwinięta,
-            żeby nie zalewać dashboardu od razu po wejściu (UX runda 7, punkt 1). */}
+        {/* COLLAPSIBLE "ANALIZY" SECTION - 12 cards of descriptive comparisons (sleep,
+            sodium, recovery, supplements + 8 new ones from round 7), collapsed by default so
+            the dashboard is not flooded the moment it opens (UX round 7, point 1). */}
         <div
           className="premium-card"
           role="button"
@@ -2031,7 +2030,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 
         {isAnalizyOpen && (
           <>
-        {/* INSIGHT: SEN -> ODŻYWIANIE NASTĘPNEGO DNIA */}
+        {/* INSIGHT: SLEEP -> NEXT DAY'S NUTRITION */}
         {summary?.has_oura && !isLoadingSleepInsight && sleepInsight && sleepInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2081,10 +2080,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* ALERT/INSIGHT: SÓD -> CIŚNIENIE - karta pojawia się tylko, gdy jest coś
-            realnie do powiedzenia: dzisiejszy sód jest wysoki LUB mamy wystarczającą
-            historię do personalnego porównania. Inaczej karta byłaby pustym szumem
-            na większości dni. */}
+        {/* ALERT/INSIGHT: SODIUM -> BLOOD PRESSURE - the card appears only when there is
+            genuinely something to say: today's sodium is high OR we have enough history for a
+            personal comparison. Otherwise the card would be empty noise on most days. */}
         {sodiumBpInsight && (sodiumBpInsight.today?.isHigh || sodiumBpInsight.insight?.hasEnoughData) && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2127,7 +2125,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* WSKAŹNIK REGENERACJI: HRV/RHR PO TRENINGU */}
+        {/* RECOVERY INDICATOR: HRV/RHR AFTER A WORKOUT */}
         {summary?.has_oura && recoveryInsight && recoveryInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2139,8 +2137,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               </p>
             )}
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
-              {/* Próg "znaczącego" treningu (20 min) jest ustalony w backendzie
-                  (SIGNIFICANT_WORKOUT_MIN_MINUTES w dashboard.js) - tu tylko opisowo. */}
+              {/* The "significant" workout threshold (20 min) is set on the backend
+                  (SIGNIFICANT_WORKOUT_MIN_MINUTES in dashboard.js) - this is descriptive only. */}
               Dzień po znaczącym treningu (min. 20 min) vs zwykłe dni - ostatnie 90 dni
               ({recoveryInsight.postWorkoutDays} vs {recoveryInsight.otherDays} dni z danymi).
             </p>
@@ -2248,7 +2246,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT: BŁONNIK -> SEN GŁĘBOKI/REM TEJ SAMEJ NOCY */}
+        {/* INSIGHT: FIBRE -> DEEP/REM SLEEP THE SAME NIGHT */}
         {summary?.has_oura && fiberSleepInsight && fiberSleepInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2286,7 +2284,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* DETEKTOR REKOMPOZYCJI CIAŁA - tylko, gdy trendy pasa i wagi się rozjeżdżają */}
+        {/* BODY RECOMPOSITION DETECTOR - only when the waist and weight trends diverge */}
         {bodyRecompInsight && bodyRecompInsight.hasEnoughData && bodyRecompInsight.divergentTrend && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2315,7 +2313,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* WCZESNY ALERT PRZECIĄŻENIA/MOŻLIWEJ INFEKCJI - tylko gdy alert aktywny */}
+        {/* EARLY OVERLOAD / POSSIBLE INFECTION ALERT - only when the alert is active */}
         {strainAlert && strainAlert.hasEnoughData && strainAlert.alert && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2344,7 +2342,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT: STRES -> SÓD/CUKIER TEGO SAMEGO DNIA */}
+        {/* INSIGHT: STRESS -> SODIUM/SUGAR THE SAME DAY */}
         {summary?.has_oura && stressNutritionInsight && stressNutritionInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2382,7 +2380,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT: LICZBA POSIŁKÓW DZIENNIE -> TRAFIENIE W CEL KALORYCZNY */}
+        {/* INSIGHT: MEALS PER DAY -> HITTING THE CALORIE GOAL */}
         {mealFreqInsight && mealFreqInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2444,7 +2442,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 8): TREND SPOCZYNKOWEGO TĘTNA */}
+        {/* INSIGHT (round 8): RESTING HEART RATE TREND */}
         {summary?.has_oura && rhrDriftInsight && rhrDriftInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2479,7 +2477,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 8): GODZINA OSTATNIEGO POSIŁKU -> SEN */}
+        {/* INSIGHT (round 8): TIME OF THE LAST MEAL -> SLEEP */}
         {summary?.has_oura && mealTimingSleepInsight && mealTimingSleepInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2516,7 +2514,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 9): SAMODZIELNY TREND CIŚNIENIA KRWI */}
+        {/* INSIGHT (round 9): STANDALONE BLOOD PRESSURE TREND */}
         {bpTrendInsight && bpTrendInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2602,7 +2600,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT: NAWODNIENIE -> GOTOWOŚĆ/HRV/RHR */}
+        {/* INSIGHT: HYDRATION -> READINESS/HRV/RHR */}
         {summary?.has_oura && hydrationInsight && hydrationInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2652,10 +2650,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 
         </div>{/* koniec gridu Suplementy+Nawodnienie */}
 
-        {/* KARTA: SAMOPOCZUCIE DNIA (energia + nastrój, skala 1–5).
-            Przyciski są renderowane inline (bez lokalnego komponentu wewnątrz IIFE),
-            żeby React nie tworzył nowej referencji funkcji przy każdym renderze
-            i nie wykonywał zbędnego unmount/remount przycisków. */}
+        {/* CARD: THE DAY'S WELLBEING (energy + mood, scale 1-5).
+            The buttons are rendered inline (with no local component inside the IIFE) so that
+            React does not create a new function reference on every render and does not
+            perform a pointless unmount/remount of the buttons. */}
         <div className="premium-card">
           <div className="premium-title-row">
             <span className="premium-title">⚡ Samopoczucie dnia</span>
@@ -2681,7 +2679,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 })}
               </div>
             </div>
-            {/* Wiersz: Nastrój */}
+            {/* Row: mood */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>{t("Nastrój")}</span>
               <div style={{ display: 'flex', gap: '8px' }}>
@@ -2713,7 +2711,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         </div>
 
-        {/* INSIGHT: REALNE STREFY KARDIO Z TRENINGÓW (zmierzone tętnem, nie wzór) */}
+        {/* INSIGHT: REAL CARDIO ZONES FROM WORKOUTS (measured by heart rate, not a formula) */}
         {hrZonesInsight && hrZonesInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2749,7 +2747,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT: TREND JAKOŚCI POSIŁKÓW (health_rating) */}
+        {/* INSIGHT: MEAL QUALITY TREND (health_rating) */}
         {mealQualityTrendInsight && mealQualityTrendInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2835,7 +2833,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT: EFEKTYWNOŚĆ KALORII PER TYP TRENINGU */}
+        {/* INSIGHT: CALORIE EFFICIENCY PER WORKOUT TYPE */}
         {workoutEfficiencyInsight && workoutEfficiencyInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2855,7 +2853,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT: STABILNOŚĆ ULUBIONYCH POSIŁKÓW (DRYF) */}
+        {/* INSIGHT: STABILITY OF FAVOURITE MEALS (DRIFT) */}
         {favoriteMealDriftInsight && favoriteMealDriftInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2886,9 +2884,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 11): AI TŁUMACZĄCE PRZYCZYNY (styl Oura Advisor/Whoop Coach) */}
-        {/* Runda 12 (audyt): jawny stan ładowania - zamiast karty, która po prostu nie
-            istniała do czasu odpowiedzi API (wyglądało to jak brak insightu, nie ładowanie). */}
+        {/* INSIGHT (round 11): AI THAT EXPLAINS THE CAUSES (Oura Advisor / Whoop Coach style) */}
+        {/* Round 12 (audit): an explicit loading state - instead of a card that simply did not
+            exist until the API responded (which looked like a missing insight, not loading). */}
         {summary?.has_oura && isLoadingAiExplanation && !aiExplanationInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2927,9 +2925,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </p>
           </div>
         )}
-        {/* Pusty stan: dane są wystarczające, ale AI nie znalazło dziś żadnego znaczącego
-            odchylenia (z-score poniżej progu) - bez tego karta po prostu nie pojawiała się,
-            co użytkownik mógł odczytać jako błąd/brak danych, a nie "wszystko w normie". */}
+        {/* Empty state: the data is sufficient, but the AI found no significant deviation
+            today (a z-score below the threshold) - without this the card simply did not
+            appear, which the user could read as an error or missing data rather than
+            "everything is normal". */}
         {summary?.has_oura && !isLoadingAiExplanation && aiExplanationInsight && aiExplanationInsight.hasEnoughData && !aiExplanationInsight.hasFinding && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -2941,7 +2940,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 11): BENCHMARK "TY DZIŚ VS TY W PRZESZŁOŚCI" (bez porównań z innymi użytkownikami) */}
+        {/* INSIGHT (round 11): BENCHMARK "YOU TODAY VS YOU IN THE PAST" (no comparison with other users) */}
         {isLoadingSelfBenchmark && !selfBenchmarkInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3047,7 +3046,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 10): WSKAŹNIK WHR */}
+        {/* INSIGHT (round 10): WHR */}
         {whrInsight && whrInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3073,7 +3072,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 10): SYMETRIA BICEPSÓW */}
+        {/* INSIGHT (round 10): BICEPS SYMMETRY */}
         {bodySymmetryInsight && bodySymmetryInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3122,7 +3121,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 10): RÓŻNORODNOŚĆ TRENINGÓW */}
+        {/* INSIGHT (round 10): WORKOUT VARIETY */}
         {workoutVarietyInsight && workoutVarietyInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3206,7 +3205,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 13, nowa funkcja 2): MASA MIĘŚNIOWA VS BIAŁKO */}
+        {/* INSIGHT (round 13, new feature 2): MUSCLE MASS VS PROTEIN */}
         {isLoadingMuscleProtein && !muscleProteinInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3310,7 +3309,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 13, nowa funkcja 4): PROPORCJE OBWODÓW CIAŁA */}
+        {/* INSIGHT (round 13, new feature 4): BODY CIRCUMFERENCE PROPORTIONS */}
         {isLoadingBodyProportions && !bodyProportionsInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3363,7 +3362,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 13, nowa funkcja 5): AKTYWNOŚĆ DNIA VS APETYT */}
+        {/* INSIGHT (round 13, new feature 5): THE DAY'S ACTIVITY VS APPETITE */}
         {isLoadingActivityAppetite && !activityAppetiteInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3404,7 +3403,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 13, nowa funkcja 6): JAKOŚĆ DIETY I TEMPO ZMIANY WAGI */}
+        {/* INSIGHT (round 13, new feature 6): DIET QUALITY AND THE RATE OF WEIGHT CHANGE */}
         {isLoadingDietQualityWeightPace && !dietQualityWeightPaceInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3508,7 +3507,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 13, nowa funkcja 8): SIEDZENIE VS WYDAJNOŚĆ TRENINGU */}
+        {/* INSIGHT (round 13, new feature 8): SITTING VS WORKOUT PERFORMANCE */}
         {isLoadingSedentaryPerformance && !sedentaryPerformanceInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3549,7 +3548,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT: HYDRATACJA A JAKOŚĆ SNU */}
+        {/* INSIGHT: HYDRATION AND SLEEP QUALITY */}
         {summary?.has_oura && isLoadingWaterSleep && !waterSleepInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3612,7 +3611,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 25): SEN OURA → WYDAJNOŚĆ TRENINGU AW (dzień następny) */}
+        {/* INSIGHT (round 25): OURA SLEEP -> AW WORKOUT PERFORMANCE (the following day) */}
         {summary?.has_oura && sleepWorkoutPerfInsight && sleepWorkoutPerfInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3662,7 +3661,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 25): GOTOWOŚĆ OURA → WYDAJNOŚĆ APPLE WATCH */}
+        {/* INSIGHT (round 25): OURA READINESS -> APPLE WATCH PERFORMANCE */}
         {summary?.has_oura && readinessWorkoutInsight && readinessWorkoutInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3702,7 +3701,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 25): POLARYZACJA STREF TĘTNA 80/20 (Apple Watch only) */}
+        {/* INSIGHT (round 25): 80/20 HEART-RATE ZONE POLARISATION (Apple Watch only) */}
         {hrPolarizationInsight && hrPolarizationInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3746,7 +3745,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 25): CIĘŻKI TRENING AW → HRV/RHR OURA +1/+2 DNI */}
+        {/* INSIGHT (round 25): A HARD AW WORKOUT -> OURA HRV/RHR +1/+2 DAYS */}
         {summary?.has_oura && workoutRecoveryHrvInsight && workoutRecoveryHrvInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3796,7 +3795,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (Runda 25): PRZERWA MIĘDZY TRENINGAMI → WYDAJNOŚĆ (Apple Watch only) */}
+        {/* INSIGHT (round 25): THE GAP BETWEEN WORKOUTS -> PERFORMANCE (Apple Watch only) */}
         {workoutRestPerfInsight && workoutRestPerfInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -4052,7 +4051,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            {/* Szybki wybór suplementów 7Nutrition */}
+            {/* Quick 7Nutrition supplement picker */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '4px' }}>
               {PRESET_SUPPLEMENTS.map((sup, idx) => {
                 const active = isSupplementActive(sup);
@@ -4204,7 +4203,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                     })}
                   </div>
 
-                  {/* Szczegóły ostatnich dni */}
+                  {/* Details of the recent days */}
                   {(() => {
                     const loggedDays = historyData
                       .filter(h => h.supplements && h.supplements.trim().length > 0)
@@ -4235,7 +4234,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                           Ostatnio przyjmowane
                         </div>
                         {loggedDays.map((entry, idx) => {
-                          // Bezpieczna konwersja daty bez przesunięć strefy czasowej
+                    // Timezone-safe date conversion
                           const parts = entry.date.split('-');
                           const dateObj = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
                           const formattedDate = dateObj.toLocaleDateString('pl-PL', { day: 'numeric', month: 'short' });
@@ -4279,7 +4278,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
       </div>
 
       <div className="dashboard-column">
-        {/* ODŻYWIANIE (NUTRITION) */}
+        {/* NUTRITION */}
         <div className="premium-card">
           <div className="premium-title-row">
             <span className="premium-title">{t("Odżywianie")}</span>
@@ -4300,9 +4299,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                   </div>
                 </div>
               </div>
-              {/* Bilans netto kalorii (zjedzone - spalone) — dane z summary.net_calories
-                  wyliczone w dashboard.js. Kolor: czerwony = nadwyżka >200 kcal (masa),
-                  zielony = deficyt < -200 kcal (redukcja), żółty = równowaga (±200 kcal). */}
+              {/* Net calorie balance (eaten - burned) - data from summary.net_calories,
+                  computed in dashboard.js. Colour: red = a surplus of >200 kcal (bulking),
+                  green = a deficit of < -200 kcal (cutting), yellow = balance (+/-200 kcal). */}
               {summary.net_calories != null && (
                 <div style={{ fontSize: '0.7rem', textAlign: 'center', lineHeight: 1.3 }}>
                   <span style={{ color: 'rgba(255,255,255,0.4)' }}>netto </span>
@@ -4350,7 +4349,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         </div>
 
-        {/* WAGA I SKŁAD CIAŁA */}
+        {/* WEIGHT AND BODY COMPOSITION */}
         <div className="premium-card">
           <div className="premium-title-row">
             <span className="premium-title">{t("⚖️ Waga i Skład Ciała")}</span>
@@ -4365,12 +4364,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             const musclePercentage = (weight > 0 && muscleMass > 0) ? Math.round((muscleMass / weight) * 100 * 10) / 10 : 0;
             const otherMass = (weight > 0) ? Math.max(0, Math.round((weight - muscleMass - fatMass) * 10) / 10) : 0;
             const otherPercentage = (weight > 0) ? Math.max(0, Math.round((otherMass / weight) * 100 * 10) / 10) : 0;
-            // POPRAWKA (runda 4 audytu): fatRatio===0 oznacza "brak pomiaru tkanki
-            // tłuszczowej" (fallback ?? 0 wyżej), a NIE "realne 0% tłuszczu" - tak
-            // samo jak interpretuje to fatPercentage powyżej. Wcześniej przy braku
-            // danych leanBodyMassPct wynosił 100, więc nowy użytkownik bez
-            // zsynchronizowanej wagi widział w pełni wypełniony, "idealny" pierścień
-            // składu ciała mimo braku jakichkolwiek danych z Withings.
+            // FIX (audit round 4): fatRatio===0 means "no body fat measurement" (the ?? 0
+            // fallback above), NOT "a real 0% body fat" - the same way fatPercentage above
+            // interprets it. Previously, with no data, leanBodyMassPct came out as 100, so a
+            // new user with no synced scale saw a completely filled, "perfect" body
+            // composition ring despite having no Withings data at all.
             const leanBodyMassPct = (weight > 0 && fatRatio > 0) ? 100 - fatRatio : 0;
 
             return (
@@ -4437,10 +4435,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 </span>
               )}
             </div>
-            {/* Ciśnienie tętnicze usunięte z tego miejsca (UX runda 7, punkt 2) - duplikowało
-                osobną, pełną kartę t("🩺 Ciśnienie tętnicze") pod strefami tętna, którą użytkownik
-                wcześniej wyraźnie poprosił o umieszczenie w tamtym miejscu. Tu zostawiamy
-                tylko BMI i pomiar obwodów, żeby nie pokazywać tej samej liczby dwa razy. */}
+            {/* Blood pressure removed from this spot (UX round 7, point 2) - it duplicated the
+                separate, full t("🩺 Ciśnienie tętnicze") card below the heart-rate zones, which the
+                user had explicitly asked to be placed there. Here we keep only the BMI and the
+                measurements, so the same number is not shown twice. */}
             {latestBodyMeasurement && (
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginTop: '4px' }}>
                 <span>Ostatni pomiar obwodów ({latestBodyMeasurement.date})</span>
@@ -4506,9 +4504,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 typicalEnd={85} 
                 colorClass="light" 
               />
-              {/* "Czas czuwania" ukryty, gdy sleepAwakeMins jest hardcoded na 0
-                  (backend jeszcze nie liczy tej wartości z Oura) - pokazywanie
-                  fałszywego "0 m" sugerowałoby realny pomiar, którego nie mamy. */}
+              {/* "Czas czuwania" hidden while sleepAwakeMins is hard-coded to 0 (the backend
+                  does not compute this value from Oura yet) - showing a fake "0 m" would
+                  suggest a real measurement we do not have. */}
               {sleepAwakeMins > 0 && (
                 <SleepStageBar
                   label="Czas czuwania"
@@ -4523,10 +4521,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         </div>
 
-        {/* ENERGIA I AKTYWNOŚĆ DNIA - połączone z dawnej karty "Dystans i aktywność dnia"
-            (UX: runda 7 - dwie sąsiadujące, tematycznie pokrewne karty w jedną, żeby
-            skrócić dashboard). Dane z Oury (equivalent_walking_distance, sedentary/
-            low_activity_time), Google Fit (distance.delta) albo Apple Health
+        {/* THE DAY'S ENERGY AND ACTIVITY - merged from the former "Dystans i aktywność dnia"
+            card (UX: round 7 - two adjacent, thematically related cards combined into one to
+            shorten the dashboard). Data from Oura (equivalent_walking_distance, sedentary/
+            low_activity_time), Google Fit (distance.delta) or Apple Health
             (walking_running_distance). */}
         <div className="premium-card">
           <div className="premium-title-row">
@@ -4534,7 +4532,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <span className="premium-title-info">ⓘ</span>
           </div>
 
-          {/* Battery segments - realny algorytm (readinessScore - rozładowanie aktywnością) */}
+          {/* Battery segments - a real algorithm (readinessScore - discharge from activity) */}
           <div className="energy-battery-row">
             <span style={{ fontSize: '1rem' }}>🔋</span>
             <div className="energy-battery-container">
@@ -4564,11 +4562,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.3)' }}>{t("Brak danych (czekam na synchronizację)")}</span>
             )}
           </div>
-          {/* Realny poziom stresu (Oura /v2/usercollection/daily_stress) - wcześniej ta
-              sekcja była tu usunięta, bo była w 100% zaszywana na sztywno bez żadnego
-              realnego źródła danych. Wraca tylko wtedy, gdy backend faktycznie ma dla
-              niej dane (pierścionek Oura z funkcją pomiaru stresu) - inaczej jest po
-              prostu niewidoczna, bez fałszywych wartości. */}
+          {/* The real stress level (Oura /v2/usercollection/daily_stress) - this section used
+              to be removed from here, because it was 100% hard-coded with no real data source
+              behind it. It comes back only when the backend genuinely has data for it (an Oura
+              ring with stress measurement) - otherwise it is simply invisible, with no fake
+              values. */}
           {hasStressData && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '12px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '10px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -4596,9 +4594,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </div>
           )}
 
-          {/* DYSTANS I AKTYWNOŚĆ DNIA - połączone tu z dawnej osobnej karty (UX runda 7).
-              Dane z Oury (equivalent_walking_distance, sedentary/low_activity_time),
-              Google Fit (distance.delta) albo Apple Health (walking_running_distance). */}
+          {/* THE DAY'S DISTANCE AND ACTIVITY - merged in here from the former separate card
+              (UX round 7). Data from Oura (equivalent_walking_distance, sedentary/
+              low_activity_time), Google Fit (distance.delta) or Apple Health (walking_running_distance). */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '10px' }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <span style={{ fontSize: '1.6rem', fontWeight: '800', color: '#fff' }}>
@@ -4651,9 +4649,9 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </span>
           </div>
           <div className="premium-grid-2" style={{ gap: '12px' }}>
-            {/* hrv/rhr mogą być null (brak pomiaru z Oura za ten dzień) - karty pokazują
-                '--' i neutralny stan zamiast fałszywego "0 ms"/"0 bpm" i błędnych
-                porównań (null >= 48 czy null < 61 dałyby nielogiczne wyniki). */}
+            {/* hrv/rhr can be null (no Oura measurement for that day) - the cards then show
+                '--' and a neutral state rather than a fake "0 ms"/"0 bpm" and wrong comparisons
+                (null >= 48 or null < 61 would give illogical results). */}
             <TrendCard
               title={t("Zmienność rytmu zatokowego")}
               valueText={hrv != null ? String(hrv) : '--'}
@@ -4672,13 +4670,13 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               footerText={rhr == null ? "Brak danych" : rhr < 61 ? "Niski < 61" : "Wysoki > 61"}
               status="success"
             />
-            {/* Karta "Słuch" pozostaje usunięta na życzenie użytkownika - Oura nie ma
-                mikrofonu, a Apple Watch/AirPods nie są jeszcze obsługiwane. Poniższe
-                4 karty pokazują się tylko, gdy backend faktycznie ma dla nich realną
-                wartość (Gen 3+ Oura dla SpO2, Apple Watch Series 8+/Ultra z włączoną
-                metryką "Wrist Temperature" w Health Auto Export dla temperatury
-                nadgarstka, Oura /daily_readiness dla odchylenia temperatury ciała) -
-                w przeciwnym razie karta jest po prostu niewidoczna, bez fałszywych zer. */}
+            {/* The "Sluch" card stays removed at the user's request - Oura has no microphone,
+                and Apple Watch/AirPods are not supported yet. The 4 cards below appear only
+                when the backend genuinely has a real value for them (Oura Gen 3+ for SpO2, an
+                Apple Watch Series 8+/Ultra with the "Wrist Temperature" metric enabled in
+                Health Auto Export for the wrist temperature, Oura /daily_readiness for the body
+                temperature deviation) - otherwise the card is simply invisible, with no fake
+                zeroes. */}
             {summary.respiratory_rate != null && (
               <TrendCard
                 title={t("Częstość oddechów")}
@@ -4713,8 +4711,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               />
             )}
             {summary.temperature_deviation != null && (() => {
-              // Wspólny próg ±0.5°C (Oura) - patrz utils/health.js, żeby nie
-              // duplikować tej samej granicy w kilku komponentach.
+                  // A shared +/-0.5°C threshold (Oura) - see utils/health.js, so the same
+                  // boundary is not duplicated across several components.
               const tempStatus = getTemperatureStatus(summary.temperature_deviation);
               return (
                 <TrendCard
@@ -4781,10 +4779,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         </div>
 
-        {/* STREFY TĘTNA (HR ZONES) - tylko gdy mamy realny RHR, bez tego wszystkie
-            zakresy byłyby liczone z fałszywym RHR=0 (patrz rhrForZones powyżej).
-            Statyczna tabela referencyjna - zwinięta domyślnie (UX runda 7), bo nie
-            zmienia się z dnia na dzień i nie trzeba jej widzieć od razu. */}
+        {/* HEART-RATE ZONES - only when we have a real RHR; without it every range would be
+            computed from a fake RHR=0 (see rhrForZones above).
+            A static reference table - collapsed by default (UX round 7), because it does not
+            change from day to day and does not need to be visible immediately. */}
         {rhr != null && (
         <div className="premium-card">
           <div
@@ -4847,7 +4845,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         </div>
         )}
 
-        {/* CIŚNIENIE TĘTNICZE - przeniesione pod strefy tętna w prawej kolumnie na życzenie użytkownika */}
+        {/* BLOOD PRESSURE - moved below the heart-rate zones in the right-hand column at the user's request */}
         <div className="premium-card">
           <div className="premium-title-row">
             <span className="premium-title">{t("🩺 Ciśnienie tętnicze")}</span>
@@ -4953,7 +4951,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               </button>
             </div>
 
-            {/* Historia wiadomości */}
+            {/* Message history */}
             <div style={{
               flexGrow: 1,
               padding: '20px',
@@ -5001,10 +4999,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               <div ref={messagesEndRef} />
             </div>
 
-            {/* Chipy szybkich pytań (Runda 8) - pokazujemy tylko na starcie konwersacji
-                (sama wiadomość powitalna AI), żeby nie zaśmiecać widoku po tym, jak
-                użytkownik już zaczął rozmowę. Kliknięcie wysyła pytanie od razu,
-                bez kopiowania go do pola input. */}
+            {/* Quick-question chips (round 8) - shown only at the start of a conversation
+                (just the AI welcome message), so they do not clutter the view once the user
+                has begun talking. Clicking one sends the question immediately, without
+                copying it into the input field. */}
             {chatMessages.length === 1 && !isSendingChat && (
               <div style={{
                 padding: '0 20px 14px',
@@ -5038,7 +5036,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               </div>
             )}
 
-            {/* Input wiadomości */}
+            {/* Message input */}
             <form 
               onSubmit={handleSendChat}
               style={{

@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# scripts/verify_backup.sh <ścieżka-do-kopii.db>
+# scripts/verify_backup.sh <path-to-backup.db>
 #
-# Sprawdza, czy plik kopii zapasowej DA SIĘ ODTWORZYĆ - czyli robi to, czego
-# dotąd nie robił nikt. Backup, którego nigdy nie otwarto, jest wart tyle, co
-# jego brak: dowiadujemy się o uszkodzeniu dopiero przy awarii.
+# Checks whether a backup file CAN ACTUALLY BE RESTORED - which is what nobody was doing.
+# A backup nobody has ever opened is worth about as much as no backup at all: you find out it
+# is corrupt only when you need it.
 #
-# Bez argumentu sprawdza NAJNOWSZĄ kopię w domyślnym katalogu - w tej postaci
-# nadaje się do crona jako niezależny strażnik:
+# With no argument it checks the NEWEST backup in the default directory - in that form it
+# works as an independent watchdog in cron:
 #   0 6 * * * /opt/dietetyk-ai/scripts/verify_backup.sh || mail -s "Backup Dietetyk AI USZKODZONY" ty@example.com
 #
-# Kod wyjścia: 0 = kopia sprawna, 1 = kopia uszkodzona/niekompletna.
+# Exit code: 0 = the backup is sound, 1 = corrupt or incomplete.
 
 set -uo pipefail
 
@@ -33,16 +33,16 @@ if [ ! -f "$TARGET" ]; then
     exit 1
 fi
 
-# Skrypt weryfikujący. Otwiera kopię TYLKO DO ODCZYTU i sprawdza kolejno:
+# The verification script. Opens the copy READ-ONLY and checks, in order:
 #   1. quick_check - whether the database structure is intact,
-#   2. obecność i niepustość kluczowych tabel - plik może być strukturalnie
-#      poprawny, a jednocześnie pusty (np. kopia zrobiona w trakcie migracji),
-#   3. odczyt przykładowego wiersza - dowód, że dane realnie da się wyciągnąć.
+#   2. that the key tables exist and are non-empty - a file can be structurally valid and yet
+#      empty (a copy taken mid-migration, for instance),
+#   3. reading a sample row - proof the data can genuinely be extracted.
 read -r -d '' VERIFY_JS <<'EOF' || true
 const sqlite3 = require('sqlite3').verbose();
 const file = process.argv[1];
 const db = new sqlite3.Database(file, sqlite3.OPEN_READONLY, (err) => {
-  if (err) { console.error('NIE MOŻNA OTWORZYĆ:', err.message); process.exit(1); }
+  if (err) { console.error('CANNOT OPEN:', err.message); process.exit(1); }
 });
 const fail = (msg) => { console.error('USZKODZONA:', msg); process.exit(1); };
 db.get('PRAGMA quick_check', (err, row) => {
@@ -59,7 +59,7 @@ db.get('PRAGMA quick_check', (err, row) => {
       counts[table] = cRow.n;
       if (--pending === 0) {
         if (counts.users === 0) return fail('kopia nie zawiera żadnych użytkowników');
-        console.log('OK - kopia nadaje się do odtworzenia.');
+        console.log('OK - the backup is restorable.');
         console.log('     ' + tables.map(t => `${t}=${counts[t]}`).join('  '));
         process.exit(0);
       }
@@ -69,7 +69,7 @@ db.get('PRAGMA quick_check', (err, row) => {
 EOF
 
 if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER}\$"; then
-    # Ścieżka wewnątrz kontenera - katalog data jest tam zamontowany jako /app/data.
+    # Path inside the container - the data directory is mounted there as /app/data.
     IN_CONTAINER="/app/data/backups/$(basename "$TARGET")"
     docker exec "$CONTAINER" node -e "$VERIFY_JS" "$IN_CONTAINER"
     exit $?

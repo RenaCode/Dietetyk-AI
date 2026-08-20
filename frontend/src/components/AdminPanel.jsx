@@ -24,17 +24,17 @@ export default function AdminPanel({ sessionToken, onLogout }) {
   const [isInviting, setIsInviting] = useState(false);
   const [userActionMessage, setUserActionMessage] = useState({ type: '', text: '' });
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
-  // Id użytkownika, dla którego trwa akcja (usuń/reset 2FA/wymuś reset hasła) - w
-  // przeciwieństwie do handleSaveConfig/handleInvite, ten stan wcześniej nie istniał,
-  // więc przyciski akcji pozostawały klikalne przez cały czas trwania żądania fetch
-  // (ryzyko wielokrotnych równoległych żądań przy szybkim, wielokrotnym kliknięciu).
+  // Id of the user an action is running for (delete / reset 2FA / force password reset).
+  // Unlike handleSaveConfig and handleInvite, this state did not exist before, so the action
+  // buttons stayed clickable for the whole duration of the fetch - risking several parallel
+  // requests from rapid repeated clicks.
   const [actioningUserId, setActioningUserId] = useState(null);
 
   useEffect(() => {
-    // F-W4: Async IIFE z cancelled sprawdzanym PO każdym await — chroni przed
-    // setState po odmontowaniu i zapobiega uruchomieniu fetchUsers gdy komponent
-    // zniknął podczas fetchConfig (nie można tego zrobić inaczej bez modyfikacji
-    // fetchConfig/fetchUsers, które są też wywoływane z innych miejsc).
+  // F-W4: an async IIFE with `cancelled` checked AFTER every await - guards against
+  // setting state on an unmounted component when the component disappeared during
+  // fetchConfig (there is no other way without modifying fetchConfig/fetchUsers, which are
+  // also called from elsewhere).
     let cancelled = false;
     (async () => {
       if (!cancelled) await fetchConfig();
@@ -66,7 +66,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
         if (onLogout) onLogout();
       }
     } catch (err) {
-      console.error('Błąd pobierania konfiguracji systemowej:', err);
+      console.error('Failed to fetch the system configuration:', err);
     }
   };
 
@@ -83,7 +83,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
         if (onLogout) onLogout();
       }
     } catch (err) {
-      console.error('Błąd pobierania użytkowników:', err);
+      console.error('Failed to fetch users:', err);
     } finally {
       setIsLoadingUsers(false);
     }
@@ -182,11 +182,11 @@ export default function AdminPanel({ sessionToken, onLogout }) {
         return;
       }
 
-      // res.json() rzuca wyjątek, gdy odpowiedź nie jest JSON-em (np. błąd 500 zwrócony
-      // przez proxy/serwer jako strona HTML, a nie przez nasz handler Express) - wcześniej
-      // taki wyjątek leciał do catch(err) niżej i pokazywał "Błąd połączenia z serwerem",
-      // co jest mylące przy realnym błędzie 500 (operacja w bazie się nie powiodła), a nie
-      // przy faktycznym braku połączenia.
+      // res.json() throws when the response is not JSON (a 500 returned by a proxy or the
+      // server as an HTML page rather than by our Express handler). That exception used to
+      // fall into the catch(err) below and display the generic connection-error message,
+      // which is misleading for a real 500 (a database operation failed) as opposed to an
+      // actual connection failure.
       let data = {};
       try {
         data = await res.json();
@@ -361,7 +361,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
         </form>
       </div>
 
-      {/* Sekcja 2: Zapraszanie Użytkowników */}
+      {/* Section 2: inviting users */}
       <div className="glass-card">
         <h3 className="card-title">{t("✉️ Zaproś Nowego Użytkownika")}</h3>
         <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '20px' }}>
@@ -406,7 +406,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
         </form>
       </div>
 
-      {/* Sekcja 3: Lista Użytkowników i Zarządzanie */}
+      {/* Section 3: user list and management */}
       <div className="glass-card">
         <h3 className="card-title">{t("👥 Zarządzanie Użytkownikami")}</h3>
         <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '20px' }}>

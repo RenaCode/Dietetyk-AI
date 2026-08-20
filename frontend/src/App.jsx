@@ -7,17 +7,17 @@ import AdminPanel from './components/AdminPanel';
 import Trends from './components/Trends';
 import { t, setLanguage, getLanguage } from './utils/i18n';
 
-// Pomocnicza funkcja pobierająca dzisiejszą datę w formacie YYYY-MM-DD
+// Helper that returns today's date in YYYY-MM-DD format
 function getLocalDateString() {
   const d = new Date();
   const tzOffset = d.getTimezoneOffset() * 60000;
   return new Date(d.getTime() - tzOffset).toISOString().slice(0, 10);
 }
 
-// Stopka - wspólna dla ekranu logowania i głównej aplikacji. Wcześniej treść
-// (numer wersji, linki) była wklejona dwukrotnie w dwóch różnych miejscach tego
-// pliku, co przy każdej aktualizacji (np. numeru wersji) wymagało pamiętania o
-// edycji obu kopii - łatwo było zaktualizować jedną i zostawić drugą nieaktualną.
+// Footer - shared by the login screen and the main application. The content (version
+// number, links) used to be pasted twice in two different places in this file, so every
+// update (the version number, for instance) meant remembering to edit both copies - it was
+// easy to update one and leave the other stale.
 function AppFooter() {
   const linkStyle = { color: 'var(--text-muted)', fontSize: '0.8rem', textDecoration: 'underline', marginRight: '10px' };
   return (
@@ -32,9 +32,9 @@ export default function App() {
   const [appLang, setAppLang] = useState(getLanguage());
   const [selectedDate, setSelectedDate] = useState(getLocalDateString());
   const [sessionToken, setSessionToken] = useState(localStorage.getItem('diet_session_token') || '');
-  // UWAGA: poprzednio domyślnie 'admin' - podpowiadało nazwę konta administratora
-  // każdemu, kto otworzy ekran logowania, ułatwiając próby brute-force (i potwierdzając
-  // że konto "admin" istnieje). Pole logowania powinno startować puste.
+// NOTE: this used to default to 'admin', which suggested the administrator account name to
+// anyone opening the login screen, making brute-force attempts easier (and confirming that
+// an "admin" account exists). The login field should start empty.
   const [usernameInput, setUsernameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [totpCode, setTotpCode] = useState('');
@@ -54,7 +54,7 @@ export default function App() {
   
   const handlePublicRegister = async (e) => {
     e.preventDefault();
-    if (isRegistering) return; // F-S9: zapobieganie podwójnemu submitowi
+    if (isRegistering) return; // F-S9: prevent a double submit
     setLoginError('');
 
     if (registerPasswordInput !== registerConfirmPasswordInput) {
@@ -115,7 +115,7 @@ export default function App() {
   const [registerPassword, setRegisterPassword] = useState('');
   const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
   const [isCheckingToken, setIsCheckingToken] = useState(false);
-  const [isRegistering, setIsRegistering] = useState(false); // F-S9: ochrona przed podwójnym submitem rejestracji
+  const [isRegistering, setIsRegistering] = useState(false); // F-S9: guard against a double registration submit
   const [dashboardData, setDashboardData] = useState({
     summary: {
       target_calories: 2500,
@@ -137,34 +137,33 @@ export default function App() {
     meals: [],
     aiAdvice: t('Ładowanie porad dietetyka...')
   });
-  // Lista najczęściej powtarzanych posiłków (Runda 9) - do szybkiego ponownego
-  // dodania w MealLogger.jsx bez ponownego wysyłania zapytania do AI. Niezależna od
-  // selectedDate (liczona z całej historii), więc trzymana osobno od dashboardData.
+// List of the most frequently repeated meals (round 9) - for quickly adding one again in
+// MealLogger.jsx without another AI request. Independent of selectedDate (computed from the
+// whole history), so it is kept separately from dashboardData.
   const [frequentMeals, setFrequentMeals] = useState([]);
-  // Brak wartości domyślnej/placeholdera - prawdziwy token przychodzi z backendu
-  // (fetchSyncToken). Pusty string sygnalizuje komponentom (np. Settings), że
-  // token jeszcze się ładuje, zamiast budować URL webhooka z fałszywym tokenem.
+// No default value or placeholder - the real token comes from the backend (fetchSyncToken).
+// An empty string signals to components (Settings, for example) that the token is still
+// loading, rather than building a webhook URL with a bogus token.
   const [syncToken, setSyncToken] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [userProfile, setUserProfile] = useState({ username: '', avatar_base64: '' });
-  // Flaga "czy to wciąż aktualne żądanie" - patrz komentarz w useEffect poniżej
-  // (ochrona przed race condition przy szybkiej zmianie daty/sesji).
+// A "is this still the current request" flag - see the comment in the useEffect below
+// (protection against a race condition when the date or session changes rapidly).
   const isCurrentRequestRef = useRef(true);
 
-  // Zbiór ID posiłków, dla których trwa już żądanie usunięcia - patrz komentarz w
-  // handleDeleteMeal (ochrona przed podwójnym kliknięciem wysyłającym duplikat DELETE).
+// The set of meal IDs that already have a delete request in flight - see the comment in
+// handleDeleteMeal (protection against a double click sending a duplicate DELETE).
   const deletingMealIdsRef = useRef(new Set());
 
-  // Pobierz dane przy załadowaniu i przy zmianie daty lub sesji
+// Fetch the data on load and whenever the date or the session changes
   useEffect(() => {
-    // Ochrona przed race condition: jeśli użytkownik szybko zmieni datę,
-    // odpowiedź z poprzedniego (już nieaktualnego) zapytania o dashboard mogłaby
-    // przyjść później niż odpowiedź dla nowej daty i nadpisać ją złymi danymi.
-    // isCurrent ustawiane na false w cleanupie efektu jest sprawdzane w
-    // fetchDashboardData przed setDashboardData, żeby zignorować spóźnioną odpowiedź.
+// Race-condition guard: if the user changes the date quickly, the response to the previous
+// (already stale) dashboard request could arrive later than the response for the new date
+// and overwrite it with the wrong data. isCurrent, set to false in the effect's cleanup, is
+// checked in fetchDashboardData before setDashboardData so a late response is ignored.
     isCurrentRequestRef.current = true;
     if (sessionToken) {
       fetchDashboardData();
@@ -176,17 +175,17 @@ export default function App() {
     };
   }, [selectedDate, sessionToken]);
 
-  // Częste posiłki (Runda 9) - niezależne od selectedDate (liczone z całej historii),
-  // więc pobierane tylko raz na zmianę sesji, nie przy każdej zmianie daty.
+// Frequent meals (round 9) - independent of selectedDate (computed from the whole history),
+// so they are fetched only when the session changes, not on every date change.
   useEffect(() => {
     if (sessionToken) {
       fetchFrequentMeals();
     }
   }, [sessionToken]);
 
-  // Automatyczne odświeżanie danych z bazy co godzinę (zgodnie z godzinową
-  // synchronizacją Oura/Withings po stronie backendu), żeby otwarty dashboard
-  // pokazywał najnowsze dane bez potrzeby ręcznego przeładowania strony.
+// Automatically refresh the data from the database every hour (matching the backend's
+// hourly Oura/Withings sync), so an open dashboard shows the latest data without a manual
+// page reload.
   useEffect(() => {
     if (!sessionToken) return;
     const intervalId = setInterval(() => {
@@ -195,14 +194,14 @@ export default function App() {
     return () => clearInterval(intervalId);
   }, [sessionToken, selectedDate]);
 
-  // Odbiór tokenu po powrocie z logowania Google. Działa niezależnie od sessionToken,
-  // bo dla nowego/nielogowanego użytkownika ten token właśnie ustanawia sesję.
+// Receiving the token after returning from Google sign-in. This works independently of
+// sessionToken, because for a new or signed-out user this token is what establishes the session.
   //
   // Tokeny (google_token/google_temp_token) backend przekazuje w FRAGMENCIE URL (#),
-  // nie w query stringu - fragment nigdy nie jest wysyłany do serwera przy żądaniu
-  // strony, więc żywy token sesji nie trafia do logów serwera (morgan) ani do
-  // historii/Referer przeglądarki. google_error nie jest sekretem, więc nadal
-  // przychodzi przez zwykły query string.
+// not in the query string - the fragment is never sent to the server with the page request,
+// so a live session token does not end up in the server logs (morgan) or in the browser
+// history/Referer. google_error is not a secret, so it still arrives through an ordinary
+// query string.
   useEffect(() => {
     const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     const params = new URLSearchParams(window.location.search);
@@ -245,9 +244,9 @@ export default function App() {
         setCurrentTab(tabParam);
       }
 
-      // Powrót z przepływu łączenia konta z Google (Ustawienia -> "Połącz z Google").
-      // Osobne parametry od `success`/`error` powyżej, bo to nie jest integracja ze
-      // źródłem danych (Oura/Withings), a połączenie metody logowania.
+// Return from the flow that links an account with Google (Settings -> "Connect with Google").
+// These are separate parameters from `success`/`error` above, because this is not an
+// integration with a data source (Oura/Withings) but a link to a sign-in method.
       if (googleLinkParam === 'success') {
         setSuccessMessage(t('Pomyślnie połączono konto z Google!'));
         setTimeout(() => setSuccessMessage(''), 6000);
@@ -330,7 +329,7 @@ export default function App() {
 
   const handleRegisterSubmit = async (e) => {
     e.preventDefault();
-    if (isRegistering) return; // F-S9: zapobieganie podwójnemu submitowi
+    if (isRegistering) return; // F-S9: prevent a double submit
     setRegisterError('');
 
     if (registerPassword !== registerConfirmPassword) {
@@ -393,17 +392,16 @@ export default function App() {
           setLanguage(data.language);
         }
       } else if (res.status === 401) {
-        // Wcześniej brak obsługi 401 w tym miejscu (w przeciwieństwie do
-        // fetchSyncToken/fetchDashboardData) - sesja wygasała "po cichu":
-        // userProfile zostawał w stanie początkowym/nieaktualnym, bez wylogowania
-        // i bez żadnej informacji dla użytkownika o przyczynie.
+// Previously there was no 401 handling here (unlike fetchSyncToken/fetchDashboardData) -
+// the session expired "silently": userProfile stayed in its initial or stale state, with no
+// sign-out and no information whatsoever for the user about the cause.
         handleLogout();
         setErrorMessage(t('Sesja wygasła. Zaloguj się ponownie.'));
       } else {
         setErrorMessage(t('Nie udało się pobrać profilu użytkownika.'));
       }
     } catch (err) {
-      console.error('Błąd pobierania profilu:', err);
+      console.error('Failed to fetch the profile:', err);
       setErrorMessage(t('Błąd połączenia z serwerem podczas pobierania profilu.'));
     }
   };
@@ -440,9 +438,9 @@ export default function App() {
       });
       if (res.ok) {
         const data = await res.json();
-        // Jeśli w międzyczasie zmieniła się data/sesja (nowy efekt już wystartował
-        // i ustawił flagę na false w cleanupie), ignorujemy tę spóźnioną odpowiedź,
-        // żeby nie nadpisać nowszych, już wyświetlonych danych starymi.
+// If the date or session changed in the meantime (a new effect has already started and set
+// the flag to false in its cleanup), we ignore this late response so that newer, already
+// displayed data is not overwritten with older data.
         if (!isCurrentRequestRef.current) return;
         setDashboardData({
           summary: data.summary,
@@ -461,11 +459,10 @@ export default function App() {
       console.error(err);
       setErrorMessage(t('Błąd połączenia z serwerem. Upewnij się, że backend działa.'));
     } finally {
-      // POPRAWKA (runda 17 audytu): `setIsLoading(false)` wcześniej wykonywał się
-      // niezależnie od `isCurrentRequestRef.current` - spóźniona odpowiedź z już
-      // nieaktualnego żądania (np. po szybkiej zmianie daty) mogła zgasić spinner
-      // ładowania nowszego, wciąż trwającego żądania. Ten sam warunek, co przy
-      // `setDashboardData` powyżej.
+// FIX (audit round 17): `setIsLoading(false)` previously ran regardless of
+// `isCurrentRequestRef.current` - a late response from an already stale request (after a
+// rapid date change, for instance) could switch off the loading spinner of a newer request
+// that was still in flight. Same condition as for `setDashboardData` above.
       if (isCurrentRequestRef.current) {
         setIsLoading(false);
       }
@@ -482,7 +479,7 @@ export default function App() {
         setFrequentMeals(await res.json());
       }
     } catch (err) {
-      console.error('Błąd pobierania częstych posiłków:', err);
+      console.error('Failed to fetch the frequent meals:', err);
     }
   };
 
@@ -510,11 +507,10 @@ export default function App() {
   const handleAddMeal = async (rawText, imageBase64) => {
     setIsAnalyzing(true);
     setErrorMessage('');
-    // Zwracana wartość boolean (sukces/błąd) - MealLogger.jsx czeka na nią, żeby
-    // pokazać komunikat "Posiłek zapisany" TYLKO po realnym powodzeniu zapisu,
-    // a nie optymistycznie zaraz po kliknięciu (wcześniej formularz nie dawał
-    // żadnego potwierdzenia poza nową pozycją na liście, która mogła się zgubić
-    // w długiej liście posiłków danego dnia).
+// The returned boolean (success/failure) - MealLogger.jsx waits for it so it can show the
+// "Meal saved" message ONLY after the save genuinely succeeded, rather than optimistically
+// right after the click (previously the form gave no confirmation beyond a new entry in the
+// list, which could easily be lost in a long list of that day's meals).
     let success = false;
     try {
       const res = await fetch('/api/meals', {
@@ -531,10 +527,10 @@ export default function App() {
       });
 
       if (res.ok) {
-        // Pomyślnie dodano posiłek - przeładuj dashboard
+// The meal was added successfully - reload the dashboard
         await fetchDashboardData();
-        // Nowy posiłek mógł zmienić ranking "częstych posiłków" (np. dobił do progu
-        // 2 powtórzeń) - odświeżamy w tle, bez czekania/blokowania zwracanego success.
+// The new meal may have changed the "frequent meals" ranking (reaching the 2-repetition
+// threshold, say) - refresh in the background without blocking the returned success value.
         fetchFrequentMeals();
         success = true;
       } else {
@@ -561,10 +557,10 @@ export default function App() {
     return success;
   };
 
-  // Szybkie ponowne dodanie wcześniej zapisanego posiłku (chip "częste posiłki" w
-  // MealLogger.jsx) - wywołuje /api/meals/repeat, które kopiuje wartości odżywcze z
-  // oryginalnego wpisu BEZ ponownego wywołania AI (inaczej niż handleAddMeal powyżej),
-  // więc jest natychmiastowe i nie zużywa limitu zapytań do Gemini.
+// Quickly re-add a previously saved meal (the "frequent meals" chip in MealLogger.jsx) -
+// calls /api/meals/repeat, which copies the nutrition values from the original entry WITHOUT
+// invoking the AI again (unlike handleAddMeal above), so it is instant and does not consume
+// the Gemini request quota.
   const handleRepeatMeal = async (mealId) => {
     setIsAnalyzing(true);
     setErrorMessage('');
@@ -592,7 +588,7 @@ export default function App() {
           const errData = await res.json();
           errorMsg = errData.error || errorMsg;
         } catch (e) {
-          // brak treści błędu w odpowiedzi - zostaje domyślny komunikat
+          // no error body in the response - the default message stands
         }
         setErrorMessage(errorMsg);
       }
@@ -606,10 +602,10 @@ export default function App() {
   };
 
   const handleDeleteMeal = async (id) => {
-    // Guard przed duplikatami: szybki podwójny klik (lub zawieszone potwierdzenie
-    // confirm() + ponowny klik) wysyłał dwa równoległe żądania DELETE dla tego samego
-    // posiłku - drugie zwracało błąd 404 (posiłek już usunięty), co pokazywało
-    // użytkownikowi niepotrzebny komunikat błędu mimo że usunięcie się powiodło.
+// Duplicate guard: a rapid double click (or a hung confirm() followed by another click)
+// used to send two parallel DELETE requests for the same meal - the second returned a 404
+// (the meal was already deleted), showing the user a pointless error message even though
+// the deletion had succeeded.
     if (deletingMealIdsRef.current.has(id)) return;
 
     if (!confirm(t('Czy na pewno chcesz usunąć ten posiłek?'))) return;
@@ -808,10 +804,9 @@ export default function App() {
     localStorage.removeItem('diet_session_token');
     setLoginStep('password');
     setUserProfile({ username: '', avatar_base64: '' });
-    // POPRAWKA (runda 17 audytu): syncToken (token do ręcznej synchronizacji,
-    // patrz Settings) nie był resetowany przy wylogowaniu, w przeciwieństwie do
-    // dashboardData/userProfile - mógł zostać widoczny dla kolejnego użytkownika
-    // logującego się na tym samym urządzeniu/karcie.
+// FIX (audit round 17): syncToken (the manual-sync token, see Settings) was not reset on
+// sign-out, unlike dashboardData/userProfile - it could stay visible to the next user
+// signing in on the same device or tab.
     setSyncToken('');
     setDashboardData({
       summary: {
@@ -1282,7 +1277,7 @@ export default function App() {
         </nav>
       </header>
 
-      {/* Kontrolki globalne: Data i Błędy */}
+      {/* Global controls: date and errors */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
         <div className="date-selector">
           <span>{t("Dzień:")}</span>
@@ -1310,7 +1305,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Wyświetlanie aktywnej zakładki */}
+      {/* Render the active tab */}
       <main>
         {currentTab === 'dashboard' && (
           <div className="premium-tab-content">
@@ -1357,7 +1352,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer wewnątrz aplikacji */}
+      {/* Footer inside the application */}
       <footer>
         <div style={{ textAlign: 'center', marginTop: '40px', padding: '20px 0', borderTop: '1px solid var(--border-glass)' }}>
           <AppFooter />

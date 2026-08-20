@@ -1,15 +1,15 @@
 #!/usr/bin/env node
-// Kontrola spójności tłumaczeń: czy każdy tekst przekazany do t() ma odpowiednik
-// w słowniku, i czy w słowniku nie zostały wpisy, których już nikt nie używa.
+// Translation consistency check: whether every text passed to t() has a matching dictionary
+// entry, and whether the dictionary still holds entries nobody uses.
 //
-// Po co: kluczem tłumaczenia jest samo polskie zdanie, więc zmiana copy zrywa
-// tłumaczenie CICHO - w trybie angielskim po prostu pojawia się polski tekst.
-// Nie ma po tym ani błędu, ani wyjątku, ani nawet innego zachowania aplikacji.
-// Ten skrypt zamienia tę cichą awarię w błąd builda.
+// Why: the translation key is the Polish sentence itself, so a copy change breaks the
+// translation SILENTLY - in English mode the Polish text simply appears. There is no error,
+// no exception, not even different application behaviour.
+// This script turns that silent failure into a build error.
 //
-// Użycie:
-//   npm run check-i18n           # raport + kod wyjścia 1 przy brakach
-//   npm run check-i18n -- --fix  # dopisuje brakujące klucze do i18n.js jako TODO
+// Usage:
+//   npm run check-i18n           # report, exit code 1 when anything is missing
+//   npm run check-i18n -- --fix  # appends the missing keys to i18n.js as TODOs
 
 import fs from 'fs';
 import path from 'path';
@@ -29,9 +29,9 @@ function walk(dir, files = []) {
   return files;
 }
 
-// Wyciąga literały przekazane do t(). Świadomie obsługujemy WYŁĄCZNIE literały
-// (apostrofy, cudzysłowy, backticki bez interpolacji) - t(zmienna) jest nie do
-// sprawdzenia statycznie i jest raportowane osobno jako ostrzeżenie.
+// Extracts the literals passed to t(). We deliberately handle ONLY literals (single quotes,
+// double quotes, backticks without interpolation) - t(variable) cannot be checked statically
+// and is reported separately as a warning.
 function extractCalls(source) {
   const literals = new Set();
   const dynamic = [];
@@ -44,7 +44,7 @@ function extractCalls(source) {
       dynamic.push(raw);
       continue;
     }
-    // Odtworzenie sekwencji ucieczki tak, jak zrobiłby to parser JS.
+    // Reconstruct escape sequences the way a JS parser would.
     literals.add(raw.replace(/\\(['"`\\])/g, '$1').replace(/\\n/g, '\n'));
   }
 
@@ -58,7 +58,7 @@ function loadDictionaryKeys() {
   const source = fs.readFileSync(I18N_FILE, 'utf8');
   const start = source.indexOf('const TRANSLATIONS = {');
   if (start === -1) {
-    console.error('BŁĄD: nie znaleziono obiektu TRANSLATIONS w utils/i18n.js');
+    console.error('ERROR: could not find the TRANSLATIONS object in utils/i18n.js');
     process.exit(2);
   }
   const end = source.indexOf('\n};', start);
@@ -89,42 +89,42 @@ const dictionary = loadDictionaryKeys();
 const missing = [...used].filter(k => !dictionary.has(k)).sort();
 const unused = [...dictionary].filter(k => !used.has(k)).sort();
 
-console.log('=== KONTROLA TŁUMACZEŃ ===');
-console.log(`Przeskanowano plików:      ${files.length}`);
-console.log(`Tekstów użytych w t():     ${used.size}`);
-console.log(`Kluczy w słowniku:         ${dictionary.size}`);
+console.log('=== TRANSLATION CHECK ===');
+console.log(`Files scanned:            ${files.length}`);
+console.log(`Texts used in t():        ${used.size}`);
+console.log(`Keys in the dictionary:   ${dictionary.size}`);
 console.log('');
 
 if (dynamicCalls.length) {
   const total = dynamicCalls.reduce((s, d) => s + d.count, 0);
-  console.log(`ℹ️  ${total} wywołań t() ze zmienną (nie da się sprawdzić statycznie):`);
+  console.log(`ℹ️  ${total} t() calls with a variable (cannot be checked statically):`);
   dynamicCalls.forEach(d => console.log(`     ${d.file} (${d.count})`));
   console.log('');
 }
 
-// Klucz ze słownika, którego nie ma w żadnym t(), ma dwie możliwe przyczyny i
-// trzeba je rozróżnić, bo prowadzą do zupełnie różnych działań:
-//   (a) tekst jest w kodzie, ale NIE opakowany w t() - przełączenie na angielski
-//       go nie zmieni, mimo że tłumaczenie istnieje. To realny błąd.
-//   (b) tekstu nie ma nigdzie - wpis jest po prostu nieaktualny do usunięcia.
+// A dictionary key absent from every t() has two possible causes, and they must be told
+// apart because they lead to entirely different actions:
+//   (a) the text is in the code but NOT wrapped in t() - switching to English will not change
+//       it even though a translation exists. That is a real bug.
+//   (b) the text exists nowhere - the entry is simply stale and can be deleted.
 const hardcoded = [];
 const stale = [];
 
-// Dopasowanie musi być DOKŁADNE - całe wystąpienie, nie fragment dłuższego zdania.
-// Wcześniej było tu zwykłe `line.includes(key)`, przez co klucz "Zaloguj się"
-// trafiał w zdanie "Sesja wygasła. Zaloguj się ponownie.", a "Hasło" w "Hasło
-// dostępowe". Raport pokazywał wtedy 61 tekstów "na sztywno", z których realnych
-// było 43 - a próba automatycznego opakowania takiego trafienia rozerwałaby zdanie
-// w połowie.
+// The match must be EXACT - a whole occurrence, not a fragment of a longer sentence.
+// This used to be a plain `line.includes(key)`. The Polish examples below are quoted
+// deliberately - they are the exact strings that produced the bug. The key "Zaloguj się" matched inside
+// "Sesja wygasła. Zaloguj się ponownie.", and "Hasło" inside "Hasło dostępowe". The report
+// then showed 61 hardcoded texts where only 43 were real - and trying to wrap such a hit
+// automatically would have torn the sentence in half.
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 function exactOccurrences(key, line) {
   const k = escapeRe(key);
   return (
-    new RegExp(`(\\w+)=(["'])${k}\\2`).test(line) ||   // placeholder="Klucz"
-    new RegExp(`(["'])${k}\\1`).test(line) ||          // 'Klucz' jako cały literał
-    new RegExp(`>\\s*${k}\\s*<`).test(line) ||         // >Klucz<
-    new RegExp(`^\\s*${k}\\s*$`).test(line)            // Klucz sam w linii JSX
+    new RegExp(`(\\w+)=(["'])${k}\\2`).test(line) ||   // placeholder="Key"
+    new RegExp(`(["'])${k}\\1`).test(line) ||          // 'Key' as a whole literal
+    new RegExp(`>\\s*${k}\\s*<`).test(line) ||         // >Key<
+    new RegExp(`^\\s*${k}\\s*$`).test(line)            // Key alone on a JSX line
   );
 }
 
@@ -134,7 +134,7 @@ for (const key of unused) {
     const lines = fs.readFileSync(file, 'utf8').split('\n');
     lines.forEach((line, i) => {
       const trimmed = line.trim();
-      // Wystąpienie w komentarzu nie jest tekstem interfejsu.
+      // An occurrence inside a comment is not interface text.
       if (/^(\/\/|\*|\/\*)/.test(trimmed)) return;
       if (exactOccurrences(key, line)) {
         hits.push(`${path.relative(SRC_DIR, file)}:${i + 1}`);
@@ -147,8 +147,8 @@ for (const key of unused) {
 }
 
 if (hardcoded.length) {
-  console.log(`❗ ${hardcoded.length} tekstów jest w kodzie NA SZTYWNO, mimo że mają tłumaczenie.`);
-  console.log('   Przełączenie języka na angielski ich nie zmieni - trzeba opakować je w t().');
+  console.log(`❗ ${hardcoded.length} texts are HARDCODED in the code despite having a translation.`);
+  console.log('   Switching the language to English will not change them - they need wrapping in t().');
   hardcoded.slice(0, 12).forEach(({ key, hits }) => {
     const short = key.length > 55 ? key.slice(0, 55) + '…' : key;
     console.log(`     "${short}"  →  ${hits.slice(0, 2).join(', ')}`);
@@ -158,8 +158,8 @@ if (hardcoded.length) {
 }
 
 if (stale.length) {
-  console.log(`⚠️  ${stale.length} kluczy nie występuje nigdzie w kodzie (nieaktualne wpisy).`);
-  console.log('    Zwykle znaczy to, że polskie copy zmieniono, a wpis został ze starym brzmieniem:');
+  console.log(`⚠️  ${stale.length} keys appear nowhere in the code (stale entries).`);
+  console.log('    Usually this means the Polish copy changed and the entry kept the old wording:');
   stale.slice(0, 10).forEach(k => console.log(`     "${k.length > 70 ? k.slice(0, 70) + '…' : k}"`));
   if (stale.length > 10) console.log(`     … i ${stale.length - 10} więcej`);
   console.log('');
@@ -168,15 +168,15 @@ if (stale.length) {
 const coverage = dictionary.size > 0
   ? Math.round(((dictionary.size - hardcoded.length - stale.length) / dictionary.size) * 100)
   : 100;
-console.log(`Pokrycie słownika realnymi wywołaniami t(): ${coverage}%`);
+console.log(`Dictionary coverage by real t() calls: ${coverage}%`);
 console.log('');
 
 if (missing.length === 0) {
-  console.log('✅ Każdy tekst z t() ma tłumaczenie. Wersja angielska jest kompletna.');
+  console.log('✅ Every t() text has a translation. The English version is complete.');
   process.exit(0);
 }
 
-console.log(`❌ ${missing.length} tekstów bez tłumaczenia EN - w trybie angielskim pokażą się po polsku:`);
+console.log(`❌ ${missing.length} texts have no EN translation - they will show in Polish in English mode:`);
 missing.forEach(k => console.log(`     "${k.length > 70 ? k.slice(0, 70) + '…' : k}"`));
 
 if (process.argv.includes('--fix')) {
@@ -184,13 +184,13 @@ if (process.argv.includes('--fix')) {
   const marker = '\n};';
   const insertAt = source.indexOf(marker, source.indexOf('const TRANSLATIONS = {'));
   const escape = (s) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
-  const block = '\n\n  // TODO: uzupełnić tłumaczenia (dodane automatycznie przez check-i18n --fix)\n'
+  const block = '\n\n  // TODO: fill in these translations (added automatically by check-i18n --fix)\n'
     + missing.map(k => `  "${escape(k)}": "${escape(k)}",`).join('\n');
   fs.writeFileSync(I18N_FILE, source.slice(0, insertAt) + block + source.slice(insertAt));
-  console.log(`\n✏️  Dopisano ${missing.length} kluczy do utils/i18n.js z polskim tekstem jako wartością.`);
-  console.log('    Przetłumacz je - dopóki tego nie zrobisz, wersja EN pokazuje polski tekst.');
+  console.log(`\n✏️  Appended ${missing.length} keys to utils/i18n.js with the Polish text as the value.`);
+  console.log('    Translate them - until you do, the EN version shows Polish text.');
   process.exit(0);
 }
 
-console.log('\nUruchom "npm run check-i18n -- --fix", żeby dopisać brakujące klucze jako TODO.');
+console.log('\nRun "npm run check-i18n -- --fix" to append the missing keys as TODOs.');
 process.exit(1);

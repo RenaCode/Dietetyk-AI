@@ -1,5 +1,5 @@
-// Testy logiki czatu Dietetyka AI (utils/chatHistory.js, używane przez routes/chat.js).
-// Czysto jednostkowe - bez bazy danych/sieci/Gemini, można uruchomić: node tests/test-chat.js
+// Tests for the Dietetyk AI chat logic (utils/chatHistory.js, used by routes/chat.js).
+// Pure unit tests - no database, network or Gemini; run with: node tests/test-chat.js
 
 function assert(condition, message) {
   if (!condition) {
@@ -22,12 +22,12 @@ function testMessageNeedsLongHistory() {
 }
 
 function testBuildWeeklyTrendSummaryIncludesWorkouts() {
-  console.log('\n--- TEST: buildWeeklyTrendSummary (agregacja treningów) ---');
+  console.log('\n--- TEST: buildWeeklyTrendSummary (workout aggregation) ---');
   const { buildWeeklyTrendSummary } = require('../utils/chatHistory');
 
-  // Jeden trening (Running, 40 min) w oknie 7-dniowym - żadnych posiłków/metryk,
-  // żeby sprawdzić, że SAM trening wystarczy, by okno nie zostało pominięte
-  // (przed naprawą "brak workoutCount" w warunku pomijania okno by zniknęło z promptu).
+  // One workout (Running, 40 min) in a 7-day window - no meals or metrics, to check that a
+  // workout ALONE is enough to keep the window from being skipped
+  // (before the "missing workoutCount" fix in the skip condition, the window vanished from the prompt).
   const historyWorkouts = [
     { date: '2026-07-16', workout_type: 'Running', duration_minutes: 40, active_calories: 400, avg_heart_rate: 150, max_heart_rate: 170 }
   ];
@@ -37,14 +37,14 @@ function testBuildWeeklyTrendSummaryIncludesWorkouts() {
   assert(summary.includes('40 min'), 'podsumowanie zawiera łączny czas treningu');
   assert(summary.includes('Running'), 'podsumowanie zawiera typ treningu');
 
-  // Okno bez ŻADNYCH danych (posiłki/metryki/treningi) musi zostać pominięte -
-  // to istniejące zachowanie sprzed dodania treningów, nie może się zepsuć.
+  // A window with NO data at all (meals/metrics/workouts) must be skipped - existing
+  // behaviour from before workouts were added, which must not regress.
   const emptySummary = buildWeeklyTrendSummary([], [], [], '2026-07-13', '2026-07-20');
   assert(emptySummary === '', 'okno bez żadnych danych (w tym bez treningów) jest pomijane, nie generuje pustej linii');
 }
 
 function testBuildWeeklyTrendSummaryAggregatesMealsAndMetrics() {
-  console.log('\n--- TEST: buildWeeklyTrendSummary (posiłki + metryki, bez regresji) ---');
+  console.log('\n--- TEST: buildWeeklyTrendSummary (meals + metrics, no regression) ---');
   const { buildWeeklyTrendSummary } = require('../utils/chatHistory');
 
   const historyMetrics = [
@@ -73,7 +73,7 @@ try {
   testBuildWeeklyTrendSummaryIncludesWorkouts();
   testBuildWeeklyTrendSummaryAggregatesMealsAndMetrics();
   testMaxChatMessageLength();
-  console.log('\n🎉 TESTY CZATU ZAKOŃCZONE SUKCESEM!\n');
+  console.log('\n🎉 CHAT TESTS PASSED\n');
   process.exit(0);
 } catch (err) {
   console.error('\n' + err.message);

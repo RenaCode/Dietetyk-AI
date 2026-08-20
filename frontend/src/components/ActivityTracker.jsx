@@ -5,35 +5,35 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
   const [historyData, setHistoryData] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
-  // Stany pomiarów obwodów ciała
+  // Body circumference measurement state
   const [measurementsData, setMeasurementsData] = useState([]);
 
-  // Cele aktywności
+  // Activity targets
   const [goals, setGoals] = useState({
     target_steps: 10000,
     target_active_calories: 500,
     target_sleep_duration: 7.2,
     target_active_minutes: 30,
-    // 0 = brak ustawionego celu wagowego (pole opcjonalne, w przeciwieństwie do
-    // pozostałych celów aktywności, które zawsze mają sensowną wartość domyślną).
+  // 0 = no weight target set (an optional field, unlike the other activity targets, which
+  // always have a sensible default).
     target_weight_kg: 0
   });
   const [isSavingGoals, setIsSavingGoals] = useState(false);
   const [goalsMessage, setGoalsMessage] = useState({ type: '', text: '' });
-  // POPRAWKA (runda 17 audytu): efekt synchronizujący `goals` ze `summary` nadpisywał
-  // formularz przy KAŻDEJ zmianie `summary` - również przy tle auto-refreshu - co mogło
-  // nadpisać to, co użytkownik właśnie wpisuje w pola celów. Flaga "dirty" pozwala
-  // efektowi synchronizować formularz tylko, gdy użytkownik nie ma niezapisanych zmian.
+  // FIX (audit round 17): the effect syncing `goals` from `summary` overwrote the form on
+  // EVERY change to `summary` - including a background auto-refresh - which could overwrite
+  // whatever the user was typing into the target fields. A 'dirty' flag lets the effect sync
+  // the form only while the user has no unsaved changes.
   const [goalsDirty, setGoalsDirty] = useState(false);
   const [isGoalsOpen, setIsGoalsOpen] = useState(false);
 
   useEffect(() => {
     if (summary && !goalsDirty) {
-      // POPRAWKA (runda 4 audytu): `||` nadpisywał świadomo zapisane 0 (cel wyłączony)
-      // domyślną wartością przy każdym odświeżeniu `summary` (np. po zapisaniu celów -
-      // onGoalsUpdate odpytuje dashboard na nowo), więc pole formularza "skakało" z
-      // powrotem na domyślną wartość mimo poprawnie zapisanego 0 w backendzie (patrz
-      // poprawiony /api/dashboard w dashboard.js). `??` odróżnia realne 0 od
+  // FIX (audit round 4): `||` overwrote a deliberately saved 0 (target disabled) with the
+  // default on every `summary` refresh - after saving targets, for instance, when
+  // onGoalsUpdate re-queries the dashboard - so the form field 'jumped' back to the default
+  // even though 0 was correctly stored in the backend (see the fixed /api/dashboard in
+  // dashboard.js). `??` distinguishes a real 0 from
       // null/undefined (brak danych z backendu).
       setGoals({
         target_steps: summary.target_steps ?? 10000,
@@ -66,7 +66,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
         }
         setTimeout(() => setGoalsMessage({ type: '', text: '' }), 5000);
       } else {
-        // F-S6: Obsługa 401 — wygasła sesja
+        // F-S6: handle 401 - expired session
         if (res.status === 401) { if (onLogout) onLogout(); return; }
         setGoalsMessage({ type: 'error', text: t('Błąd zapisu celów.') });
       }
@@ -95,9 +95,9 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
   });
 
   useEffect(() => {
-    // POPRAWKA (runda 17 audytu): brak flagi `cancelled` - spóźniona odpowiedź z
-    // nieaktualnego już żądania (np. po szybkiej zmianie sessionToken/last_sync)
-    // mogła nadpisać nowsze dane historii zdrowotnej. Wzorzec jak w Dashboard.jsx.
+    // FIX (audit round 17): there was no `cancelled` flag - a late response from an
+    // already-stale request (after a rapid sessionToken/last_sync change, say) could
+    // overwrite newer health history data. Same pattern as in Dashboard.jsx.
     let cancelled = false;
     const fetchHistory = async () => {
       if (!sessionToken) return;
@@ -111,7 +111,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
           if (!cancelled) setHistoryData(data);
         }
       } catch (err) {
-        console.error('Błąd pobierania historii zdrowotnej:', err);
+        console.error('Failed to fetch the health history:', err);
       } finally {
         if (!cancelled) setIsLoadingHistory(false);
       }
@@ -120,11 +120,11 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
     return () => { cancelled = true; };
   }, [sessionToken, summary.last_sync]);
 
-  // POPRAWKA (runda 17 audytu): `fetchMeasurements` jest wywoływana zarówno z efektu
-  // startowego, jak i po zapisie/usunięciu pomiaru - ref przechowuje "numer" aktualnego
-  // żądania z efektu, żeby spóźniona odpowiedź z poprzedniego efektu (np. po szybkiej
-  // zmianie sessionToken) nie nadpisała nowszego stanu. Wywołania spoza efektu (zapis/
-  // usunięcie) nie ustawiają tej flagi, więc działają jak dotychczas.
+  // FIX (audit round 17): `fetchMeasurements` is called both from the initial effect and
+  // after saving or deleting a measurement - the ref holds the 'number' of the current
+  // request from the effect, so a late response from a previous effect (after a rapid
+  // sessionToken change) cannot overwrite newer state. Calls from outside the effect
+  // (save/delete) do not set this flag, so they behave as before.
   const measurementsRequestRef = useRef(0);
 
   useEffect(() => {
@@ -147,7 +147,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
         }
       }
     } catch (err) {
-      console.error('Błąd pobierania obwodów ciała:', err);
+      console.error('Failed to fetch body circumferences:', err);
     } finally {
       if (requestId === undefined || requestId === measurementsRequestRef.current) {
         setIsLoadingMeasurements(false);
@@ -168,7 +168,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
     setIsSavingMeasurement(true);
     setMeasurementMessage({ type: '', text: '' });
     try {
-      // F-S5: Filtrowanie pustych stringów — nie wysyłamy '' do backendu (trafiłoby jako NULL lub błąd walidacji)
+    // F-S5: filter out empty strings - we do not send '' to the backend (it would arrive as
       const measurementPayload = Object.fromEntries(
         Object.entries(formMeasurement).map(([k, v]) => [k, v === '' ? null : v])
       );
@@ -224,7 +224,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
         setMeasurementMessage({ type: 'error', text: t('Nie udało się usunąć pomiaru.') });
       }
     } catch (err) {
-      console.error('Błąd usuwania pomiaru:', err);
+      console.error('Failed to delete the measurement:', err);
       setMeasurementMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     }
   };
@@ -429,9 +429,9 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
     );
   };
 
-  // Wykres wielu serii na jednej, wspólnej osi Y (np. fazy snu w godzinach) -
-  // analogiczny do renderLineChart/renderDualAxisChart powyżej, ale dla N serii
-  // współdzielących skalę, więc nie ma sensu osobna skala per seria.
+  // A multi-series chart on one shared Y axis (sleep stages in hours, for instance) -
+  // analogous to renderLineChart/renderDualAxisChart above, but for N series sharing a
+  // scale, so a separate scale per series would make no sense.
   const renderMultiLineChart = (data, series) => {
     const validData = data.filter(d => series.some(s => d[s.key] !== null && d[s.key] !== undefined));
     if (validData.length === 0) {
@@ -506,9 +506,9 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
   };
 
   // Prognoza trendu wagi na podstawie regresji liniowej z danych historycznych.
-  // targetWeight (opcjonalny, kg) - jeśli podany (>0), funkcja dodatkowo liczy,
-  // za ile dni/kiedy linia trendu przetnie wagę docelową ("prognoza do celu"),
-  // a nie tylko wagę za sztywne `daysAhead` dni.
+  // targetWeight (optional, kg) - when given (>0) the function additionally computes in how
+  // many days, and on what date, the trend line will cross the target weight ('forecast to
+  // target'), rather than only the weight `daysAhead` days out.
   const computeWeightForecast = (data, daysAhead, targetWeight) => {
     const validData = data
       .filter(d => d.weight !== null && d.weight !== undefined && d.date)
@@ -517,7 +517,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
     if (validData.length < 5) return null;
 
-    // Dzień 0 = data pierwszego pomiaru, oś X w dniach
+    // Day 0 = the date of the first measurement; the X axis is in days
     const baseTime = new Date(validData[0].date).getTime();
     const msPerDay = 24 * 60 * 60 * 1000;
     const points = validData.map(d => ({
@@ -542,9 +542,9 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
     const currentWeight = validData[validData.length - 1].weight;
     const deltaPerWeek = slope * 7;
 
-    // "Prognoza do celu" - data, kiedy linia trendu przetnie wagę docelową.
-    // Liczymy tylko jeśli cel jest realnie ustawiony (>0) i trend nie jest
-    // płaski (slope !== 0, inaczej linia nigdy nie dotknie celu).
+    // 'Forecast to target' - the date when the trend line crosses the target weight.
+    // Computed only when a target is genuinely set (>0) and the trend is not flat
+    // (slope !== 0, otherwise the line would never reach the target).
     let goalWeight = null;
     let goalEtaDays = null;
     let goalDate = null;
@@ -557,12 +557,12 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
       const daysFromNow = goalX - lastX;
 
       if (daysFromNow <= 0) {
-        // Cel byłby "w przeszłości" względem ostatniego pomiaru - trend
-        // oddala się od celu (np. cel to spadek wagi, a waga rośnie).
+        // The target would be 'in the past' relative to the last measurement - the trend is
+        // moving away from it (the target is weight loss while weight is rising, say).
         goalMovingAway = true;
       } else if (daysFromNow > 3650) {
-        // Trend zbyt płaski/odległy, żeby sensownie podać konkretną datę
-        // (>10 lat ekstrapolacji z kilkutygodniowych danych byłoby mylące).
+        // The trend is too flat or too distant to name a specific date sensibly
+        // (>10 years of extrapolation from a few weeks of data would be misleading).
         goalTooFar = true;
       } else {
         goalEtaDays = Math.round(daysFromNow);
@@ -586,10 +586,9 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
   const weightForecast = computeWeightForecast(historyData, 30, goals.target_weight_kg);
 
-  // Fazy snu w czasie - "lekki sen" nie jest zapisywany jako osobna kolumna,
-  // wyliczamy go z realnych danych (całkowity czas snu minus głęboki i REM)
-  // zamiast fabrykować wartość - jeśli któregoś ze składników brakuje, light
-  // pozostaje null i po prostu nie rysujemy go dla tego dnia.
+  // Sleep stages over time - 'light sleep' is not stored as its own column, so we derive it
+  // from real data (total sleep minus deep and REM) rather than fabricating a value. If any
+  // component is missing, light stays null and we simply do not draw it for that day.
   const sleepPhaseData = historyData.map(d => {
     const hasAllPhases = d.sleep_duration != null && d.sleep_deep != null && d.sleep_rem != null;
     const light = hasAllPhases ? Math.max(0, d.sleep_duration - d.sleep_deep - d.sleep_rem) : null;
@@ -600,12 +599,12 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
 
-      {/* 1. Kafelki wskaźników z sensorów (Gotowość, Sen, Skład Ciała) */}
+      {/* 1. Sensor metric tiles (readiness, sleep, body composition) */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px', alignItems: 'start' }}>
         
-        {/* Kolumna 1: Oura & Dzisiejsza Aktywność */}
+        {/* Column 1: Oura and today's activity */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {/* Oura Ring: Sen i Gotowość */}
+          {/* Oura Ring: sleep and readiness */}
           <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '10px' }}>
               <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -664,7 +663,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span>Odchylenie temperatury:</span>
-                    {/* Runda 12 (audyt): poprzednio `temperature_deviation > 0` przy null
+                {/* Round 12 (audit): `temperature_deviation > 0` previously, with null
                         zwracało false, więc brak danych był kolorowany tak samo jak realne
                         "0 lub mniej" (zielony) - teraz brak danych dostaje neutralny, wyciszony
                         kolor, niezależny od interpretacji "dobre/złe". */}
@@ -677,7 +676,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
             )}
           </div>
 
-          {/* Ogólna Aktywność: Kroki i Kalorie */}
+          {/* General activity: steps and calories */}
           <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '10px' }}>
               <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -720,9 +719,9 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
           </div>
         </div>
 
-        {/* Kolumna 2: Withings & Cele Aktywności */}
+        {/* Column 2: Withings and activity targets */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {/* Withings: Skład Ciała i Waga */}
+          {/* Withings: body composition and weight */}
           <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '10px' }}>
               <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -772,7 +771,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
             )}
           </div>
 
-          {/* Cele Aktywności */}
+          {/* Activity targets */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div
               className="glass-card"
@@ -867,10 +866,10 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
       </div>
 
-      {/* 2. Wykresy trendów z 30 dni (Spalanie Tłuszczu i Masa Mięśniowa) */}
+      {/* 2. 30-day trend charts (fat loss and muscle mass) */}
       <div className="activity-charts-grid">
         
-        {/* Wykres 1: Spalanie Tłuszczu (Waga i Fat %) */}
+        {/* Chart 1: fat loss (weight and fat %) */}
         <div className="glass-card">
           <h3 className="card-title" style={{ marginBottom: '4px' }}>{t("📉 Wykres 1: Spalanie Tłuszczu")}</h3>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '16px' }}>
@@ -894,7 +893,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
               </span>
             </div>
           )}
-          {/* Prognoza "do celu" - osobna linia, bo to inna informacja niż prognoza
+            {/* 'Forecast to target' - a separate line, because it is different information from the forecast
               na sztywne 30 dni powyżej: tu liczymy datę przecięcia linii trendu
               z wagą docelową ustawioną w formularzu "Cele Aktywności". */}
           {!isLoadingHistory && weightForecast && weightForecast.goalWeight && (
@@ -925,7 +924,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
           )}
         </div>
 
-        {/* Wykres 2: Przyrost Mięśni (Masa mięśniowa w kg) */}
+        {/* Chart 2: muscle gain (muscle mass in kg) */}
         <div className="glass-card">
           <h3 className="card-title" style={{ marginBottom: '4px' }}>{t("📈 Wykres 2: Rozwój Masy Mięśniowej")}</h3>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '16px' }}>
@@ -938,7 +937,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
           )}
         </div>
 
-        {/* Wykres 3: Fazy Snu (Głęboki / REM / Lekki) */}
+        {/* Chart 3: sleep stages (deep / REM / light) */}
         <div className="glass-card">
           <h3 className="card-title" style={{ marginBottom: '4px' }}>😴 Wykres 3: Fazy Snu</h3>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '16px' }}>
@@ -959,7 +958,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
           )}
         </div>
 
-        {/* Wykres 4: Aktywność (Aktywne kalorie i aktywne minuty) */}
+        {/* Chart 4: activity (active calories and active minutes) */}
         <div className="glass-card">
           <h3 className="card-title" style={{ marginBottom: '4px' }}>{t("🔥 Wykres 4: Aktywność")}</h3>
           <p style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '16px' }}>
@@ -974,10 +973,10 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
 
       </div>
 
-      {/* 3. Pomiary Obwodów Ciała */}
+      {/* 3. Body circumference measurements */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px', marginTop: '10px' }}>
         
-        {/* Formularz wprowadzania pomiarów i Wykres trendu obwodów */}
+        {/* Measurement entry form and circumference trend chart */}
         <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <h3 className="card-title">{t("📐 Pomiary Obwodów Ciała")}</h3>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-dim)' }}>
@@ -1151,7 +1150,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
             )}
           </form>
 
-          {/* Wykres trendu obwodów */}
+        {/* Circumference trend chart */}
           <div style={{ borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
               <strong style={{ fontSize: '0.9rem', color: '#fff' }}>{t("📉 Wykres Trendów Obwodów")}</strong>
@@ -1182,7 +1181,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
           </div>
         </div>
 
-        {/* Historia pomiarów obwodów */}
+        {/* Circumference measurement history */}
         <div className="glass-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
           <h3 className="card-title">{t("📜 Historia Pomiarów Obwodów")}</h3>
           {isLoadingMeasurements ? (

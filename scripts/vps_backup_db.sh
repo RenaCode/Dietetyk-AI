@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
 # scripts/vps_backup_db.sh
 #
-# Kopia zapasowa produkcyjnej bazy SQLite na VPS: wykonanie, WERYFIKACJA,
+# Backup of the production SQLite database on the VPS: creation, VERIFICATION,
 # opcjonalne zgranie poza serwer i rotacja.
 #
 # Cron roota (codziennie o 3:00):
 #   0 3 * * * /opt/dietetyk-ai/scripts/vps_backup_db.sh >> /var/log/db_backup.log 2>&1
 #
-# Zgrywanie poza serwer (bez tego kopie leżą na TYM SAMYM dysku co baza i nie
-# chronią przed awarią hosta - ustaw zmienną i dodaj klucz SSH):
+# Shipping off-site (without this the copies sit on the SAME disk as the database and do not
+# protect against host failure - set the variable and add an SSH key):
 #   OFFSITE_DEST=user@backup-host:/backups/dietetyk-ai/ /opt/dietetyk-ai/scripts/vps_backup_db.sh
 #
-# CO SIĘ ZMIENIŁO wzgl. poprzedniej wersji tego skryptu i dlaczego:
-#  1. `cp` żywego pliku .db zastąpione przez `VACUUM INTO`. Zwykłe kopiowanie pliku,
-#     do którego backend może akurat pisać, potrafi dać kopię uciętą w połowie
-#     transakcji - plik istnieje, ma sensowny rozmiar, a nie da się go odtworzyć.
-#     VACUUM INTO zapisuje spójny obraz bazy w ramach transakcji.
-#  2. Usunięty `PRAGMA wal_checkpoint(FULL)`. Baza działa w journal_mode TRUNCATE,
-#     nie WAL (patrz komentarz na początku backend/db.js) - ten checkpoint był
-#     no-opem i tworzył fałszywe wrażenie, że kopia jest zabezpieczona.
-#  3. Dodana weryfikacja kopii (quick_check + liczba użytkowników). Rotacja
-#     wykonuje się WYŁĄCZNIE po udanej weryfikacji, żeby seria nieudanych backupów
-#     nigdy nie skasowała ostatnich dobrych kopii.
+# WHAT CHANGED from the previous version of this script, and why:
+#  1. `cp` of a live .db file was replaced with `VACUUM INTO`. Plainly copying a file the
+#     backend may be writing to can produce a copy truncated mid-transaction - the file
+#     exists, has a plausible size, and cannot be restored. VACUUM INTO writes a consistent
+#     image of the database inside a transaction.
+#  2. `PRAGMA wal_checkpoint(FULL)` was removed. The database runs in journal_mode TRUNCATE,
+#     not WAL (see the comment at the top of backend/db.js) - that checkpoint was a no-op and
+#     created a false impression that the copy was safeguarded.
+#  3. Backup verification was added (quick_check plus a user count). Rotation runs ONLY after
+#     a successful verification, so a run of failed backups can never delete the last good
+#     copies.
 
 set -euo pipefail
 
@@ -47,9 +47,9 @@ if [ ! -f "$DB_FILE" ]; then
     exit 1
 fi
 
-# Kopię i weryfikację wykonujemy przez node z kontenera backendu - ma zainstalowany
-# moduł sqlite3, więc na hoście nie musi być klienta sqlite3. Gdy kontener nie
-# działa, próbujemy lokalnego `sqlite3` jako wariantu awaryjnego.
+# The copy and its verification run through node inside the backend container, which has the
+# sqlite3 module installed - so the host does not need an sqlite3 client. When the container
+# is not running, we fall back to a local `sqlite3`.
 run_in_container() {
     docker exec "$CONTAINER" node -e "$1"
 }
@@ -60,7 +60,7 @@ if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}\$"; then
         const sqlite3 = require('sqlite3').verbose();
         const db = new sqlite3.Database('/app/data/dietetyk.db');
         db.run('VACUUM INTO ?', ['/app/data/backups/dietetyk-vps-${TIMESTAMP}.db'], (err) => {
-            if (err) { console.error('BŁĄD VACUUM INTO:', err.message); process.exit(1); }
+            if (err) { console.error('VACUUM INTO FAILED:', err.message); process.exit(1); }
             console.log('Kopia zapisana.');
             db.close();
         });
@@ -80,7 +80,7 @@ if [ ! -f "$BACKUP_FILE" ]; then
 fi
 
 # --- WERYFIKACJA ---
-# Kopia, której nikt nigdy nie otworzył, to nie jest kopia zapasowa - to plik.
+# A copy nobody has ever opened is not a backup - it is a file.
 echo "Weryfikacja kopii..."
 if ! "$(dirname "$0")/verify_backup.sh" "$BACKUP_FILE"; then
     echo "BŁĄD: kopia nie przeszła weryfikacji - usuwam ją i ZACHOWUJĘ poprzednie."
@@ -101,9 +101,9 @@ if [ -n "$OFFSITE_DEST" ]; then
     if rsync -a --chmod=F600 "$BACKUP_FILE" "$OFFSITE_DEST"; then
         echo "Zgrano poza serwer."
     else
-        # Świadomie NIE przerywamy skryptu: lokalna kopia jest poprawna i już
-        # zweryfikowana, więc niedostępny host zapasowy nie powinien wyglądać
-        # jak nieudany backup. Ale musi być głośno widoczne w logu.
+        # We deliberately do NOT abort: the local copy is valid and already verified, so an
+        # unreachable backup host should not look like a failed backup. But it must be loudly
+        # visible in the log.
         echo "OSTRZEŻENIE: zgrywanie poza serwer NIE POWIODŁO SIĘ. Kopia istnieje tylko lokalnie!"
     fi
 else

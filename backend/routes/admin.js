@@ -9,8 +9,8 @@ const { getAppConfig } = require('../services/oauthHelpers');
 const { APP_SECRET_CONFIG_KEYS, maskSecretValue, isMaskedSecretWrite } = require('../utils/secretKeys');
 const { encrypt } = require('../utils/encryption');
 
-// Klucze logowania Google - globalne dla całej aplikacji (w przeciwieństwie do Oura/Withings,
-// logowanie Google dotyczy uwierzytelnienia do samej aplikacji, więc konfiguruje je raz admin).
+// Google sign-in keys - global to the whole application (unlike Oura/Withings): Google
+// sign-in authenticates access to the app itself, so it is configured once
 const GOOGLE_CONFIG_KEYS = ['google_client_id', 'google_client_secret'];
 
 router.get('/api/admin/config', requireAdmin, async (req, res) => {
@@ -40,7 +40,7 @@ router.post('/api/admin/config', requireAdmin, async (req, res) => {
         continue;
       }
       // Sekrety (mailgun_api_key, google_client_secret) trzymamy w bazie zaszyfrowane
-      // (patrz utils/encryption.js) - encrypt() jest no-opem dla pozostałych kluczy.
+      // (see utils/encryption.js) - encrypt() is a no-op for the remaining keys.
       const storedValue = APP_SECRET_CONFIG_KEYS.includes(key) ? encrypt(String(val)) : String(val);
       await db.run(`
         INSERT INTO app_config (key, value)
@@ -55,10 +55,10 @@ router.post('/api/admin/config', requireAdmin, async (req, res) => {
   }
 });
 
-// 6h. Zarządzanie użytkownikami (Admin)
+// 6h. User management (admin)
 router.get('/api/admin/users', requireAdmin, async (req, res) => {
   try {
-    // B-N3: Paginacja — limit max 200, domyślnie 100
+    // B-N3: pagination - max limit 200, 100 by default
     const limit = Math.min(parseInt(req.query.limit, 10) || 100, 200);
     const offset = parseInt(req.query.offset, 10) || 0;
     const rows = await db.all(`
@@ -80,9 +80,9 @@ router.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
   }
 
   try {
-    // UWAGA: sprawdzamy result.changes - bez tego usunięcie nieistniejącego/już usuniętego
-    // id zwracało "success: true" (operacja DELETE na zero wierszy nie jest błędem SQL),
-    // więc panel admina mylnie pokazywał potwierdzenie usunięcia, mimo że nic się nie stało.
+    // NOTE: we check result.changes - without it, deleting a non-existent or already deleted
+    // id returned "success: true" (a DELETE affecting zero rows is not an SQL error), so the
+    // admin panel wrongly confirmed a deletion that never happened.
     const result = await db.run(`DELETE FROM users WHERE id = ?`, [id]);
     if (result.changes === 0) {
       return res.status(404).json({ error: 'Użytkownik nie istnieje.' });
@@ -145,10 +145,9 @@ router.post('/api/admin/invite', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'Adres e-mail jest wymagany.' });
   }
 
-  // Wymuszenie wprost dodatkowego potwierdzenia (confirm_admin: true) przy roli admin -
-  // zabezpieczenie przed przypadkowym utworzeniem konta z uprawnieniami administratora
-  // przez błąd UI (np. domyślnie zaznaczony select) lub błędną integrację wysyłającą
-  // żądanie automatycznie.
+    // Explicitly require an extra confirmation (confirm_admin: true) for the admin role, so
+    // an admin account cannot be created by a UI slip (a select defaulting to admin) or by a
+    // faulty integration sending the request automatically.
   if (role === 'admin' && confirm_admin !== true) {
     return res.status(400).json({ error: 'Tworzenie konta z rolą administratora wymaga potwierdzenia (confirm_admin: true).' });
   }
@@ -161,8 +160,8 @@ router.post('/api/admin/invite', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Użytkownik o tym adresie e-mail już istnieje.' });
     }
 
-    // invitation_token jest jedyną rzeczą stojącą między e-mailem zaproszenia
-    // a utworzeniem konta (potencjalnie z rolą admin) - musi być nieprzewidywalny.
+    // invitation_token is the only thing standing between an invitation email and account
+    // creation - potentially with the admin role - so it must be unpredictable.
     const token = 'inv_' + crypto.randomBytes(24).toString('hex');
     const tempUsername = 'pending_' + crypto.randomBytes(6).toString('hex');
     const dummyPassword = await bcrypt.hash(crypto.randomBytes(24).toString('hex'), 10);
@@ -173,12 +172,11 @@ router.post('/api/admin/invite', requireAdmin, async (req, res) => {
       VALUES (?, ?, ?, 0, ?, ?, 'pending', ?)
     `, [tempUsername, dummyPassword, syncToken, email, roleToUse, token]);
 
-    // Runda 12 (audyt bezpieczeństwa): poprzednio origin był brany z req.headers.referer/
-    // origin/host - WSZYSTKIE w pełni kontrolowane przez klienta. Pozwalało to spreparować
-    // link rejestracyjny (z prawdziwym, działającym tokenem zaproszenia) wskazujący na
-    // dowolną domenę atakującego, wysyłany e-mailem w imieniu aplikacji. Teraz: skonfigurowany
-    // przez admina app_url (jak w integrations.js/auth.js), z fallbackiem na req.get('host')
-    // tylko gdy app_url nie jest ustawiony.
+    // Round 12 (security audit): origin used to be taken from req.headers.referer/origin/host
+    // - ALL fully controlled by the client. That allowed forging a registration link, carrying
+    // a real working invitation token, pointing at any attacker domain, emailed in the
+    // application's name. Now: the app_url configured by an administrator (as in
+    // integrations.js and auth.js), falling back to req.get('host') only when app_url is unset.
     const appUrl = await getAppConfig('app_url');
     const origin = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
     const registrationLink = `${origin}/register?token=${token}`;

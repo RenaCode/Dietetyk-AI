@@ -1,10 +1,13 @@
-// Testy budowania promptu analizy posiłku (utils/mealPrompts.js).
+// Tests for building the meal analysis prompt (utils/mealPrompts.js).
 //
-// Prompt jest tu jedynym miejscem, które decyduje o zachowaniu modelu, a jego
-// regresja jest wyjątkowo trudna do zauważenia: aplikacja działa dalej, zwraca
-// poprawny JSON, tylko liczby są policzone nie z tego, z czego trzeba. Dlatego
-// sprawdzamy nie brzmienie tekstu, ale obecność instrukcji, które faktycznie
-// zmieniają wynik - przede wszystkim pierwszeństwo opisu użytkownika nad zdjęciem.
+// The prompt is the only thing here that decides how the model behaves, and a regression
+// in it is exceptionally hard to notice: the app keeps working and keeps returning valid
+// JSON, only the numbers are computed from the wrong thing. So we assert not on the exact
+// wording but on the presence of the instructions that genuinely change the outcome -
+// above all the user description taking precedence over the photo.
+//
+// The regex literals below deliberately stay Polish: they match the Polish PROMPT, so the
+// Polish in them is data being matched, not prose anyone reads.
 
 const assert = require('assert');
 const { buildMealPrompt } = require('../utils/mealPrompts');
@@ -12,7 +15,7 @@ const { buildMealPrompt } = require('../utils/mealPrompts');
 const DESCRIPTION = 'to było 200 g kurczaka, ryż brązowy, smażone na maśle';
 
 function testPhotoWithDescriptionGivesTextPrecedence() {
-  console.log('\n--- TEST 1: zdjęcie + opis -> opis ma pierwszeństwo ---');
+  console.log('\n--- TEST 1: photo + description -> the description wins ---');
   const prompt = buildMealPrompt({ hasImage: true, userText: DESCRIPTION, language: 'pl' });
 
   assert.ok(prompt.includes(DESCRIPTION), 'Opis użytkownika nie trafił do promptu.');
@@ -25,12 +28,12 @@ function testPhotoWithDescriptionGivesTextPrecedence() {
   assert.ok(/NIE traktuj opisu jako drugiego, osobnego posiłku/.test(prompt),
     'Brak zabezpieczenia przed policzeniem opisu jako drugiego posiłku.');
 
-  console.log('  ✓ opis w <user_input>, reguła pierwszeństwa obecna');
-  console.log('✅ Opis wygrywa ze zdjęciem.');
+  console.log('  ✓ description wrapped in <user_input>, precedence rule present');
+  console.log('✅ The description overrides the photo.');
 }
 
 function testPhotoWithDescriptionAsksForANote() {
-  console.log('\n--- TEST 2: model ma odnotować, że poszedł za opisem ---');
+  console.log('\n--- TEST 2: the model must note when it followed the description ---');
   const prompt = buildMealPrompt({ hasImage: true, userText: DESCRIPTION, language: 'pl' });
 
   assert.ok(/dietician_comment/.test(prompt), 'Brak pola komentarza w strukturze.');
@@ -39,12 +42,12 @@ function testPhotoWithDescriptionAsksForANote() {
   assert.ok(/Nie dodawaj takiej adnotacji, gdy\s+oba źródła są zgodne/.test(prompt),
     'Brak zastrzeżenia, żeby nie dodawać adnotacji przy zgodnych źródłach - inaczej pojawiałaby się zawsze.');
 
-  console.log('  ✓ adnotacja wymagana przy rozbieżności, zabroniona przy zgodności');
-  console.log('✅ Adnotacja o źródle danych.');
+  console.log('  ✓ note required on divergence, forbidden when the sources agree');
+  console.log('✅ Data-source annotation.');
 }
 
 function testPhotoWithDescriptionCoversAddAndRemove() {
-  console.log('\n--- TEST 3: opis może dodawać i odejmować pozycje ---');
+  console.log('\n--- TEST 3: the description can add and remove items ---');
   const prompt = buildMealPrompt({ hasImage: true, userText: DESCRIPTION, language: 'pl' });
 
   assert.ok(/może DODAWAĆ rzeczy niewidoczne na zdjęciu/.test(prompt),
@@ -54,12 +57,12 @@ function testPhotoWithDescriptionCoversAddAndRemove() {
   assert.ok(/wielkość porcji|tożsamość składnika|sposób przygotowania/.test(prompt),
     'Prompt nie wymienia, co konkretnie opis może korygować.');
 
-  console.log('  ✓ dodawanie, pomijanie i korekta porcji/składnika/obróbki');
-  console.log('✅ Pełen zakres uzupełnień.');
+  console.log('  ✓ adding, excluding and correcting portion/ingredient/cooking method');
+  console.log('✅ Full range of corrections.');
 }
 
 function testPhotoWithoutDescriptionHasNoConflictRules() {
-  console.log('\n--- TEST 4: samo zdjęcie -> bez reguł rozstrzygania sporu ---');
+  console.log('\n--- TEST 4: photo only -> no conflict-resolution rules ---');
   const prompt = buildMealPrompt({ hasImage: true, userText: '', language: 'pl' });
 
   assert.ok(/zidentyfikuj dania na zdjęciu samodzielnie/.test(prompt),
@@ -71,12 +74,12 @@ function testPhotoWithoutDescriptionHasNoConflictRules() {
   assert.ok(!/zaznacz to jednym krótkim zdaniem/.test(prompt),
     'Żądanie adnotacji o opisie pojawia się mimo braku opisu.');
 
-  console.log('  ✓ prompt bez opisu nie zawiera reguł konfliktu');
-  console.log('✅ Wariant bez opisu czysty.');
+  console.log('  ✓ the description-free prompt carries no conflict rules');
+  console.log('✅ The no-description variant is clean.');
 }
 
 function testScreenshotBehaviourPreserved() {
-  console.log('\n--- TEST 5: zachowanie dla zrzutów ekranu nietknięte ---');
+  console.log('\n--- TEST 5: screenshot handling untouched ---');
   for (const userText of ['', DESCRIPTION]) {
     const prompt = buildMealPrompt({ hasImage: true, userText, language: 'pl' });
     assert.ok(/zrzut\s*\n?ekranu z aplikacji do liczenia kalorii/.test(prompt),
@@ -86,18 +89,18 @@ function testScreenshotBehaviourPreserved() {
     assert.ok(/"meals"/.test(prompt), 'Zniknęła tablica "meals" ze struktury odpowiedzi.');
   }
 
-  // Przy zdjęciu z wieloma posiłkami opis musi mieć określony zasięg, inaczej
-  // korekta "200 g kurczaka" mogłaby zostać zastosowana do śniadania i kolacji naraz.
+  // With a photo containing several meals the description needs a defined scope, otherwise a
+  // correction such as "200 g of chicken" could be applied to breakfast and dinner at once.
   const withText = buildMealPrompt({ hasImage: true, userText: DESCRIPTION, language: 'pl' });
   assert.ok(/zastosuj opis TYLKO do tego posiłku/.test(withText),
     'Brak reguły zasięgu opisu przy zdjęciu z kilkoma posiłkami.');
 
-  console.log('  ✓ wielosekcyjne zrzuty ekranu nadal obsługiwane, opis ma określony zasięg');
-  console.log('✅ Bez regresji na zrzutach ekranu.');
+  console.log('  ✓ multi-section screenshots still handled, description scope defined');
+  console.log('✅ No regression on screenshots.');
 }
 
 function testTextOnlyPromptUnchangedInSpirit() {
-  console.log('\n--- TEST 6: sam tekst -> prompt płaski, bez tablicy meals ---');
+  console.log('\n--- TEST 6: text only -> flat prompt, no meals array ---');
   const prompt = buildMealPrompt({ hasImage: false, userText: DESCRIPTION, language: 'pl' });
 
   assert.ok(prompt.includes(DESCRIPTION), 'Tekst użytkownika nie trafił do promptu.');
@@ -107,12 +110,12 @@ function testTextOnlyPromptUnchangedInSpirit() {
   assert.ok(/"calories"/.test(prompt) && /"health_rating"/.test(prompt),
     'Zniknęły pola ze struktury odpowiedzi.');
 
-  console.log('  ✓ struktura płaska, zgodna z tym, czego oczekuje routes/meals.js');
-  console.log('✅ Wariant tekstowy bez zmian.');
+  console.log('  ✓ flat structure, matching what routes/meals.js expects');
+  console.log('✅ Text variant unchanged.');
 }
 
 function testEnglishParity() {
-  console.log('\n--- TEST 7: wersja angielska ma te same reguły ---');
+  console.log('\n--- TEST 7: the English variant carries the same rules ---');
   const en = buildMealPrompt({ hasImage: true, userText: DESCRIPTION, language: 'en' });
 
   assert.ok(en.includes(DESCRIPTION), 'Opis nie trafił do angielskiego promptu.');
@@ -126,12 +129,12 @@ function testEnglishParity() {
   assert.ok(!/FOLLOW THE DESCRIPTION/.test(enNoText),
     'Reguła konfliktu w wersji EN mimo braku opisu.');
 
-  console.log('  ✓ EN ma pierwszeństwo opisu, adnotację i język komentarza');
-  console.log('✅ Parzystość językowa zachowana.');
+  console.log('  ✓ EN has description precedence, the annotation and the comment language');
+  console.log('✅ Language parity preserved.');
 }
 
 function testWhitespaceOnlyTextCountsAsNoDescription() {
-  console.log('\n--- TEST 8: opis z samych spacji traktowany jak brak opisu ---');
+  console.log('\n--- TEST 8: a whitespace-only description counts as none ---');
   const prompt = buildMealPrompt({ hasImage: true, userText: '   \n  ', language: 'pl' });
 
   assert.ok(!prompt.includes('<user_input>'),
@@ -139,22 +142,22 @@ function testWhitespaceOnlyTextCountsAsNoDescription() {
   assert.ok(/zidentyfikuj dania na zdjęciu samodzielnie/.test(prompt),
     'Nie użyto wariantu bez opisu.');
 
-  console.log('  ✓ same białe znaki nie tworzą fałszywego opisu');
-  console.log('✅ Odporność na pusty opis.');
+  console.log('  ✓ whitespace alone does not create a phantom description');
+  console.log('✅ Robust against an empty description.');
 }
 
 function testUnknownLanguageFallsBackToPolish() {
-  console.log('\n--- TEST 9: nieznany język -> polski ---');
+  console.log('\n--- TEST 9: unknown language -> Polish ---');
   for (const lang of [undefined, null, 'de', '']) {
     const prompt = buildMealPrompt({ hasImage: true, userText: DESCRIPTION, language: lang });
     assert.ok(/IDŹ ZA OPISEM/.test(prompt), `Dla language=${JSON.stringify(lang)} nie użyto polskiego wariantu.`);
   }
-  console.log('  ✓ undefined/null/de/"" -> wariant polski');
-  console.log('✅ Bezpieczny fallback języka.');
+  console.log('  ✓ undefined/null/de/"" -> the Polish variant');
+  console.log('✅ Safe language fallback.');
 }
 
 function main() {
-  console.log('=== TESTY PROMPTÓW ANALIZY POSIŁKU ===');
+  console.log('=== MEAL ANALYSIS PROMPT TESTS ===');
   try {
     testPhotoWithDescriptionGivesTextPrecedence();
     testPhotoWithDescriptionAsksForANote();
@@ -165,9 +168,9 @@ function main() {
     testEnglishParity();
     testWhitespaceOnlyTextCountsAsNoDescription();
     testUnknownLanguageFallsBackToPolish();
-    console.log('\n✅ WSZYSTKIE TESTY PROMPTÓW PRZESZŁY.\n');
+    console.log('\n✅ ALL PROMPT TESTS PASSED.\n');
   } catch (err) {
-    console.error('\n❌ TEST NIE PRZESZEDŁ:', err.message);
+    console.error('\n❌ TEST FAILED:', err.message);
     process.exit(1);
   }
 }

@@ -97,6 +97,10 @@ function classify(line, inBlockComment, opts) {
 
   if (opts.isContentFile) return 'content';
   if (opts.inTemplateLiteral && PROMPT_SCHEMA.test(trimmed)) return 'content';
+  // A regex literal asserted against prompt text (tests/test-meal-prompts.js) matches the
+  // Polish PROMPT, so the Polish in it is data, not prose. Translating it would break the
+  // assertion rather than change any wording a person reads.
+  if (/\/.*\/\s*\.test\(/.test(line)) return 'content';
   if (LOG_CALL.test(line)) return 'log';
   if (API_ERROR.test(line)) return 'content';
 

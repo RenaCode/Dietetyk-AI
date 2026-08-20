@@ -1,13 +1,17 @@
-// Testy baterii energii (/api/dashboard/energy-battery) oraz zbiorczego
-// pobierania insightów (/api/dashboard/insights).
+// Tests for the energy battery (/api/dashboard/energy-battery) and the batch insight
+// endpoint (/api/dashboard/insights).
+//
+// The Polish strings asserted below are the API's
+// user-facing output, which stays Polish by design - translating the assertions would break
+// them.
 //
 // Test uruchamia REALNY router Express na TYMCZASOWEJ bazie (DATABASE_DIR w katalogu
-// tymczasowym systemu), nigdy na backend/dietetyk.db - dzięki temu można go puszczać
-// lokalnie bez ryzyka zabrudzenia danych deweloperskich.
+// system temp directory), never against backend/dietetyk.db - so it can be run locally
+// without any risk of polluting development data.
 //
-// Uwaga na kolejność: DATABASE_DIR i APP_PASSWORD muszą być ustawione ZANIM
-// zaimportujemy db.js/config.js, bo oba czytają zmienne środowiskowe przy załadowaniu
-// modułu, a nie przy wywołaniu.
+// Order matters: DATABASE_DIR and APP_PASSWORD must be set BEFORE db.js/config.js are
+// imported, because both read the environment when the module loads rather than when it is
+// called.
 
 const os = require('os');
 const path = require('path');
@@ -60,8 +64,8 @@ async function startServer() {
 
   const app = express();
   app.use(express.json());
-  // Atrapa autoryzacji - w produkcji robi to app.use('/api', requireAuth) w server.js.
-  // Tu interesuje nas logika insightów, nie sesje.
+  // Stub authentication - in production app.use('/api', requireAuth) in server.js does this.
+  // What matters here is the insight logic, not sessions.
   app.use((req, res, next) => { req.user = { id: TEST_USER_ID }; next(); });
   app.use(require('../routes/dashboard'));
 
@@ -104,8 +108,8 @@ async function setMetrics(date, values) {
   );
 }
 
-// Wypełnia okno historyczne spokojnym, powtarzalnym baseline'em, żeby testowany
-// dzień miał się do czego porównać (bateria wymaga min. 7 dni historii obciążenia).
+// Fills the historical window with a calm, repeatable baseline so the day under test has
+// something to compare against (the battery needs at least 7 days of load history).
 async function seedBaseline(today, days = 30, activeCalories = 500) {
   for (let i = 1; i <= days; i++) {
     await setMetrics(shiftDate(today, -i), {
@@ -129,11 +133,11 @@ async function testNoDataIsHonest() {
   assert.strictEqual(res.body.hasEnoughData, false, 'Bateria wymyśliła liczbę bez danych o śnie.');
   assert.strictEqual(res.body.reason, 'no_sleep_data');
   console.log(`  reason=${res.body.reason}`);
-  console.log('✅ Brak danych raportowany wprost, bez zmyślonej liczby.');
+  console.log('✅ Missing data is reported plainly, with no invented number.');
 }
 
 async function testGoodNightGivesHighBattery() {
-  console.log('\n--- TEST 2: dobra noc + spokojny dzień = wysoka bateria ---');
+  console.log('\n--- TEST 2: good night + calm day = high battery ---');
   await clearMetrics();
   const today = todayWarsaw();
   await seedBaseline(today);
@@ -147,16 +151,16 @@ async function testGoodNightGivesHighBattery() {
   assert.strictEqual(body.hasEnoughData, true);
   assert.ok(body.battery >= 50, `Oczekiwano wysokiej baterii, było ${body.battery}`);
   assert.strictEqual(body.sleepDebt.hours, 0, 'Przy nocach powyżej celu dług snu powinien być zerowy.');
-  console.log(`  bateria=${body.battery} (${body.label}), dług snu=${body.sleepDebt.hours}h`);
-  console.log(`  zalecenie: ${body.recommendation}`);
-  console.log('✅ Wysoka bateria przy dobrej nocy.');
+  console.log(`  battery=${body.battery} (${body.label}), sleep debt=${body.sleepDebt.hours}h`);
+  console.log(`  recommendation: ${body.recommendation}`);
+  console.log('✅ High battery after a good night.');
 }
 
 async function testSleepDebtDragsBatteryDown() {
-  console.log('\n--- TEST 3: skumulowany dług snu obniża baterię ---');
+  console.log('\n--- TEST 3: accumulated sleep debt lowers the battery ---');
   const today = todayWarsaw();
 
-  // Wariant A: te same dane dnia, ale 14 nocy po 5h zamiast 7.5h.
+  // Variant A: the same day data, but 14 nights of 5h instead of 7.5h.
   await clearMetrics();
   await seedBaseline(today);
   await setMetrics(today, {
@@ -176,20 +180,20 @@ async function testSleepDebtDragsBatteryDown() {
   });
   const indebted = (await getJson(`/api/dashboard/energy-battery?date=${today}`)).body;
 
-  console.log(`  wyspany: bateria=${rested.battery}, dług=${rested.sleepDebt.hours}h`);
-  console.log(`  z długiem: bateria=${indebted.battery}, dług=${indebted.sleepDebt.hours}h`);
-  console.log(`  zalecenie przy długu: ${indebted.recommendation}`);
+  console.log(`  rested: battery=${rested.battery}, debt=${rested.sleepDebt.hours}h`);
+  console.log(`  in debt: battery=${indebted.battery}, debt=${indebted.sleepDebt.hours}h`);
+  console.log(`  recommendation under debt: ${indebted.recommendation}`);
 
   assert.ok(indebted.sleepDebt.hours > 20, `Dług snu powinien być duży, było ${indebted.sleepDebt.hours}h`);
   assert.ok(indebted.battery < rested.battery,
     'Dług snu nie obniżył baterii mimo identycznych danych bieżącego dnia.');
   assert.ok(indebted.recommendation.includes('Dług snu'),
     'Przy dużym długu snu zalecenie powinno wskazywać właśnie na sen.');
-  console.log('✅ Dług snu realnie obniża baterię i zmienia zalecenie.');
+  console.log('✅ Sleep debt genuinely lowers the battery and changes the recommendation.');
 }
 
 async function testHardDayDrainsMoreThanEasyDay() {
-  console.log('\n--- TEST 4: cięższy dzień niż zwykle zużywa więcej baterii ---');
+  console.log('\n--- TEST 4: a harder day than usual drains more battery ---');
   const today = todayWarsaw();
   const night = { sleep_score: 80, sleep_duration: 7.5, readiness_score: 80 };
 
@@ -203,18 +207,18 @@ async function testHardDayDrainsMoreThanEasyDay() {
   await setMetrics(today, { ...night, active_calories: 1400, active_minutes: 120, steps: 22000 });
   const hard = (await getJson(`/api/dashboard/energy-battery?date=${today}`)).body;
 
-  console.log(`  lekki dzień: bateria=${easy.battery}, zużycie=${easy.components.dayDrain}, ratio=${easy.strain.ratioToBaseline}`);
-  console.log(`  ciężki dzień: bateria=${hard.battery}, zużycie=${hard.components.dayDrain}, ratio=${hard.strain.ratioToBaseline}`);
+  console.log(`  light day: battery=${easy.battery}, drain=${easy.components.dayDrain}, ratio=${easy.strain.ratioToBaseline}`);
+  console.log(`  hard day: battery=${hard.battery}, drain=${hard.components.dayDrain}, ratio=${hard.strain.ratioToBaseline}`);
 
   assert.ok(hard.components.dayDrain > easy.components.dayDrain,
     'Cięższy dzień nie zużył więcej baterii niż lekki.');
   assert.ok(hard.battery < easy.battery, 'Cięższy dzień nie obniżył baterii.');
   assert.ok(hard.strain.ratioToBaseline > easy.strain.ratioToBaseline);
-  console.log('✅ Zużycie skaluje się z obciążeniem względem własnego baseline.');
+  console.log('✅ Drain scales with load relative to the user own baseline.');
 }
 
 async function testHistoricalDayIsFullDay() {
-  console.log('\n--- TEST 5: dzień historyczny liczony jako pełna doba (isLive=false) ---');
+  console.log('\n--- TEST 5: a historical day counts as a full day (isLive=false) ---');
   await clearMetrics();
   const today = todayWarsaw();
   const past = shiftDate(today, -3);
@@ -228,11 +232,11 @@ async function testHistoricalDayIsFullDay() {
   assert.strictEqual(body.isLive, false, 'Dzień historyczny nie powinien być oznaczony jako bieżący.');
   assert.strictEqual(body.date, past);
   console.log(`  data=${body.date}, isLive=${body.isLive}, bateria=${body.battery}`);
-  console.log('✅ Daty historyczne rozróżniane od stanu bieżącego.');
+  console.log('✅ Historical dates are distinguished from the live state.');
 }
 
 async function testBatchReturnsSameAsIndividual() {
-  console.log('\n--- TEST 6: wsad zwraca to samo co osobne żądania ---');
+  console.log('\n--- TEST 6: the batch returns the same as individual requests ---');
   await clearMetrics();
   const today = todayWarsaw();
   await seedBaseline(today);
@@ -249,13 +253,13 @@ async function testBatchReturnsSameAsIndividual() {
     assert.strictEqual(batch.results[id].status, 'ok', `Insight ${id} nie zwrócił ok we wsadzie.`);
     assert.deepStrictEqual(batch.results[id].data, single,
       `Wynik wsadowy różni się od pojedynczego dla ${id}.`);
-    console.log(`  ${id}: wsad == pojedyncze żądanie ✓`);
+    console.log(`  ${id}: batch == individual request ✓`);
   }
-  console.log('✅ Wsad daje identyczne wyniki co osobne żądania.');
+  console.log('✅ The batch yields results identical to individual requests.');
 }
 
 async function testBatchIsolatesUnknownIds() {
-  console.log('\n--- TEST 7: nieznany insight nie przewraca całego wsadu ---');
+  console.log('\n--- TEST 7: an unknown insight does not break the whole batch ---');
   const today = todayWarsaw();
   const batch = (await getJson(
     `/api/dashboard/insights?ids=energy-battery,nie-ma-takiego,wellness-score&date=${today}`
@@ -265,7 +269,7 @@ async function testBatchIsolatesUnknownIds() {
   assert.strictEqual(batch.results['energy-battery'].status, 'ok');
   assert.strictEqual(batch.results['wellness-score'].status, 'ok');
   console.log(`  statusy: ${Object.entries(batch.results).map(([k, v]) => `${k}=${v.status}`).join(', ')}`);
-  console.log('✅ Błędna pozycja izolowana, reszta zwrócona normalnie.');
+  console.log('✅ The bad entry is isolated; the rest is returned normally.');
 }
 
 async function testBatchRejectsEmptyAndOversizedRequests() {
@@ -278,17 +282,17 @@ async function testBatchRejectsEmptyAndOversizedRequests() {
   const tooMany = await getJson(`/api/dashboard/insights?ids=${Array.from({ length: 101 }, (_, i) => `x${i}`).join(',')}`);
   assert.strictEqual(tooMany.status, 400, 'Przekroczenie limitu ids powinno dać 400.');
 
-  console.log(`  bez ids -> 400, zarejestrowanych insightów: ${empty.body.available.length}`);
+  console.log(`  no ids -> 400, registered insights: ${empty.body.available.length}`);
   console.log(`  101 pozycji -> 400`);
-  console.log('✅ Walidacja działa.');
+  console.log('✅ Validation works.');
 }
 
 async function testLabelAndRecommendationAgree() {
-  console.log('\n--- TEST 10: etykieta i zalecenie nie przeczą sobie ---');
+  console.log('\n--- TEST 10: the label and the recommendation do not contradict ---');
   const today = todayWarsaw();
 
-  // Sprawdzamy kilka poziomów naładowania, w tym wartości tuż pod granicami progów -
-  // to tam pojawiła się sprzeczność "Niska" + "Bateria w normie".
+  // We check several charge levels, including values just under the band boundaries - that
+  // is where the contradiction 'Niska' + 'Bateria w normie' appeared.
   const scenarios = [
     { name: 'wysoka', day: { active_calories: 60, active_minutes: 5, steps: 1500 }, night: { sleep_score: 92, sleep_duration: 8.2, readiness_score: 90 } },
     { name: 'średnia', day: { active_calories: 500, active_minutes: 45, steps: 9000 }, night: { sleep_score: 78, sleep_duration: 7.2, readiness_score: 76 } },
@@ -296,8 +300,8 @@ async function testLabelAndRecommendationAgree() {
     { name: 'rezerwa', day: { active_calories: 1600, active_minutes: 150, steps: 25000 }, night: { sleep_score: 40, sleep_duration: 4.5, readiness_score: 38 } }
   ];
 
-  // Które sformułowania są dopuszczalne dla której etykiety. "Na rezerwie" i "Niska"
-  // nie mogą nigdy dostać zdania mówiącego, że jest w normie albo że to dobry dzień
+  // Which phrasings are acceptable for which label. 'Na rezerwie' and 'Niska' must never
+  // receive a sentence saying things are normal, or that it is a good day
   // na mocniejszy trening.
   const FORBIDDEN = {
     'Na rezerwie': ['w normie', 'dobry dzień na mocniejszy trening'],
@@ -318,12 +322,12 @@ async function testLabelAndRecommendationAgree() {
         `Etykieta "${body.label}" (${body.battery}) razem z zaleceniem zawierającym "${phrase}".`);
     }
   }
-  console.log('✅ Etykieta i zalecenie zawsze mówią to samo.');
+  console.log('✅ The label and the recommendation always say the same thing.');
 }
 
 async function testRegistryCoversAllInsightRoutes() {
-  console.log('\n--- TEST 9: rejestr obejmuje wszystkie trasy insightów ---');
-  // Rejestr jest budowany przez przechwycenie router.get - jeśli ktoś doda insight
+  console.log('\n--- TEST 9: the registry covers every insight route ---');
+  // The registry is built by intercepting router.get - if someone adds an insight
   // w innym stylu, ten test to wychwyci, zanim karta po cichu wypadnie z dashboardu.
   const source = fs.readFileSync(path.join(__dirname, '..', 'routes', 'dashboard.js'), 'utf8');
   const declared = [...source.matchAll(/router\.get\('\/api\/dashboard\/([a-z0-9-]+)'/g)]
@@ -334,11 +338,11 @@ async function testRegistryCoversAllInsightRoutes() {
 
   console.log(`  tras w pliku: ${declared.length}, w rejestrze: ${available.length}`);
   assert.strictEqual(missing.length, 0, `Poza rejestrem zostały: ${missing.join(', ')}`);
-  console.log('✅ Każdy insight trafia do wsadu automatycznie.');
+  console.log('✅ Every insight joins the batch automatically.');
 }
 
 async function main() {
-  console.log('=== TESTY BATERII ENERGII I WSADU INSIGHTÓW ===');
+  console.log('=== ENERGY BATTERY AND INSIGHT BATCH TESTS ===');
   let failed = false;
   try {
     await startServer();
@@ -356,15 +360,15 @@ async function main() {
     await testLabelAndRecommendationAgree();
     await testRegistryCoversAllInsightRoutes();
 
-    console.log('\n✅ WSZYSTKIE TESTY BATERII I WSADU PRZESZŁY.\n');
+    console.log('\n✅ ALL BATTERY AND BATCH TESTS PASSED.\n');
   } catch (err) {
-    console.error('\n❌ TEST NIE PRZESZEDŁ:', err.message);
+    console.error('\n❌ TEST FAILED:', err.message);
     if (err.stack) console.error(err.stack.split('\n').slice(1, 4).join('\n'));
     failed = true;
   } finally {
     if (server) server.close();
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* katalog tymczasowy */ }
-    // db.js trzyma otwarte połączenie i timery - zamykamy proces jawnie.
+    // db.js holds an open connection and timers - exit the process explicitly.
     process.exit(failed ? 1 : 0);
   }
 }

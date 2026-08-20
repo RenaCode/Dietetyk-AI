@@ -1,11 +1,11 @@
-// Test hierarchii źródeł danych o aktywności (utils/activitySources.js).
+// Tests for the activity data source hierarchy (utils/activitySources.js).
 //
-// Dlaczego akurat ten test: przed poprawką każdy upsert bronił się wyłącznie przed
-// nadpisaniem danych z 'apple', a Google Fit i Oura były równorzędne - więc wynik
-// dla tej samej doby zależał od KOLEJNOŚCI synchronizacji w danej godzinie.
-// To klasa błędu, której nie widać w kodzie ani w logach: dane po prostu "migoczą".
-// Test uruchamia realne zapytania SQL na bazie w pamięci (nie na dietetyk.db),
-// więc weryfikuje wygenerowany SQL, a nie tylko funkcje pomocnicze w JS.
+// Why this test in particular: before the fix, each upsert guarded only against
+// overwriting 'apple' data while Google Fit and Oura ranked equally - so the result for a
+// given day depended on the ORDER the syncs ran in that hour. It is a class of bug that is
+// invisible in the code and in the logs: the data simply flickers.
+// The test runs real SQL against an in-memory database rather than dietetyk.db, so it
+// verifies the generated SQL rather than just the JS helpers.
 
 const sqlite3 = require('sqlite3').verbose();
 const assert = require('assert');
@@ -35,7 +35,7 @@ function get(db, sql, params = []) {
   });
 }
 
-// Odtwarza kształt upsertu z services/sync.js dla dowolnego źródła.
+// Reproduces the shape of the upsert in services/sync.js for any source.
 function upsertSql(source) {
   const rank = getActivitySourceRank(source);
   return `
@@ -68,9 +68,9 @@ async function freshDb() {
 }
 
 async function testOrderIndependence() {
-  console.log('\n--- TEST 1: wynik nie zależy od kolejności synchronizacji ---');
+  console.log('\n--- TEST 1: the result does not depend on sync order ---');
 
-  // Ta sama doba, te same dane, dwie różne kolejności zapisu.
+  // Same day, same data, two different write orders.
   const orderA = [['oura', { steps: 4000 }], ['google_fit', { steps: 9000 }]];
   const orderB = [['google_fit', { steps: 9000 }], ['oura', { steps: 4000 }]];
 
@@ -87,93 +87,93 @@ async function testOrderIndependence() {
   console.log(`  google_fit -> oura: steps=${results[1].steps}, source=${results[1].activity_source}`);
 
   assert.strictEqual(results[0].steps, results[1].steps,
-    'Kroki różnią się w zależności od kolejności synchronizacji - to jest ten błąd.');
+    'Steps differ depending on sync order - this is the bug.');
   assert.strictEqual(results[0].activity_source, results[1].activity_source,
-    'Etykieta źródła różni się w zależności od kolejności synchronizacji.');
-  assert.strictEqual(results[0].steps, 9000, 'Google Fit stoi wyżej od Oury, jego kroki powinny wygrać.');
-  console.log('✅ Obie kolejności dają ten sam wynik.');
+    'The source label differs depending on sync order.');
+  assert.strictEqual(results[0].steps, 9000, 'Google Fit ranks above Oura, so its step count should win.');
+  console.log('✅ Both orders produce the same result.');
 }
 
 async function testAppleWins() {
-  console.log('\n--- TEST 2: Apple Health wygrywa z pozostałymi źródłami ---');
+  console.log('\n--- TEST 2: Apple Health beats the other sources ---');
   const db = await freshDb();
 
   await write(db, 'apple', { steps: 12000, calories: 600, distance: 8000 });
   let row = await write(db, 'oura', { steps: 3000, calories: 200, distance: 2000 });
-  assert.strictEqual(row.steps, 12000, 'Oura nadpisała dane Apple Health.');
+  assert.strictEqual(row.steps, 12000, 'Oura overwrote the Apple Health data.');
   row = await write(db, 'google_fit', { steps: 5000, calories: 300, distance: 4000 });
-  assert.strictEqual(row.steps, 12000, 'Google Fit nadpisał dane Apple Health.');
-  assert.strictEqual(row.activity_source, 'apple', 'Etykieta źródła zeszła z apple.');
+  assert.strictEqual(row.steps, 12000, 'Google Fit overwrote the Apple Health data.');
+  assert.strictEqual(row.activity_source, 'apple', 'The source label moved away from apple.');
 
   console.log(`  po zapisach oura+google_fit: steps=${row.steps}, source=${row.activity_source}`);
-  console.log('✅ Dane Apple Health nietknięte.');
+  console.log('✅ Apple Health data untouched.');
   db.close();
 }
 
 async function testLowerSourceFillsGaps() {
-  console.log('\n--- TEST 3: niższe źródło uzupełnia LUKI wyżej notowanego ---');
+  console.log('\n--- TEST 3: a lower source fills the GAPS of a higher one ---');
   const db = await freshDb();
 
-  // Apple Health zaraportowało tylko kroki (typowe, gdy automatyzacja odpali się
-  // zanim zegarek dosynchronizuje resztę metryk).
+  // Apple Health reported steps only - typical when the automation fires before the watch
+  // has synced the remaining metrics.
   await write(db, 'apple', { steps: 12000, calories: null, distance: null });
   const row = await write(db, 'oura', { steps: 3000, calories: 450, distance: 6000 });
 
-  assert.strictEqual(row.steps, 12000, 'Kroki Apple Health zostały nadpisane.');
-  assert.strictEqual(row.active_calories, 450, 'Pusta kolumna nie została uzupełniona przez Ourę.');
+  assert.strictEqual(row.steps, 12000, 'The Apple Health step count was overwritten.');
+  assert.strictEqual(row.active_calories, 450, 'An empty column was not filled in by Oura.');
   assert.strictEqual(row.distance_meters, 6000, 'Pusta kolumna nie została uzupełniona przez Ourę.');
-  assert.strictEqual(row.activity_source, 'apple', 'Etykieta powinna zostać przy apple - ma realne kroki.');
+  assert.strictEqual(row.activity_source, 'apple', 'The label should stay with apple - it holds real steps.');
 
   console.log(`  steps=${row.steps} (apple), kcal=${row.active_calories} (oura), dystans=${row.distance_meters} (oura)`);
-  console.log('✅ Luki uzupełnione, dane wyżej notowanego źródła zachowane.');
+  console.log('✅ Gaps filled, the higher source data preserved.');
   db.close();
 }
 
 async function testZeroFromHigherSourceIsNotALock() {
-  console.log('\n--- TEST 4: same zera z wyżej notowanego źródła nie blokują dnia ---');
+  console.log('\n--- TEST 4: all-zeros from a higher source do not lock the day ---');
   const db = await freshDb();
 
-  // Regresja opisana w komentarzu w sync.js: dzień zapisany przez Apple Health
-  // z samymi zerami nie może zostać trwale zablokowany na zerze.
+  // The regression described in the sync.js comment: a day written by Apple Health as all
+  // zeros must not be permanently pinned at zero.
   await write(db, 'apple', { steps: 0, calories: 0, distance: 0 });
   const row = await write(db, 'oura', { steps: 7500, calories: 400, distance: 5000 });
 
-  assert.strictEqual(row.steps, 7500, 'Dzień pozostał zablokowany na zerze.');
-  assert.strictEqual(row.activity_source, 'oura', 'Etykieta powinna przejść na oura - to ona dostarczyła realne dane.');
+  assert.strictEqual(row.steps, 7500, 'The day stayed pinned at zero.');
+  assert.strictEqual(row.activity_source, 'oura', 'The label should move to oura - it supplied the real data.');
 
   console.log(`  steps=${row.steps}, source=${row.activity_source}`);
-  console.log('✅ Zera nie blokują uzupełnienia.');
+  console.log('✅ Zeros do not block the fill-in.');
   db.close();
 }
 
 async function testDistanceOnlyKeepsLabel() {
-  console.log('\n--- TEST 5: sam dystans z wyżej notowanego źródła utrzymuje etykietę ---');
+  console.log('\n--- TEST 5: distance alone from a higher source keeps the label ---');
   const db = await freshDb();
 
-  // Runda 12 audytu: dni, w których Apple Health dostarczył WYŁĄCZNIE dystans,
-  // traciły ochronę etykiety i niższe źródło przejmowało activity_source.
+  // Audit round 12: days where Apple Health supplied ONLY distance lost their label
+  // protection and a lower source took over activity_source.
   await write(db, 'apple', { steps: null, calories: null, distance: 9000 });
   const row = await write(db, 'oura', { steps: 6000, calories: 350, distance: 1000 });
 
-  assert.strictEqual(row.distance_meters, 9000, 'Dystans Apple Health został nadpisany.');
-  assert.strictEqual(row.activity_source, 'apple', 'Etykieta zeszła z apple mimo realnego dystansu.');
+  assert.strictEqual(row.distance_meters, 9000, 'The Apple Health distance was overwritten.');
+  assert.strictEqual(row.activity_source, 'apple', 'The label moved away from apple despite a real distance.');
 
   console.log(`  dystans=${row.distance_meters}, steps=${row.steps}, source=${row.activity_source}`);
-  console.log('✅ Etykieta utrzymana.');
+  console.log('✅ Label retained.');
   db.close();
 }
 
 async function main() {
-  console.log('=== TESTY HIERARCHII ŹRÓDEŁ AKTYWNOŚCI ===');
+  console.log('=== ACTIVITY SOURCE PRIORITY TESTS ===');
   try {
     await testOrderIndependence();
     await testAppleWins();
     await testLowerSourceFillsGaps();
     await testZeroFromHigherSourceIsNotALock();
     await testDistanceOnlyKeepsLabel();
-    console.log('\n✅ WSZYSTKIE TESTY HIERARCHII ŹRÓDEŁ PRZESZŁY.\n');
+    console.log('\n✅ ALL ACTIVITY SOURCE PRIORITY TESTS PASSED.\n');
   } catch (err) {
-    console.error('\n❌ TEST NIE PRZESZEDŁ:', err.message);
+    console.error('\n❌ TEST FAILED:', err.message);
     process.exit(1);
   }
 }

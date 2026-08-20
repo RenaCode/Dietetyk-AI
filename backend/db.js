@@ -179,7 +179,7 @@ const initDb = async () => {
   } catch (e) {}
 
 
-  // 1a. Tabela globalnej konfiguracji (np. ustawienia Mailgun)
+  // 1a. Global configuration table (Mailgun settings, for instance)
   await run(`
     CREATE TABLE IF NOT EXISTS app_config (
       key TEXT PRIMARY KEY,

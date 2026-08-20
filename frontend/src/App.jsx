@@ -508,7 +508,7 @@ export default function App() {
     setIsAnalyzing(true);
     setErrorMessage('');
 // The returned boolean (success/failure) - MealLogger.jsx waits for it so it can show the
-// "Meal saved" message ONLY after the save genuinely succeeded, rather than optimistically
+// "Posiłek zapisany!" message ONLY after the save genuinely succeeded, rather than optimistically
 // right after the click (previously the form gave no confirmation beyond a new entry in the
 // list, which could easily be lost in a long list of that day's meals).
     let success = false;

@@ -1,6 +1,6 @@
 const { test, expect } = require('@playwright/test');
 
-test.describe('Dashboard i Funkcjonalność UI', () => {
+test.describe('Dashboard and UI behaviour', () => {
   // Sign in before each test in this block
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
@@ -10,7 +10,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     await expect(page.locator('.logo-text')).toContainText('Dietetyk AI');
   });
 
-  test('Weryfikacja układu i braku rozjechania w premium dashboard', async ({ page }) => {
+  test('verifies the premium dashboard layout has no broken alignment', async ({ page }) => {
     // Check that the main columns and the banner are present
     const banner = page.locator('.dietetyk-ai-banner');
     await expect(banner).toBeVisible();
@@ -27,7 +27,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     await expect(columns).toHaveCount(2);
   });
 
-  test('Obsługa licznika nawodnienia (Dodawanie i Reset wody)', async ({ page }) => {
+  test('handles the hydration counter (adding and resetting water)', async ({ page }) => {
     // Auto-accept dialogs (the confirm when resetting water, for instance)
     page.on('dialog', async dialog => {
       await dialog.accept();
@@ -64,7 +64,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     await expect(waterCard).toContainText('0 /');
   });
 
-  test('Nawigacja po zakładkach aplikacji', async ({ page }) => {
+  test('navigates the application tabs', async ({ page }) => {
     const tabs = ['Kalkulator Posiłków', 'Trendy', 'Aktywność', 'Ustawienia'];
 
     for (const tabName of tabs) {
@@ -88,7 +88,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     }
   });
 
-  test('Obsługa treningów Apple Health (Dynamiczne rozciąganie, filtrowanie i ikona bokserska)', async ({ page, request }) => {
+  test('handles Apple Health workouts (dynamic stretching, filtering and the boxing icon)', async ({ page, request }) => {
     // 1. Connect to the database to read the admin user's sync_token
     const sqlite3 = require('../backend/node_modules/sqlite3').verbose();
     const path = require('path');
@@ -204,7 +204,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     await page.waitForTimeout(500);
   });
 
-  test('Obsługa zapisywania suplementów i weryfikacja historii na Dashboardzie', async ({ page }) => {
+  test('saves supplements and verifies the history on the Dashboard', async ({ page }) => {
     const initialResponsePromise = page.waitForResponse(response => response.url().includes('/api/dashboard') && response.status() === 200);
     await page.goto('/');
     await initialResponsePromise;
@@ -263,7 +263,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     await expect(supplementsCard.locator('textarea')).toHaveValue(testSups, { timeout: 10000 });
   });
 
-  test('Weryfikacja lokalizacji kafelka Waga i Skład Ciała w drugiej kolumnie', async ({ page }) => {
+  test('verifies the Waga i Skład Ciała tile sits in the second column', async ({ page }) => {
     await page.goto('/');
 
     // The first column should not contain the body composition heading

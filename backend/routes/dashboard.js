@@ -60,8 +60,8 @@ const shiftDate = (dateStr, deltaDays) => {
 };
 
 // Validation of the ?date= format from the query string (round 14, a fix from the audit) -
-// niepoprawny string (np. "abc", inny format) wywala shiftDate/Date.UTC w
-// Invalid Date -> toISOString() rzuca RangeError -> 500 zamiast czytelnego
+// an invalid string ("abc", or a different format) turns shiftDate/Date.UTC into an
+// Invalid Date -> toISOString() throws a RangeError -> a 500 instead of readable
 // behaviour. On a bad format we simply fall back to today's date, exactly as when the
 // parameter is missing, rather than returning an error - less surprising for frontend calls,
 // which always send a correct format.
@@ -633,7 +633,7 @@ router.get('/api/dashboard', async (req, res) => {
           [req.user.id]
         );
 
-        // "Tag dnia" (day_events) z ostatnich 30 dni (to samo okno co last30DaysNutrition) -
+        // "Day tag" (day_events) from the last 30 days (the same window as last30DaysNutrition) -
         // so that the AI knows about days marked as illness/holiday/a late bedtime and does
         // not build recommendations on the unusual data from those days (see utils/dayEvents.js).
         const dayEventsInWindow = await getDayEventsInRange(req.user.id, shiftDate(date, -30), date);
@@ -2014,7 +2014,7 @@ const STRAIN_BASELINE_LOOKBACK_DAYS = 30;
 const MIN_DAYS_FOR_STRAIN_BASELINE = 14;
 const STRAIN_STD_DEV_THRESHOLD = 1; // standard deviations from the user's own mean
 
-// Wczesny alert "przeciążenie/możliwa infekcja": odchylenie DZISIEJSZYCH
+// Early "overload / possible infection" alert: the deviation of TODAY's
 // values (respiratory rate, wrist temperature deviation, readiness) from the user's OWN mean
 // over the recent days (a z-score - the statistical approach used for meal anomaly detection
 // in utils/mealAnomaly.js, applied here to the Oura data). A descriptive signal from the
@@ -2579,7 +2579,7 @@ router.get('/api/dashboard/bp-trend-insight', async (req, res) => {
 });
 
 // Insight: real cardio zones (Karvonen) summed from the Apple Health workouts of the last 14
-// days. Unlike the static "Strefy Tetna" reference table (based on a formula, not a
+// days. Unlike the static "Strefy Tętna" reference table (based on a formula, not a
 // measurement), what counts here are the REAL minutes measured by heart rate during workouts -
 // see computeWorkoutHrZones in routes/appleHealth.js. It requires the "Include Workout
 // Metrics" switch enabled in Health Auto Export; without it, workouts carry nothing but NULLs
@@ -4132,7 +4132,7 @@ const ADEQUATE_PROTEIN_G_PER_KG = 1.6; // a widely accepted threshold for buildi
 // body-recomposition-insight) vs the AVERAGE daily protein intake over the same window.
 // Two INDEPENDENT measures (body composition measurements and meal logging rarely coincide day
 // for day) - we compare FACTS from the same period rather than computing a correlation
-// punkt-w-punkt (jak w body-recomposition-insight).
+// point by point (as in body-recomposition-insight).
 router.get('/api/dashboard/muscle-protein-insight', async (req, res) => {
   try {
     const today = resolveQueryDate(req);

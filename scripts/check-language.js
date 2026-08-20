@@ -41,6 +41,41 @@ const EXT = /\.(js|jsx|sh|yml|yaml)$/;
 const PL_DIACRITICS = /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/;
 const PL_WORDS = /\b(nie|jest|sie|dla|przez|zeby|tego|ktore|ktory|oraz|albo|jako|tylko|takze|wiec|bez|przy|jednak|zawsze|nigdy|teraz|potem|kazdy|wszystkie|dane|uzytkownik|posilek|zdjecie|dzien|godzina|kopia|jesli|mozna|trzeba|byla|byly|zostac|moze|nawet|wtedy|czyli|patrz|robi|maja|ma to|do tego)\b/i;
 
+// Third detector: word DENSITY on the line with quoted spans removed.
+//
+// The first two still under-reported, and in a way that mattered. A block-by-block
+// translation cuts comment blocks at the boundary of what the detector flagged, so any line
+// the detector missed stayed Polish INSIDE an otherwise English block - exactly the
+// half-translated state CLAUDE.md warns about. Two real examples that passed both detectors:
+//
+//   // niepoprawny string (np. "abc", inny format) wywala shiftDate/Date.UTC w
+//        -> no diacritics at all, and none of its words were in PL_WORDS
+//   // Wczesny alert "przeciazenie/mozliwa infekcja": odchylenie DZISIEJSZYCH
+//        -> every diacritic sat inside the quotes, which stripQuoted removes
+//
+// Rather than growing the word list forever, we measure how much of the line is made of
+// unambiguously Polish tokens. The list below deliberately excludes anything that is also an
+// English word or an identifier fragment ("to", "a", "i", "do", "na", "ma", "pole"), because
+// those produce false positives on ordinary English comments.
+const PL_DENSE_WORDS = /^(niepoprawny|poprawny|wywala|rzuca|zamiast|czytelnego|wczesny|odchylenie|dzisiejszych|przypisane|kalendarzowego|mapujemy|sekundy|minuty|konwersji|ustawienia|tabela|globalnej|innym|stylu|wychwyci|zanim|karta|cichu|wypadnie|niepotrzebnie|wartosc|wartosci|zwraca|liczba|liczy|brak|braku|zakres|zakresu|srednia|wynik|wyniku|sposob|miejsce|miejscu|wiersz|kolumna|blad|bledu|proba|okno|okna|inny|inna|inne|innych|jesli|mozna|trzeba|zostac|nawet|wtedy|czyli|patrz|kazdy|kazda|wszystkie|uzytkownik|uzytkownika|posilek|posilku|zdjecie|dzien|dnia|godzina|kopia|ktore|ktory|ktora|oraz|albo|przez|zeby|tylko|takze|jednak|zawsze|nigdy|teraz|potem|wiec|przy|jest|sie|dla|tego)$/i;
+
+// A comment line is Polish by density when at least three of its unquoted words are
+// unambiguously Polish AND they make up more than a quarter of the line. Both conditions
+// matter: the count alone fires on a long English sentence that happens to contain a Polish
+// identifier, and the ratio alone fires on a two-word fragment.
+//
+// The quarter is calibrated on a real miss, not picked round: the line
+//   // niepoprawny string (np. "abc", inny format) wywala shiftDate/Date.UTC w
+// carries 3 Polish words among 10 tokens, because the identifiers it names
+// (shiftDate, Date, UTC) count towards the total. At a third it stayed invisible.
+const isDenselyPolish = (line) => {
+  const bare = stripQuoted(line).replace(/^[\s/*#{]+/, '');
+  const words = bare.match(/[A-Za-z_]+/g) || [];
+  if (words.length < 3) return false;
+  const polish = words.filter(w => PL_DENSE_WORDS.test(w));
+  return polish.length >= 3 && polish.length / words.length > 0.25;
+};
+
 const PL = PL_DIACRITICS;
 const isCommentLine = (trimmed) => /^(\/\/|\*|\/\*|#)/.test(trimmed) || /\{\s*\/\*/.test(trimmed);
 // Polish inside quotation marks within an otherwise English comment is quoted DATA, not
@@ -56,7 +91,8 @@ const stripQuoted = (line) => line
 const commentIsPolish = (line) => {
   const bare = isCommentLine(line.trim()) ? stripQuoted(line) : line;
   if (PL_DIACRITICS.test(bare)) return true;
-  return isCommentLine(line.trim()) && PL_WORDS.test(bare);
+  if (!isCommentLine(line.trim())) return false;
+  return PL_WORDS.test(bare) || isDenselyPolish(line);
 };
 
 // Files whose Polish string content is product content by design.

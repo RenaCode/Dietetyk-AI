@@ -29,7 +29,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
   // Collapsible integration credential fields (UX: round 7) - when an integration is
   // already connected, the Client ID/Secret fields and the instructions do not need to draw
-  // the eye, so they start collapsed behind "Advanced". When it is NOT connected they must be
+  // the eye, so they start collapsed behind "▼ Zaawansowane ustawienia". When it is NOT connected they must be
   // visible immediately, because the user has to fill them in to connect.
   const [isOuraAdvancedOpen, setIsOuraAdvancedOpen] = useState(!userProfile.has_oura);
   const [isWithingsAdvancedOpen, setIsWithingsAdvancedOpen] = useState(!userProfile.has_withings);
@@ -302,7 +302,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     const { name, value } = e.target;
     const numericFields = ['target_calories', 'target_protein', 'target_carbs', 'target_fat', 'bmr', 'target_water_ml', 'height_cm', 'target_weight_kg', 'target_body_fat_pct'];
     // FIX (audit round 4): Number('') === 0, so clearing a numeric field (to leave it empty
-    // and fill it in later, for instance) stored a real 0 in the form state - for "Height"
+    // and fill it in later, for instance) stored a real 0 in the form state - for "Wzrost"
     // that permanently disabled the BMI calculation, even though the backend (GET
     // /api/settings, see the comment near `r.value === ''`) is already prepared to store and
     // correctly read an empty value. Now an empty field stays an empty string rather than the
@@ -984,9 +984,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
   const handleConnect = async (service) => {
     // IMPORTANT: we save the current form state (Client ID/Secret) BEFORE redirecting.
-    // Previously the "Connect" button went straight to window.location.href, so if the user
-    // typed the credentials and clicked "Connect" without first clicking the separate "Save
-    // integration credentials" button at the bottom of the form, the backend read the old or
+    // Previously the "Połącz" button went straight to window.location.href, so if the user
+    // typed the credentials and clicked "Połącz" without first clicking the separate
+    // "Zapisz poświadczenia integracji" button at the bottom of the form, the backend read the old or
     // empty value from the database when building the OAuth URL - hence the reported bug with
     // client_id=0 in the Withings authorisation address.
     // The redirect to OAuth happens ONLY if the save succeeded - previously

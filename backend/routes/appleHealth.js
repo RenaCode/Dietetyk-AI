@@ -326,10 +326,10 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
     //   { id, name, start: "2026-06-18 06:00:26 +0200", end: "...",
     //     duration: 4715.99 (SEKUNDY), activeEnergyBurned: { qty: 2299.5, units: "kJ" },
     //     intensity: {...}, temperature: {...}, humidity: {...}, metadata: {} }
-    // Mapujemy: activeEnergyBurned -> active_calories (po konwersji do kcal), duration
-    // (sekundy -> minuty) -> active_minutes, przypisane do dnia kalendarzowego pola `start`.
+    // We map: activeEnergyBurned -> active_calories (after converting to kcal), and duration
+    // (seconds -> minutes) -> active_minutes, assigned to the calendar day of the `start` field.
   // A workout does NOT provide basal_calories, so total_calories_burned is not computed here
-    // (dashboard.js i tak ma fallback bmr + active_calories, gdy total_calories_burned brak).
+    // (dashboard.js falls back to bmr + active_calories anyway when total_calories_burned is missing).
     //
   // NO RISK OF DOUBLE COUNTING: the user confirmed this is the ONLY configured Health Auto
   // Export automation - there is no parallel general-metrics automation already folding

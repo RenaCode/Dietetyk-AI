@@ -11,12 +11,12 @@ import { useInsights } from '../utils/useInsights';
 //
 // Two cases are deliberately left out of this list:
 //   - calorie-target-suggestion: it has an extra dependency (caloriesTrigger), because
-//     it must refresh after clicking "Apply", not only when the date changes;
+//     it must refresh after clicking "Zastosuj", not only when the date changes;
 //   - the day/history data (/api/dashboard, /api/health/history), which have their own
 //     lifecycle and different dependencies.
 // ai-explanation-insight and training-plan-insight ARE in the batch, but they also have
 // an overlay that can override the result (polling for background generation / the
-// "Refresh" button) - see the comments next to them in the component.
+// "Odśwież" button) - see the comments next to them in the component.
 //
 // The constant is defined outside the component on purpose: useInsights reduces the list
 // to a string as its dependency key, and a new array reference on every render would fire
@@ -73,8 +73,8 @@ const BATCHED_INSIGHT_IDS = [
 ];
 
 // Colour of the energy battery bar and number. The thresholds match the labels returned
-// by the backend (Naladowana / Dobra / Niska / Na rezerwie), so the colour and the word
-// never say two different things.
+// by the backend ("Naładowana" / "Dobra" / "Niska" / "Na rezerwie"), so the colour and
+// the word never say two different things.
 const batteryColor = (value) => {
   if (value >= 75) return 'var(--success-light)';
   if (value >= 50) return '#4ade80';
@@ -477,7 +477,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const bpTrendInsight = batchedInsights['bp-trend-insight'];
 
   // Real cardio zones (Karvonen) summed from the Apple Health workouts of the last 14 days
-  // - unlike the static "Strefy Tetna" reference table (a formula, not a measurement),
+  // - unlike the static "Strefy Tętna" reference table (a formula, not a measurement),
   // these are minutes actually measured by heart rate during a workout (it requires "Include
   // Workout Metrics" enabled in Health Auto Export). See /api/dashboard/hr-zones-insight.
   const hrZonesInsight = batchedInsights['hr-zones-insight'];
@@ -638,7 +638,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   // AI training plan analysis (Gemini, cached for 7 days). ?refresh=1 forces regeneration.
   // Data: 4 weeks of workouts + the body goal + body composition + a 7-day recovery average.
   // See /api/dashboard/training-plan-insight.
-  // As with the AI explanation: the initial value comes from the batch, but the "Refresh"
+  // As with the AI explanation: the initial value comes from the batch, but the "Odśwież"
   // button (refresh=1, which forces the AI to regenerate) has to be able to override it.
   // The overlay remembers the date it was produced for.
   const [trainingPlanOverride, setTrainingPlanOverride] = useState(null);
@@ -650,7 +650,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const fetchTrainingPlanInsight = async (refresh = false) => {
     if (!sessionToken) return;
       // Guard: do not send another request while the previous one is still in flight
-      // (clicking "Refresh" during loading).
+      // (clicking "Odśwież" during loading).
     if (isLoadingTrainingPlan && !refresh) return;
     setIsRefreshingTrainingPlan(true);
     try {
@@ -808,14 +808,15 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   // Collapsible heart-rate zone table (UX: round 7 - a static 5-zone reference table; there
   // is no need to see it immediately, an expanding link is enough).
   const [isHrZonesOpen, setIsHrZonesOpen] = useState(false);
-  // Collapsible supplementation history (UX: round 7 - the 7-day bar and the "Ostatnio
-  // przyjmowane" list hidden behind "Pokaz historie" by default, only the counter visible).
+  // Collapsible supplementation history (UX: round 7 - the 7-day bar and the
+  // "Ostatnio przyjmowane" list hidden behind "Pokaż historię" by default, with only the
+  // counter visible).
   const [isSupplementsHistoryOpen, setIsSupplementsHistoryOpen] = useState(false);
 
   // Adaptive correction of the calorie goal: comparing the declared balance (from the logged
   // meals) with the balance implied by the real weight change (see the
   // /api/dashboard/calorie-target-suggestion endpoint). caloriesTrigger forces a re-fetch
-  // after clicking "Apply", so the card disappears or updates without waiting for a full
+  // after clicking "Zastosuj", so the card disappears or updates without waiting for a full
   // page refresh.
   const [calorieSuggestion, setCalorieSuggestion] = useState(null);
   const [caloriesTrigger, setCaloriesTrigger] = useState(0);
@@ -4670,7 +4671,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               footerText={rhr == null ? "Brak danych" : rhr < 61 ? "Niski < 61" : "Wysoki > 61"}
               status="success"
             />
-            {/* The "Sluch" card stays removed at the user's request - Oura has no microphone,
+            {/* The "Słuch" card stays removed at the user's request - Oura has no microphone,
                 and Apple Watch/AirPods are not supported yet. The 4 cards below appear only
                 when the backend genuinely has a real value for them (Oura Gen 3+ for SpO2, an
                 Apple Watch Series 8+/Ultra with the "Wrist Temperature" metric enabled in

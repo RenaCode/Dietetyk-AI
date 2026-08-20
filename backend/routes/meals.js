@@ -15,15 +15,15 @@ const {
 } = require('../utils/mealSanitize');
 const { buildMealPrompt } = require('../utils/mealPrompts');
 
-// Detektor anomalii w posiłkach - logika (oba sygnały: niezgodność makro/kalorii
-// i statystyczny odstrój vs własna historia) wydzielona do utils/mealAnomaly.js,
-// bo jest współdzielona z routes/dashboard.js (lista posiłków dnia w /api/dashboard,
-// z którego faktycznie korzysta MealLogger.jsx po stronie frontendu).
+// Meal anomaly detection - the logic (both signals: macro/calorie inconsistency and a
+// statistical outlier versus the user's own history) lives in utils/mealAnomaly.js, because
+// it is shared with routes/dashboard.js (the day's meal list in /api/dashboard, which is
+// what MealLogger.jsx on the frontend actually consumes).
 
-// Cache na zduplikowane żądania wysyłane w krótkim czasie (np. szybki double-click)
+// Cache for duplicate requests sent in quick succession (a fast double-click, say)
 const recentRequests = new Map();
 
-// Okresowe czyszczenie starych wpisów cache, aby zapobiec wyciekowi pamięci (Runda 6)
+// Periodic cleanup of old cache entries to prevent a memory leak (round 6)
 setInterval(() => {
   const now = Date.now();
   for (const [userId, rec] of recentRequests.entries()) {
@@ -42,14 +42,14 @@ const updateLastMealModifiedAt = async (userId, date) => {
       ON CONFLICT(user_id, date) DO UPDATE SET last_meal_modified_at = excluded.last_meal_modified_at
     `, [userId, date, nowIso]);
   } catch (err) {
-    console.error('[DB ERROR] Błąd aktualizacji last_meal_modified_at:', err);
+    console.error('[DB ERROR] Failed to update last_meal_modified_at:', err);
   }
 };
 
 router.post('/api/meals', aiRateLimiter, async (req, res) => {
   const { rawText, date, image } = req.body;
   const targetDate = date || getLocalDateString();
-  // B-W1: Sanitizacja wejścia użytkownika — trim + ograniczenie długości
+  // B-W1: sanitise user input - trim and cap the length
   const safeRawText = rawText ? rawText.trim().slice(0, 500) : '';
 
   if ((!rawText || rawText.trim() === '') && !image) {
@@ -72,9 +72,9 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
       lastRequest.key.date === requestKey.date &&
       lastRequest.key.imageLength === requestKey.imageLength &&
       lastRequest.key.imageSample === requestKey.imageSample) {
-    console.log(`[API LOG] Wykryto zduplikowane żądanie w ciągu 15s dla użytkownika ${userId}. Zwracanie poprzedniego wyniku.`);
+    console.log(`[API LOG] Duplicate request within 15s for user ${userId}. Returning the previous result.`);
     
-    // Odtwórz pełną odpowiedź z obrazkiem przesłanym w tym żądaniu, aby nie trzymać go w cache RAM
+    // Rebuild the full response using the image sent in this request, so it is not held in the RAM cache
     const restoredResponse = {
       count: lastRequest.response.count,
       meals: lastRequest.response.meals.map(m => {
@@ -89,7 +89,7 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
   }
 
   try {
-    console.log(`[API LOG] POST /api/meals - Rozpoczęto analizę dla użytkownika ${req.user.username} (${targetDate})`);
+    console.log(`[API LOG] POST /api/meals - starting analysis for user ${req.user.username} (${targetDate})`);
 
     let imagePart = null;
     if (image) {
@@ -98,13 +98,13 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
         const mimeType = match[1];
         const base64Data = match[2];
 
-        // B-S5: Whitelist dozwolonych typów MIME
+        // B-S5: whitelist of allowed MIME types
         if (!ALLOWED_MEAL_IMAGE_MIME_TYPES.includes(mimeType)) {
           return res.status(400).json({ error: 'Nieobsługiwany format obrazu. Dozwolone: JPG, PNG, WebP, GIF.' });
         }
 
         if (base64Data.length > MAX_MEAL_IMAGE_BASE64_CHARS) {
-          console.warn(`[API WARNING] Odrzucono zdjęcie posiłku - za duży rozmiar (${base64Data.length} znaków base64).`);
+          console.warn(`[API WARNING] Meal photo rejected - too large (${base64Data.length} base64 characters).`);
           return res.status(413).json({ error: 'Zdjęcie jest za duże. Maksymalny rozmiar to ok. 5MB - spróbuj zrobić zdjęcie w niższej rozdzielczości.' });
         }
 
@@ -114,9 +114,9 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
             mimeType: mimeType
           }
         };
-        console.log(`[API LOG] Pomyślnie przetworzono zdjęcie. Typ: ${mimeType}, Rozmiar Base64: ${base64Data.length} znaków.`);
+        console.log(`[API LOG] Photo processed. Type: ${mimeType}, base64 size: ${base64Data.length} characters.`);
       } else {
-        console.warn(`[API WARNING] Nieprawidłowy format pliku obrazu.`);
+        console.warn(`[API WARNING] Invalid image file format.`);
       }
     }
 
@@ -126,11 +126,10 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
     const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
     const language = langRow ? langRow.value : 'pl';
 
-    // Prompt budowany w utils/mealPrompts.js - patrz komentarz w tamtym module co do
-    // pierwszeństwa opisu użytkownika nad tym, co model odczyta ze zdjęcia. Wcześniej
-    // cztery warianty szablonu (zdjęcie/tekst x pl/en) siedziały tutaj jako ~150 linii
-    // literałów, przez co nie dało się ich sprawdzić inaczej niż realnym, płatnym
-    // wywołaniem Gemini.
+    // The prompt is built in utils/mealPrompts.js - see the comment in that module about the
+    // user description taking precedence over what the model reads from the photo. The four
+    // template variants (photo/text x pl/en) used to sit here as ~150 lines of literals, which
+    // made them impossible to check except through a real, billable Gemini call.
     const prompt = buildMealPrompt({
       hasImage: Boolean(imagePart),
       userText: safeRawText,
@@ -142,32 +141,32 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
     try {
       analysis = JSON.parse(responseText);
     } catch (err) {
-      console.error('[API ERROR] Błąd parsowania odpowiedzi AI:', responseText);
+      console.error('[API ERROR] Failed to parse the AI response:', responseText);
       throw new Error('AI nie zwróciło poprawnego formatu JSON.');
     }
 
-    // Przy zdjęciu AI może zwrócić kilka rozbitych posiłków (analysis.meals - patrz
-    // prompt powyżej, np. zrzut ekranu z aplikacji do liczenia kalorii podzielony na
-    // Śniadanie/Obiad/Kolację). Każdy wykryty posiłek zapisujemy jako OSOBNY wiersz
-    // w tabeli meals, z własnymi makroskładnikami i własną nazwą (raw_text) wziętą
-    // z detekcji AI, a nie z tekstu wpisanego przez użytkownika.
+    // With a photo the AI may return several separate meals (analysis.meals - see the prompt
+    // above, e.g. a screenshot from a calorie tracking app split into breakfast/lunch/dinner).
+    // Each detected meal is stored as its OWN row in the meals table, with its own macros and
+    // its own name (raw_text) taken from the AI detection rather than from the text the user
+    // typed.
     let mealsToInsert;
     if (imagePart) {
       if (analysis && Array.isArray(analysis.meals) && analysis.meals.length > 0) {
         mealsToInsert = analysis.meals;
       } else {
-        // Fallback: AI zwróciło płaski obiekt mimo instrukcji w prompcie (starszy
-        // format) - traktujemy to jako jeden posiłek, żeby nie wywalić całego żądania.
+        // Fallback: the AI returned a flat object despite the prompt (an older format) - we
+        // treat it as a single meal rather than failing the whole request.
         mealsToInsert = [{ ...analysis, name: analysis?.name || rawText || 'Posiłek ze zdjęcia' }];
       }
     } else {
-      // Brak zdjęcia - posiłek wpisany tylko tekstem, bez detekcji wielu sekcji,
-      // zachowanie identyczne jak wcześniej (jeden wiersz, nazwa = tekst użytkownika).
+      // No photo - a meal entered as text only, with no multi-section detection; behaviour is
+      // identical to before (one row, name = the user's text).
       mealsToInsert = [{ ...analysis, name: rawText }];
     }
 
-    // Bazowy rozkład kalorii liczony RAZ dla całego żądania (nie per posiłek) - przy
-    // zdjęciu rozbitym na kilka sekcji (Śniadanie/Obiad/Kolacja) wszystkie porównujemy
+    // The calorie baseline is computed ONCE per request rather than per meal - with a photo
+    // split into several sections (breakfast/lunch/dinner) all of them are compared
     // do tej samej, historycznej linii bazowej z dni PRZED targetDate.
     const calorieBaseline = await getCalorieBaseline(req.user.id, targetDate);
 
@@ -175,8 +174,8 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
     for (const m of mealsToInsert) {
       const mealDescription = (imagePart ? (m.name || rawText || 'Posiłek ze zdjęcia') : (m.name || rawText));
 
-      // Odcięcie wartości z odpowiedzi AI do sensownego zakresu przed zapisem do bazy
-      // (patrz komentarz przy definicji sanitizeNumber powyżej).
+      // Clamp the values from the AI response to a sensible range before writing to the
+      // database (see the comment on sanitizeNumber above).
       const safeCalories = sanitizeNumber(m.calories, 0, 5000, 0);
       const safeProtein = sanitizeNumber(m.protein, 0, 500, 0);
       const safeCarbs = sanitizeNumber(m.carbs, 0, 500, 0);
@@ -185,9 +184,9 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
       const safeSugar = sanitizeNullableNumber(m.sugar, 0, 300);
       const safeSodium = sanitizeNullableNumber(m.sodium, 0, 15000);
 
-      // Zapisz posiłek w bazie (błonnik/cukry/sód jako NULL, jeśli AI ich nie
-      // oszacowało - bez fabrykowania zer, zgodnie z ustaloną zasadą projektu - ale
-      // jeśli AI JEDNAK podało wartość, odcinamy ją do sensownego zakresu jak resztę makro)
+      // Store the meal (fiber/sugar/sodium as NULL when the AI did not estimate them - no
+      // fabricated zeros, following the project's established rule - but when the AI DID give a
+      // value, we clamp it to a sensible range like the other macros)
       const result = await db.run(`
         INSERT INTO meals (user_id, date, raw_text, calories, protein, carbs, fat, fiber, sugar, sodium, analysis_json, image_base64)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -206,9 +205,9 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
         image || null
       ]);
 
-      // Odpowiedź do frontendu musi pokazywać te SAME (odcięte) wartości, które
-      // wylądowały w bazie - inaczej dashboard od razu po dodaniu posiłku pokazałby
-      // inną liczbę kcal/makro niż po jego odświeżeniu z bazy.
+      // The response to the frontend must show the SAME clamped values that were written to
+      // the database - otherwise the dashboard would show different kcal/macros right after a
+      // meal is added than after reloading it from the database.
       insertedMeals.push({
         id: result.id,
         date: targetDate,
@@ -227,11 +226,11 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
     }
 
     const totalCalories = insertedMeals.reduce((sum, m) => sum + (m.calories || 0), 0);
-    console.log(`[API LOG] Dodano ${insertedMeals.length} posiłek(ów) dla ${req.user.username} (ID: ${insertedMeals.map(m => m.id).join(', ')}). Łącznie: ${totalCalories} kcal`);
+    console.log(`[API LOG] Added ${insertedMeals.length} meal(s) for ${req.user.username} (ID: ${insertedMeals.map(m => m.id).join(', ')}). Total: ${totalCalories} kcal`);
 
-    // Runda 12 (audyt): patrz komentarz w utils/aiExplanationCache.js - dodanie posiłku
-    // (w tym retroaktywnie, dla targetDate z przeszłości) może zmienić rzeczywistą
-    // przyczynę odchylenia, którą AI miało już wyjaśnione i zapisane w cache'u.
+    // Round 12 (audit): see the comment in utils/aiExplanationCache.js - adding a meal,
+    // including retroactively for a targetDate in the past, can change the real cause of a
+    // deviation that the AI had already explained and cached.
     await invalidateAiExplanationCache(req.user.id, targetDate);
 
     const responsePayload = {
@@ -239,7 +238,7 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
       meals: insertedMeals
     };
 
-    // Zapisujemy w cache kopię bez dużego Base64 obrazka (Runda 6), aby zapobiec wyciekowi RAM
+    // We cache a copy without the large base64 image (round 6) to prevent a memory leak
     const cachedResponse = {
       count: responsePayload.count,
       meals: responsePayload.meals.map(m => {
@@ -262,12 +261,12 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
     res.status(201).json(responsePayload);
 
   } catch (err) {
-    console.error('[API ERROR] Błąd analizy posiłku przez AI:', err);
+    console.error('[API ERROR] AI meal analysis failed:', err);
     res.status(500).json({ error: 'Wystąpił błąd podczas analizowania posiłku przez AI: ' + err.message });
   }
 });
 
-// 2. Pobieranie listy posiłków z danego dnia
+// 2. Fetch the meals for a given day
 router.get('/api/meals', async (req, res) => {
   const date = req.query.date || getLocalDateString();
   try {
@@ -275,9 +274,9 @@ router.get('/api/meals', async (req, res) => {
       SELECT * FROM meals WHERE user_id = ? AND date = ? ORDER BY timestamp DESC
     `, [req.user.id, date]);
 
-    // Ta sama linia bazowa co przy zapisie (POST) - dni PRZED `date`, więc wynik
-    // anomalii dla danego dnia jest stabilny niezależnie od tego, ile razy
-    // odświeżymy widok (nie zmienia się przy każdym kolejnym posiłku tego samego dnia).
+    // The same baseline as on write (POST) - days BEFORE `date`, so the anomaly result for a
+    // given day is stable however many times the view is refreshed (it does not shift with
+    // each additional meal on that same day).
     const calorieBaseline = await getCalorieBaseline(req.user.id, date);
 
     const meals = rows.map(r => {
@@ -294,10 +293,11 @@ router.get('/api/meals', async (req, res) => {
         raw_text: r.raw_text,
         image_base64: r.image_base64,
         ...analysis,
-        // Kolumny bazy zawierają wartości PO sanityzacji (sanitizeNumber/sanitizeNullableNumber
-        // przy zapisie) - mogą się różnić od niesanityzowanego analysis_json zwróconego przez AI.
-        // Muszą nadpisać spread z `analysis`, inaczej GET zwróci inne wartości niż te faktycznie
-        // użyte w agregacjach (dashboard, podsumowania).
+      // The database columns hold the values AFTER sanitisation (sanitizeNumber /
+      // sanitizeNullableNumber on write) and may differ from the unsanitised analysis_json
+      // returned by the AI. They must override the spread of `analysis`, otherwise GET would
+      // return different values from those actually used in the aggregations (dashboard,
+      // summaries).
         calories: r.calories,
         protein: r.protein,
         carbs: r.carbs,
@@ -313,12 +313,12 @@ router.get('/api/meals', async (req, res) => {
   }
 });
 
-// 3. Usuwanie posiłku
+// 3. Delete a meal
 router.delete('/api/meals/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    // Data PRZED usunięciem - potrzebna do invalidacji cache'u wyjaśnienia AI (patrz
-    // utils/aiExplanationCache.js), po DELETE wiersza nie da się jej już odzyskać.
+    // The date BEFORE deletion - needed to invalidate the AI explanation cache (see
+    // utils/aiExplanationCache.js); once the row is deleted it can no longer be recovered.
     const meal = await db.get(`SELECT date FROM meals WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     const result = await db.run(`DELETE FROM meals WHERE id = ? AND user_id = ?`, [id, req.user.id]);
     if (result.changes === 0) {
@@ -335,11 +335,11 @@ router.delete('/api/meals/:id', async (req, res) => {
   }
 });
 
-// Automatyzacja (Runda 9): lista najczęściej powtarzanych posiłków użytkownika
-// (grupowanie po znormalizowanym raw_text - LOWER(TRIM(...)), bo użytkownik zwykle
-// wpisuje tę samą nazwę posiłku z drobnymi różnicami wielkości liter/spacji, nie
-// identyczny ciąg znaków), do szybkiego ponownego dodania bez ponownego wywołania AI
-// (patrz POST /api/meals/repeat poniżej). Tylko posiłki powtórzone co najmniej 2 razy.
+// Automation (round 9): the user's most frequently repeated meals, grouped by normalised
+// raw_text - LOWER(TRIM(...)), because a user usually types the same meal name with small
+// differences in case and spacing rather than an identical string. Used for quickly adding
+// one again without another AI call (see POST /api/meals/repeat below). Only meals repeated
+// at least twice qualify.
 router.get('/api/meals/frequent', async (req, res) => {
   try {
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 8, 1), 20);
@@ -377,11 +377,10 @@ router.get('/api/meals/frequent', async (req, res) => {
   }
 });
 
-// Szybkie ponowne dodanie wcześniej zapisanego posiłku (na bazie jego id) - kopiuje
-// wartości odżywcze z oryginalnego wpisu BEZ ponownego wywołania AI (inaczej niż
-// POST /api/meals powyżej), bo posiłek już raz został przeanalizowany i użytkownik
-// chce po prostu zalogować "to samo co ostatnio" (np. swoje stałe śniadanie) - szybciej
-// i bez zużywania limitu/kosztu zapytań do Gemini.
+// Quickly re-add a previously saved meal by its id - copies the nutritional values from the
+// original entry WITHOUT another AI call (unlike POST /api/meals above), because the meal has
+// already been analysed once and the user simply wants to log 'the same as last time', such
+// as their regular breakfast. Faster, and it does not consume the Gemini quota or cost.
 router.post('/api/meals/repeat', async (req, res) => {
   const { mealId, date } = req.body;
   const targetDate = date || getLocalDateString();
@@ -398,10 +397,9 @@ router.post('/api/meals/repeat', async (req, res) => {
 
     const calorieBaseline = await getCalorieBaseline(req.user.id, targetDate);
 
-    // Nie kopiujemy image_base64 - jest to dane duże (base64 zdjęcia), a przy
-    // powtarzaniu posiłku nie ma potrzeby duplikowania go w bazie (baza rosłaby
-    // liniowo z każdym powtórzeniem). Zdjęcie jest cechą konkretnego wpisu,
-    // nie samego przepisu/posiłku.
+      // We do not copy image_base64 - it is large (a base64 photo), and repeating a meal has
+      // no need to duplicate it in the database, which would grow linearly with each repeat.
+      // The photo is a property of one specific entry, not of the meal itself.
     const result = await db.run(`
       INSERT INTO meals (user_id, date, raw_text, calories, protein, carbs, fat, fiber, sugar, sodium, analysis_json, image_base64)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

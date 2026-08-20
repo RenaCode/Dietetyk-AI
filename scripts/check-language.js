@@ -43,10 +43,20 @@ const PL_WORDS = /\b(nie|jest|sie|dla|przez|zeby|tego|ktore|ktory|oraz|albo|jako
 
 const PL = PL_DIACRITICS;
 const isCommentLine = (trimmed) => /^(\/\/|\*|\/\*|#)/.test(trimmed) || /\{\s*\/\*/.test(trimmed);
-// A comment line counts as Polish if either detector fires.
+// Polish inside quotation marks within an otherwise English comment is quoted DATA, not
+// prose: a comment documenting which exact strings caused a bug has to name them. Stripping
+// quoted spans before testing keeps those out of the report - otherwise the only way to
+// "fix" the violation would be deleting the example that makes the comment useful.
+const stripQuoted = (line) => line
+  .replace(/"[^"]*"/g, '""')
+  .replace(/'[^']*'/g, "''")
+  .replace(/`[^`]*`/g, '``');
+
+// A comment line counts as Polish if either detector fires on its unquoted text.
 const commentIsPolish = (line) => {
-  if (PL_DIACRITICS.test(line)) return true;
-  return isCommentLine(line.trim()) && PL_WORDS.test(line);
+  const bare = isCommentLine(line.trim()) ? stripQuoted(line) : line;
+  if (PL_DIACRITICS.test(bare)) return true;
+  return isCommentLine(line.trim()) && PL_WORDS.test(bare);
 };
 
 // Files whose Polish string content is product content by design.

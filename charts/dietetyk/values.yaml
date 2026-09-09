@@ -1,5 +1,9 @@
 replicaCount: 1
 
+# Ile starych ReplicaSetow trzymac po rolloucie. Domyslne k8s to 10, co przy
+# deployu z kazdego pusha uzbieralo 115 pustych RS w ~2.5 miesiaca.
+revisionHistoryLimit: 3
+
 # Credentials for pulling private backend/frontend images from GHCR.
 # Leave empty [] if packages are public at https://github.com/orgs/renacode/packages
 # or if node-level credentials are used.

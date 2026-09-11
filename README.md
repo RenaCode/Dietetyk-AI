@@ -151,12 +151,17 @@ PORT=3000
 GEMINI_API_KEY=your_gemini_api_key
 GEMINI_MODEL=gemini-2.5-flash
 APP_PASSWORD=<a long random string, not a guessable phrase>
+OAUTH_STATE_SECRET=<a second, different random string>
 ```
 
 > [!NOTE]
 > `GEMINI_MODEL` is optional — omit it and the backend uses `gemini-2.5-flash`. Earlier revisions of this README recommended `gemini-1.5-flash`, which returns 404 in the current SDK; `config.js` silently substitutes the working model and logs a warning at startup, so existing `.env` files keep working, but update the value to clear the warning.
 >
-> `APP_PASSWORD` is the key material for encrypting integration secrets at rest (`utils/encryption.js`) — **not** a login password. Changing it makes previously stored Oura/Withings/Gemini credentials undecryptable and they must be re-entered in Settings.
+> `APP_PASSWORD` is the key material for encrypting integration secrets at rest (`utils/encryption.js`) — **not** a login password. Changing it makes previously stored Oura/Withings/Gemini credentials undecryptable, so it is rotated together with a re-encryption pass: see [`backend/docs/secret-rotation.md`](backend/docs/secret-rotation.md).
+>
+> `OAUTH_STATE_SECRET` signs the `state` parameter of the OAuth flow and is **required** — the backend refuses to start without it. Generate both with `openssl rand -hex 32`, and make them different values: they used to be one secret, which meant a single leaked string both decrypted the database and let an attacker forge an OAuth link onto someone else's account.
+>
+> On the live deployment this file is **not** edited on the host: production runs on k3s, and the whole `.env` is the `dotenv` key of the Kubernetes Secret `dietetyk-backend-secret`, mounted at `/app/.env` (`charts/dietetyk/templates/backend-deployment.yaml`). Adding or changing either variable there — and the required re-encryption pass when `APP_PASSWORD` changes — is [`backend/docs/secret-rotation.md`](backend/docs/secret-rotation.md).
 The `./data` directory must be writable by uid 1000 (`chown -R 1000:1000 ./data`)—the backend container runs internally as the unprivileged `node` user, not root.
 
 ### Step 4: Run the Containers

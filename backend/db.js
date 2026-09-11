@@ -347,6 +347,7 @@ const initDb = async () => {
       user_id INTEGER NOT NULL,
       expires_at TEXT NOT NULL,
       is_verified_2fa INTEGER DEFAULT 0,
+      is_temp INTEGER DEFAULT 0,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
@@ -354,6 +355,36 @@ const initDb = async () => {
   // Migration: add the is_verified_2fa column to sessions if missing
   try {
     await run(`ALTER TABLE sessions ADD COLUMN is_verified_2fa INTEGER DEFAULT 0`);
+  } catch (e) {}
+
+  // Migration: is_temp marks the 5-minute verification sessions (2FA setup, 2FA login,
+  // forced password change) that must NOT authorise anything except finishing that one
+  // step. Before this column existed there was no session-level marker at all: requireAuth
+  // only rejected `totp_enabled = 1 AND is_verified_2fa = 0`, and a user being FORCED to
+  // configure 2FA has totp_enabled = 0 by definition, so their temporary token passed
+  // requireAuth and returned the full profile and settings without any second factor -
+  // force_2fa protected nothing. is_verified_2fa cannot carry this meaning either: an
+  // ordinary 7-day session for a user without 2FA is also created with is_verified_2fa = 0.
+  //
+  // Existing rows default to 0 ("full session"). That is the deliberate choice: flipping
+  // every pre-migration row to 1 would invalidate every logged-in 7-day session at once and
+  // log the whole user base out on deploy, to fix a window that closes on its own within
+  // five minutes (the temporary TTL). The backfill below then repairs precisely the rows
+  // that the default gets wrong.
+  try {
+    await run(`ALTER TABLE sessions ADD COLUMN is_temp INTEGER DEFAULT 0`);
+    // One-time backfill, executed only on the run that actually adds the column (an
+    // ALTER on an existing column throws and skips this line), so it can never overwrite
+    // the flag that createSession() writes from then on.
+    //
+    // The token prefix is the ONLY evidence available about rows written before the
+    // column existed, and here it is sound: every historical token came from
+    // createSession() / setup-2fa, which stamped 'temp_' on exactly the short-lived ones.
+    // This is a one-off classification of historical data, NOT an authorisation rule -
+    // no runtime check may read the prefix, because a prefix is a property of the string
+    // rather than a property of the session, and the first change to the token format
+    // would silently reopen the hole.
+    await run(`UPDATE sessions SET is_temp = 1 WHERE token LIKE 'temp_%'`);
   } catch (e) {}
 
   // 5b. Tabela blokady brute-force logowania (login_attempts) - przeniesiona

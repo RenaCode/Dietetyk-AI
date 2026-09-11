@@ -397,9 +397,13 @@ router.post('/api/user/setup-2fa', async (req, res) => {
     const tempToken = 'temp_' + crypto.randomBytes(24).toString('hex');
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
 
+    // is_temp = 1: this row is a 5-minute carrier for the 2FA setup code, not a login. The
+    // user is already authenticated here through their ordinary Bearer session, so the
+    // marker costs them nothing - it only stops the token below from being replayed as an
+    // Authorization header (see middleware/auth.js).
     await db.run(`
-      INSERT INTO sessions (token, user_id, expires_at, is_verified_2fa)
-      VALUES (?, ?, ?, 0)
+      INSERT INTO sessions (token, user_id, expires_at, is_verified_2fa, is_temp)
+      VALUES (?, ?, ?, 0, 1)
     `, [tempToken, req.user.id, expiresAt]);
 
     const otpauth = authenticator.keyuri(user.username, 'Dietetyk AI', secret);
@@ -428,7 +432,7 @@ router.post('/api/user/verify-2fa', async (req, res) => {
       SELECT s.*, u.totp_secret
       FROM sessions s
       JOIN users u ON s.user_id = u.id
-      WHERE s.token = ? AND s.user_id = ? AND datetime(s.expires_at) > datetime('now')
+      WHERE s.token = ? AND s.user_id = ? AND datetime(s.expires_at) > datetime('now') AND s.is_temp = 1
     `, [tempToken, req.user.id]);
 
     if (!session) {

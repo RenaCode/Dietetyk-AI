@@ -33,7 +33,7 @@ if (!OAUTH_STATE_SECRET) {
 // Helper for reading configuration from the app_config table. decrypt() is safe to call for
 // EVERY key, not only the secret ones in APP_SECRET_CONFIG_KEYS - for values never encrypted
 // by encrypt() (see utils/encryption.js) it is
-// a no-op, because they lack the recognisable prefix.
+// no-opem, bo brakuje im rozpoznawalnego prefiksu.
 async function getAppConfig(key) {
   if (key === 'app_url' && process.env.APP_URL) {
     return process.env.APP_URL;
@@ -81,7 +81,7 @@ async function getVerifiedSessionByToken(token) {
   return session;
 }
 
-// Safe generation and verification of the OAuth state (stateless)
+// Bezpieczne generowanie i weryfikacja stanu OAuth (stateless)
 function generateOAuthState(userId, service = 'oura') {
 // crypto.randomBytes (a CSPRNG) rather than Math.random() (a non-cryptographic PRNG,
 // predictable if the generator state is known). The HMAC alone still prevents forging state

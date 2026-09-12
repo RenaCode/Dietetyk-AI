@@ -11,12 +11,12 @@ import { useInsights } from '../utils/useInsights';
 //
 // Two cases are deliberately left out of this list:
 //   - calorie-target-suggestion: it has an extra dependency (caloriesTrigger), because
-//     it must refresh after clicking "Zastosuj", not only when the date changes;
+//     it must refresh after clicking "Apply", not only when the date changes;
 //   - the day/history data (/api/dashboard, /api/health/history), which have their own
 //     lifecycle and different dependencies.
 // ai-explanation-insight and training-plan-insight ARE in the batch, but they also have
 // an overlay that can override the result (polling for background generation / the
-// "Odśwież" button) - see the comments next to them in the component.
+// "Refresh" button) - see the comments next to them in the component.
 //
 // The constant is defined outside the component on purpose: useInsights reduces the list
 // to a string as its dependency key, and a new array reference on every render would fire
@@ -73,8 +73,8 @@ const BATCHED_INSIGHT_IDS = [
 ];
 
 // Colour of the energy battery bar and number. The thresholds match the labels returned
-// by the backend ("Naładowana" / "Dobra" / "Niska" / "Na rezerwie"), so the colour and
-// the word never say two different things.
+// by the backend (Naladowana / Dobra / Niska / Na rezerwie), so the colour and the word
+// never say two different things.
 const batteryColor = (value) => {
   if (value >= 75) return 'var(--success-light)';
   if (value >= 50) return '#4ade80';
@@ -448,7 +448,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   // Insight: supplements (free text) vs sleep/recovery on THE SAME day
   // (see the /api/dashboard/supplements-sleep-insight endpoint) - our own analysis of data
   // the app already collects (supplements + Oura), without copying
-  // anything from competing apps.
+  // niczego z konkurencyjnych apek.
   const supplementsSleepInsight = batchedInsights['supplements-sleep-insight'];
 
 
@@ -477,7 +477,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const bpTrendInsight = batchedInsights['bp-trend-insight'];
 
   // Real cardio zones (Karvonen) summed from the Apple Health workouts of the last 14 days
-  // - unlike the static "Strefy Tętna" reference table (a formula, not a measurement),
+  // - unlike the static "Strefy Tetna" reference table (a formula, not a measurement),
   // these are minutes actually measured by heart rate during a workout (it requires "Include
   // Workout Metrics" enabled in Health Auto Export). See /api/dashboard/hr-zones-insight.
   const hrZonesInsight = batchedInsights['hr-zones-insight'];
@@ -587,7 +587,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiExplanationInsight?.generating, sessionToken, selectedDate]); // F-S1: optional chaining instead of a boolean expression
 
-  // Benchmark "you today vs you in the past" (round 11, a private version of Whoop's
+  // Benchmark "Ty dziś vs Ty w przeszłości" (Runda 11, prywatna wersja Whoop
   // "people like you" - EXCLUSIVELY the user's own history, with no comparison to other
   // users). See /api/dashboard/self-benchmark-insight.
   const selfBenchmarkInsight = batchedInsights['self-benchmark-insight'];
@@ -601,7 +601,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const muscleProteinInsight = batchedInsights['muscle-protein-insight'];
   const isLoadingMuscleProtein = isLoadingBatchedInsights;
 
-  // Round 13, new feature 3: the Oura vs Apple Watch temperature divergence.
+  // Runda 13, nowa funkcja 3: rozjazd temperatury Oura vs Apple Watch.
   const temperatureDivergenceInsight = batchedInsights['temperature-divergence-insight'];
   const isLoadingTemperatureDivergence = isLoadingBatchedInsights;
 
@@ -617,7 +617,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const dietQualityWeightPaceInsight = batchedInsights['diet-quality-weight-pace-insight'];
   const isLoadingDietQualityWeightPace = isLoadingBatchedInsights;
 
-  // Round 13, new feature 7: streak -> the real effect on weight.
+  // Runda 13, nowa funkcja 7: streak -> realny efekt na wadze.
   const streakWeightEffectInsight = batchedInsights['streak-weight-effect-insight'];
   const isLoadingStreakWeightEffect = isLoadingBatchedInsights;
 
@@ -638,7 +638,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   // AI training plan analysis (Gemini, cached for 7 days). ?refresh=1 forces regeneration.
   // Data: 4 weeks of workouts + the body goal + body composition + a 7-day recovery average.
   // See /api/dashboard/training-plan-insight.
-  // As with the AI explanation: the initial value comes from the batch, but the "Odśwież"
+  // As with the AI explanation: the initial value comes from the batch, but the "Refresh"
   // button (refresh=1, which forces the AI to regenerate) has to be able to override it.
   // The overlay remembers the date it was produced for.
   const [trainingPlanOverride, setTrainingPlanOverride] = useState(null);
@@ -650,7 +650,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const fetchTrainingPlanInsight = async (refresh = false) => {
     if (!sessionToken) return;
       // Guard: do not send another request while the previous one is still in flight
-      // (clicking "Odśwież" during loading).
+      // (clicking "Refresh" during loading).
     if (isLoadingTrainingPlan && !refresh) return;
     setIsRefreshingTrainingPlan(true);
     try {
@@ -671,7 +671,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     // on every page refresh (the backend has a 7-day AI cache, but the HTTP request itself is
     // also unnecessary when the data has not changed).
 
-  // === WORKOUT INSIGHTS (round 25): Oura + Apple Watch cross-device ===
+  // === INSIGHTY TRENINGOWE (Runda 25): Oura + Apple Watch cross-device ===
 
   // Oura sleep -> Apple Watch workout performance (the following day)
   const sleepWorkoutPerfInsight = batchedInsights['sleep-workout-performance-insight'];
@@ -808,15 +808,14 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   // Collapsible heart-rate zone table (UX: round 7 - a static 5-zone reference table; there
   // is no need to see it immediately, an expanding link is enough).
   const [isHrZonesOpen, setIsHrZonesOpen] = useState(false);
-  // Collapsible supplementation history (UX: round 7 - the 7-day bar and the
-  // "Ostatnio przyjmowane" list hidden behind "Pokaż historię" by default, with only the
-  // counter visible).
+  // Collapsible supplementation history (UX: round 7 - the 7-day bar and the "Ostatnio
+  // przyjmowane" list hidden behind "Pokaz historie" by default, only the counter visible).
   const [isSupplementsHistoryOpen, setIsSupplementsHistoryOpen] = useState(false);
 
   // Adaptive correction of the calorie goal: comparing the declared balance (from the logged
   // meals) with the balance implied by the real weight change (see the
   // /api/dashboard/calorie-target-suggestion endpoint). caloriesTrigger forces a re-fetch
-  // after clicking "Zastosuj", so the card disappears or updates without waiting for a full
+  // after clicking "Apply", so the card disappears or updates without waiting for a full
   // page refresh.
   const [calorieSuggestion, setCalorieSuggestion] = useState(null);
   const [caloriesTrigger, setCaloriesTrigger] = useState(0);
@@ -1144,7 +1143,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   // above) and the user burned no active calories, the bare 0/0 division gave NaN and broke
   // the whole "energy battery" - hence an explicit guard: goal=0 means no discharge
   // (discharge only when there is a real
-  // goal to exceed).
+  // cel do przekroczenia).
   const batteryDepletion = readinessScore > 0 && targetActiveCaloriesForBattery > 0
     ? Math.round(Math.min(activeCalories / targetActiveCaloriesForBattery, 1) * 20)
     : 0;
@@ -1339,7 +1338,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 
   const handleResetWater = async () => {
     if (isAddingWater) return;
-    // F-N1: confirmation before resetting the water counter
+    // F-N1: Potwierdzenie przed resetem licznika wody
     if (!window.confirm(t('Zresetować licznik wody do 0?'))) return;
     setIsAddingWater(true);
     setWaterMessage('');
@@ -1791,7 +1790,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (round 10): WELLNESS SCORE (0-100) - round 12 (audit): lifted
+        {/* INSIGHT (Runda 10): WELLNESS SCORE (0-100) - Runda 12 (audyt): wyniesiony
             POZA zwijaną sekcję "Analizy" poniżej. To najbardziej syntetyczny, "na pierwszy
             rzut oka" wskaźnik dnia (jak Oura Readiness/Whoop Recovery) - chowanie go za
             dodatkowym kliknięciem "Pokaż" w 12-kartowej liście było niespójne z jego rolą
@@ -2553,8 +2552,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* SUPPLEMENTS + HYDRATION - 2 columns side by side (auto-fit: one column
-            when only one insight has data, two when both are available) */}
+        {/* SUPLEMENTY + NAWODNIENIE — 2 kolumny obok siebie (auto-fit: jedna kolumna
+            jeśli tylko jeden insight ma dane, dwie jeśli oba są dostępne) */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '12px' }}>
 
         {/* SUPLEMENTY VS SEN/REGENERACJA */}
@@ -2649,7 +2648,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        </div>{/* end of the Supplements + Hydration grid */}
+        </div>{/* koniec gridu Suplementy+Nawodnienie */}
 
         {/* CARD: THE DAY'S WELLBEING (energy + mood, scale 1-5).
             The buttons are rendered inline (with no local component inside the IIFE) so that
@@ -2660,7 +2659,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <span className="premium-title">⚡ Samopoczucie dnia</span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '4px' }}>
-            {/* Row: energy */}
+            {/* Wiersz: Energia */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Energia</span>
               <div style={{ display: 'flex', gap: '8px' }}>
@@ -3014,7 +3013,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (round 10): SpO2 TREND */}
+        {/* INSIGHT (Runda 10): TREND SpO2 */}
         {summary?.has_oura && spo2TrendInsight && spo2TrendInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3099,7 +3098,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (round 10): RUNNING/WALKING PACE TREND */}
+        {/* INSIGHT (Runda 10): TREND TEMPA BIEGU/MARSZU */}
         {paceTrendInsight && paceTrendInsight.hasEnoughData && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3150,7 +3149,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (round 13, new feature 1): WORKOUT TYPE VS THAT SAME NIGHT'S SLEEP */}
+        {/* INSIGHT (Runda 13, nowa funkcja 1): TYP TRENINGU VS SEN TEJ SAMEJ NOCY */}
         {isLoadingWorkoutTypeSleep && !workoutTypeSleepInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3260,7 +3259,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (round 13, new feature 3): OURA VS APPLE WATCH TEMPERATURE DIVERGENCE */}
+        {/* INSIGHT (Runda 13, nowa funkcja 3): ROZJAZD TEMPERATURY OURA VS APPLE WATCH */}
         {isLoadingTemperatureDivergence && !temperatureDivergenceInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3453,7 +3452,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* INSIGHT (round 13, new feature 7): CALORIE STREAK VS THE REAL EFFECT ON WEIGHT */}
+        {/* INSIGHT (Runda 13, nowa funkcja 7): PASSA KALORYCZNA VS REALNY EFEKT NA WADZE */}
         {isLoadingStreakWeightEffect && !streakWeightEffectInsight && (
           <div className="premium-card">
             <div className="premium-title-row">
@@ -3956,7 +3955,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* WATER COUNTER - quick add */}
+        {/* LICZNIK WODY - szybkie dodawanie */}
         <div className="premium-card">
           <div className="premium-title-row">
             <span className="premium-title">💧 Nawodnienie</span>
@@ -4119,7 +4118,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               </button>
             </div>
 
-            {/* Supplementation history (the last 7 days) */}
+            {/* Historia suplementacji (ostatnie 7 dni) */}
             {(() => {
               const last7Days = getLast7Days(selectedDate);
               const complianceDays = last7Days.filter(day => {
@@ -4671,7 +4670,7 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
               footerText={rhr == null ? "Brak danych" : rhr < 61 ? "Niski < 61" : "Wysoki > 61"}
               status="success"
             />
-            {/* The "Słuch" card stays removed at the user's request - Oura has no microphone,
+            {/* The "Sluch" card stays removed at the user's request - Oura has no microphone,
                 and Apple Watch/AirPods are not supported yet. The 4 cards below appear only
                 when the backend genuinely has a real value for them (Oura Gen 3+ for SpO2, an
                 Apple Watch Series 8+/Ultra with the "Wrist Temperature" metric enabled in

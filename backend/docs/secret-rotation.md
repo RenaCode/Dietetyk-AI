@@ -5,24 +5,10 @@ A runbook for a human operator with `kubectl` access to the k3s cluster on the V
 ## Read this first: order, or a CrashLoopBackOff
 
 **`OAUTH_STATE_SECRET` must be in the `dietetyk-backend-secret` Secret BEFORE — or in the same
-maintenance step as — the deploy of the code that requires it.** The backend refuses to
-start without that variable (`services/oauthHelpers.js`). Deploy first and add the variable
-later and the new pod goes into CrashLoopBackOff.
-
-> **STATUS 2026-09-12 — this ordering step is already done; do not re-run Runbook A as if it were
-> pending.** The cutover happened on 2026-09-11: `charts/dietetyk/values.yaml` carries
-> `backend.image.tag: "sha-f01af08"`, that tag is what `Deployment/dietetyk-backend` is running,
-> and the pod is `Running` with **0 restarts**. That last fact is the proof, not an encouraging
-> sign: `services/oauthHelpers.js` throws at *module load*, `routes/auth.js` requires it at its
-> own top level, and `server.js` requires `routes/auth` at line 124 — all of which runs before
-> `start()` (line 161) ever calls `app.listen`. A backend missing `OAUTH_STATE_SECRET` therefore
-> cannot answer `/api/healthz` at all. It is answering, so the variable is present in the `dotenv`
-> blob. (Verified read-only, without decoding the Secret: `kubectl get pod`, `kubectl get deploy
-> -o jsonpath=...image`, `kubectl logs`.)
->
-> Runbook A below is consequently a **rotation** procedure now, not a first-time insert. Its step 2
-> was written to *append* the line and would have produced a duplicate entry on a file that already
-> has one; it now replaces-or-appends instead.
+maintenance step as — the deploy of the code that requires it.** The backend now refuses to
+start without that variable (`services/oauthHelpers.js`), and the production Secret does not
+contain it today. Deploy first and add the variable later and the new pod goes into
+CrashLoopBackOff.
 
 What that failure actually looks like, so nobody misreads it: the Deployment runs one replica
 with the default rolling-update strategy, so Kubernetes starts the new pod *before* removing the
@@ -33,16 +19,13 @@ from being fully down, and — within 15 minutes — an alert e-mail from the mo
 which treats `CrashLoopBackOff` as a permanent failure (`renacode-infra`,
 `charts/monitoring/czujka/reguly.py`).
 
-The safe order was free, and taking it is why the 2026-09-11 deploy was a non-event: the variable
-went into the Secret while the *old* code was still running, and that old code
-(`git show 4431587:backend/services/oauthHelpers.js`, line 14 —
-`process.env.OAUTH_STATE_SECRET || process.env.APP_PASSWORD`) already preferred it when present.
-So the fix took effect before the deploy that made it mandatory, and the deploy itself changed
-nothing at startup.
-
-Keep that shape for the next required variable: **put it in the Secret first, on code that
-tolerates its absence; make it mandatory in a later deploy.** The reverse order buys nothing and
-costs a crash-looping rollout.
+The safe order is not a workaround, it is free: **Runbook A below can be done today, before the
+new image is anywhere near production.** The currently deployed code already reads
+`OAUTH_STATE_SECRET` when it is present — it only *falls back* to `APP_PASSWORD` when it is
+missing (`git show 4431587:backend/services/oauthHelpers.js`, the commit behind the
+`sha-4431587` tag in `charts/dietetyk/values.yaml`). Adding the variable therefore improves
+security immediately, on the code that is running right now, and makes the later deploy a
+non-event.
 
 ## Where production configuration actually lives
 
@@ -124,12 +107,10 @@ Therefore: **re-encrypt in the same maintenance window in which you change the v
 
 ---
 
-## Runbook A — set or rotate `OAUTH_STATE_SECRET`
+## Runbook A — add `OAUTH_STATE_SECRET` to the Secret
 
-The variable is already in the Secret (see the status note at the top), so in practice this is now
-the **rotation** procedure: run it if the current value is suspected to have leaked, or when
-standing up a new environment from scratch. It is independent of the code deploy and needs no
-database work — unlike Runbook B, nothing stored is derived from this secret.
+Do this first. It is independent of the code deploy, needs no database work, and is what keeps
+the deploy from crash-looping.
 
 1. **Back up the current Secret** (the only copy that exists) and keep it off the repo:
 
@@ -138,27 +119,13 @@ database work — unlike Runbook B, nothing stored is derived from this secret.
      | base64 -d > ~/dotenv.backup
    ```
 
-2. Build the new content — the whole file with that one line set. Replace-or-append, never a bare
-   `>>`: the key is already in the file, so appending would leave *two* `OAUTH_STATE_SECRET=`
-   lines. `dotenv` takes the last one, so the rotation would appear to work while the retired
-   value sat one line above it in the Secret, still readable by anyone who can read the Secret —
-   exactly the value the rotation exists to get rid of.
+2. Build the new content — the whole file plus one line:
 
    ```bash
    cp ~/dotenv.backup ~/dotenv.new
-   NEW_STATE_SECRET="$(openssl rand -hex 32)"
-   if grep -q '^OAUTH_STATE_SECRET=' ~/dotenv.new; then
-     sed -i.bak "s|^OAUTH_STATE_SECRET=.*|OAUTH_STATE_SECRET=${NEW_STATE_SECRET}|" ~/dotenv.new
-     rm -f ~/dotenv.new.bak
-   else
-     printf 'OAUTH_STATE_SECRET=%s\n' "${NEW_STATE_SECRET}" >> ~/dotenv.new
-   fi
-   unset NEW_STATE_SECRET
+   printf 'OAUTH_STATE_SECRET=%s\n' "$(openssl rand -hex 32)" >> ~/dotenv.new
    grep -c '^OAUTH_STATE_SECRET=' ~/dotenv.new   # must print exactly 1
    ```
-
-   The `grep -c` is the check that matters — it prints the line *count*, not the value, so it is
-   safe to run with someone looking over your shoulder.
 
 3. Replace the Secret. `--dry-run=client -o yaml | kubectl apply -f -` rewrites the whole object,
    which is why step 1 is not optional:

@@ -145,7 +145,7 @@ async function buildHealthReportPdf(userId, requestedDays) {
         });
       }
 
-      // --- Supplements ---
+      // --- Suplementy ---
       if (stats.supplementsLogged.length > 0) {
         sectionTitle('Suplementy zapisane w okresie');
       // Capped at 30 entries - with the maximum 180-day window the list could get very long,

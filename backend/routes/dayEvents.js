@@ -34,7 +34,7 @@ router.get('/api/day-events', requireAuth, async (req, res) => {
   }
 });
 
-// Adding a new event (a date range + a type + an optional note).
+// Dodanie nowego zdarzenia (zakres dat + typ + opcjonalna notatka).
 router.post('/api/day-events', requireAuth, async (req, res) => {
   const { type, start_date, end_date, note } = req.body;
 

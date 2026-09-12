@@ -22,7 +22,7 @@ router.get('/api/public/shared-reports/:token', async (req, res) => {
   try {
     const share = await getActiveShareByToken(req.params.token);
     // Identical 404 for "does not exist", "revoked" and "expired" - see
-    // the comment in getActiveShareByToken.
+    // komentarz w getActiveShareByToken.
     if (!share) {
       return res.status(404).json({ error: 'Link jest nieprawidłowy, wygasł albo został odwołany.' });
     }

@@ -1,6 +1,6 @@
 const { test, expect } = require('@playwright/test');
 
-test.describe('Dashboard and UI behaviour', () => {
+test.describe('Dashboard i Funkcjonalność UI', () => {
   // Sign in before each test in this block
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
@@ -10,7 +10,7 @@ test.describe('Dashboard and UI behaviour', () => {
     await expect(page.locator('.logo-text')).toContainText('Dietetyk AI');
   });
 
-  test('verifies the premium dashboard layout has no broken alignment', async ({ page }) => {
+  test('Weryfikacja układu i braku rozjechania w premium dashboard', async ({ page }) => {
     // Check that the main columns and the banner are present
     const banner = page.locator('.dietetyk-ai-banner');
     await expect(banner).toBeVisible();
@@ -22,12 +22,12 @@ test.describe('Dashboard and UI behaviour', () => {
     const styleAttr = await syncStatus.getAttribute('style');
     expect(styleAttr).toContain('grid-column: span 2');
 
-    // Checking the dashboard columns
+    // Sprawdzenie kolumn dashboardu
     const columns = page.locator('.dashboard-column');
     await expect(columns).toHaveCount(2);
   });
 
-  test('handles the hydration counter (adding and resetting water)', async ({ page }) => {
+  test('Obsługa licznika nawodnienia (Dodawanie i Reset wody)', async ({ page }) => {
     // Auto-accept dialogs (the confirm when resetting water, for instance)
     page.on('dialog', async dialog => {
       await dialog.accept();
@@ -49,22 +49,22 @@ test.describe('Dashboard and UI behaviour', () => {
     const add250Button = waterCard.locator('button:has-text("+250 ml")');
     await add250Button.click();
 
-    // Verifying the change in the UI
+    // Weryfikacja zmiany w UI
     await expect(waterCard).toContainText('250 /');
 
     // 4. Kliknij "+500 ml"
     const add500Button = waterCard.locator('button:has-text("+500 ml")');
     await add500Button.click();
 
-    // Verification (250 + 500 = 750)
+    // Weryfikacja (250 + 500 = 750)
     await expect(waterCard).toContainText('750 /');
 
-    // 5. Resetting the water counter
+    // 5. Reset licznika wody
     await resetButton.click();
     await expect(waterCard).toContainText('0 /');
   });
 
-  test('navigates the application tabs', async ({ page }) => {
+  test('Nawigacja po zakładkach aplikacji', async ({ page }) => {
     const tabs = ['Kalkulator Posiłków', 'Trendy', 'Aktywność', 'Ustawienia'];
 
     for (const tabName of tabs) {
@@ -88,7 +88,7 @@ test.describe('Dashboard and UI behaviour', () => {
     }
   });
 
-  test('handles Apple Health workouts (dynamic stretching, filtering and the boxing icon)', async ({ page, request }) => {
+  test('Obsługa treningów Apple Health (Dynamiczne rozciąganie, filtrowanie i ikona bokserska)', async ({ page, request }) => {
     // 1. Connect to the database to read the admin user's sync_token
     const sqlite3 = require('../backend/node_modules/sqlite3').verbose();
     const path = require('path');
@@ -204,7 +204,7 @@ test.describe('Dashboard and UI behaviour', () => {
     await page.waitForTimeout(500);
   });
 
-  test('saves supplements and verifies the history on the Dashboard', async ({ page }) => {
+  test('Obsługa zapisywania suplementów i weryfikacja historii na Dashboardzie', async ({ page }) => {
     const initialResponsePromise = page.waitForResponse(response => response.url().includes('/api/dashboard') && response.status() === 200);
     await page.goto('/');
     await initialResponsePromise;
@@ -224,7 +224,7 @@ test.describe('Dashboard and UI behaviour', () => {
     const textarea = supplementsCard.locator('textarea');
     await expect(textarea).toBeVisible();
 
-    // Enter test supplements (creatine and a multivitamin)
+    // Wpisz testowe suplementy (kreatyna i multiwitamina)
     const testSups = 'Kreatyna, Multiwitamina 7Nutrition';
     await textarea.fill(testSups);
     try {
@@ -237,11 +237,11 @@ test.describe('Dashboard and UI behaviour', () => {
       await expect(textarea).toHaveValue(testSups, { timeout: 5000 });
     }
 
-    // Save the supplements
+    // Zapisz suplementy
     const saveButton = supplementsCard.locator('button:has-text("Zapisz")');
     await saveButton.click();
 
-    // Verifying the success message in the UI
+    // Weryfikacja komunikatu o sukcesie w UI
     await expect(supplementsCard).toContainText('Zapisano suplementy!');
 
     // Verify the history (it should update immediately and show the icons and the activity)
@@ -263,7 +263,7 @@ test.describe('Dashboard and UI behaviour', () => {
     await expect(supplementsCard.locator('textarea')).toHaveValue(testSups, { timeout: 10000 });
   });
 
-  test('verifies the Waga i Skład Ciała tile sits in the second column', async ({ page }) => {
+  test('Weryfikacja lokalizacji kafelka Waga i Skład Ciała w drugiej kolumnie', async ({ page }) => {
     await page.goto('/');
 
     // The first column should not contain the body composition heading

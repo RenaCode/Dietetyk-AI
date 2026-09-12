@@ -22,12 +22,12 @@
 #
 # Remaining MANUAL steps (the script does not perform these automatically):
 #   a) Generate a NEW, dedicated SSH key pair for CI/CD only (do not reuse
-#      your personal key):
+#      swojego osobistego klucza):
 #        ssh-keygen -t ed25519 -C "github-actions-deploy" -f deploy_key -N ""
-#   b) Append the PUBLIC key (deploy_key.pub) to
+#   b) Dopisz klucz PUBLICZNY (deploy_key.pub) do
 #        /home/deploy/.ssh/authorized_keys
 #   c) Paste the PRIVATE key (deploy_key) as the VPS_SSH_KEY secret in
-#      Settings -> Secrets and variables -> Actions in the GitHub repo.
+#      Settings -> Secrets and variables -> Actions w repo na GitHubie.
 #   d) Also set the VPS_HOST and VPS_USER=deploy secrets, plus (optionally)
 #      VPS_SSH_PORT - see the comment at the top of docker-publish.yml.
 #   e) Make sure /opt/dietetyk-ai contains a backend/.env file with the real production
@@ -68,7 +68,7 @@ else
   echo "OSTRZEŻENIE: grupa 'docker' nie istnieje - sprawdź instalację Dockera." >&2
 fi
 
-# 2. Application directory
+# 2. Katalog aplikacji
 echo "[2/4] Przygotowanie $APP_DIR..."
 if [ -d "$APP_DIR/.git" ]; then
   echo "  $APP_DIR już jest repozytorium git - pomijam klonowanie."

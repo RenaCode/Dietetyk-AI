@@ -49,6 +49,34 @@ const app = express();
 // <traefik>`: 2 yields <client>, `true` yields 9.9.9.7, 1 yields <traefik>.
 // tests/test-trust-proxy.js pins this down, and reads the number straight out of this
 // file so that changing it here cannot silently pass.
+//
+// WHAT THIS NUMBER CANNOT FIX (measured on production, 2026-09-12). The hop count above is
+// correct and spoofing is genuinely dead, but req.ip is still NOT the caller's address: every
+// request from the internet arrives here as 10.42.0.1, the node's cni0 gateway. Proof - two
+// requests to https://dietetyk.renacode.com/api/login from a machine whose public address was
+// 83.4.148.167, the second one carrying a forged `X-Forwarded-For: 9.9.9.7`; both were logged
+// by services/logger.js as `(IP: 10.42.0.1)`.
+//
+// The cause is upstream of every header decision made here. k3s fronts Traefik with klipper-lb
+// (the svclb DaemonSet), which DNATs and then MASQUERADEs incoming connections, and the traefik
+// Service in kube-system runs with `externalTrafficPolicy: Cluster`. Traefik therefore sees the
+// node, not the client, and the X-Forwarded-For chain it starts is truthful about what it saw
+// and useless to us. No value of this setting can recover an address that never entered the
+// chain: the comment above is right that 1 would collapse everyone onto the Traefik pod, and
+// what is actually happening is the same collapse one hop further out.
+//
+// The practical consequences, all live today:
+//   - middleware/rateLimit.js keeps ONE bucket for the whole internet. 121 requests in a minute
+//     from anybody returns 429 to everybody for the rest of that minute.
+//   - the per-IP registration lockout in routes/auth.js ('register_endpoint') is likewise
+//     global: five attempts from anyone freeze registration for 15 minutes for all.
+//   - the brute-force key in services/loginAttempts.js is `10.42.0.1::<username>`, so it still
+//     limits guessing per account, but no longer per source.
+//   - every `ip` column in app_logs and every SECURITY log line records 10.42.0.1.
+// The fix is in the cluster, not in this file: `externalTrafficPolicy: Local` on the traefik
+// Service (or the PROXY protocol between klipper-lb and Traefik). Until that lands, treat
+// req.ip as "the cluster", not "the caller". Do NOT raise the number below to compensate - at 3
+// the forged left-hand entry becomes the one Express believes, which is the original hole.
 app.set('trust proxy', 2);
 
 // Middleware
@@ -195,7 +223,18 @@ async function start() {
   });
 }
 
-start();
+// A failure inside start() - a migration that could not run (see addColumn in db.js), a
+// database that will not open - must stop the process, not leave it standing. Without this
+// catch the rejection only reached the unhandledRejection handler below, which logs and
+// returns: app.listen() never ran, so the container stayed "up" with nothing on port 3000,
+// and the only symptom was the liveness probe timing out a minute later with no explanation
+// in between. Exiting non-zero makes Kubernetes restart the pod and puts the real error at
+// the top of `kubectl logs --previous`.
+start().catch((err) => {
+  logger.error(`Server startup failed: ${err.message}`, 'SYSTEM', err);
+  console.error('[STARTUP FAILED]', err);
+  setTimeout(() => process.exit(1), 1000);
+});
 
 // Global process-level error handling
 process.on('uncaughtException', (err) => {

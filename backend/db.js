@@ -75,6 +75,37 @@ const all = (sql, params = []) => {
   });
 };
 
+// SQLite has no `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`, so every column migration below
+// is written as an ALTER that is EXPECTED to fail on every start after the first. That part is
+// fine. What was not fine is how the failure was absorbed: each one sat in `try { ... } catch
+// (e) {}`, which treats "the column is already there" and "the column could not be added"
+// as the same event.
+//
+// The second case is not hypothetical - `SQLITE_BUSY` (another writer holding the file; the
+// chart runs a `db-viewer` sidecar on the same PVC, and the default rolling update briefly runs
+// two backend pods), `SQLITE_READONLY` (a read-only or full volume) and `SQLITE_CORRUPT` all
+// surface here. The startup then continued as if the schema were complete, the health check
+// passed, and the missing column only showed up later as a query failing in one feature, at a
+// point where nothing connects it back to a migration that never ran.
+//
+// So: swallow exactly the expected error and nothing else. The returned boolean says whether
+// this run is the one that actually added the column, which two migrations below need in order
+// to run a one-time backfill.
+const DUPLICATE_COLUMN_ERROR = /duplicate column name/i;
+
+const addColumn = async (sql) => {
+  try {
+    await run(sql);
+    return true;
+  } catch (err) {
+    if (DUPLICATE_COLUMN_ERROR.test(err && err.message ? err.message : '')) {
+      return false;
+    }
+    console.error(`[DB MIGRATE] Migration failed: ${sql}`);
+    throw err;
+  }
+};
+
 // Inicjalizacja tabel i migracje
 const initDb = async () => {
   // 1. Users table
@@ -100,46 +131,28 @@ const initDb = async () => {
   `);
 
   // Migration: add columns to the users table if they do not exist
-  try {
-    await run(`ALTER TABLE users ADD COLUMN avatar_base64 TEXT`);
-  } catch (e) {}
+  await addColumn(`ALTER TABLE users ADD COLUMN avatar_base64 TEXT`);
 
-  try {
-    await run(`ALTER TABLE users ADD COLUMN email TEXT`);
-  } catch (e) {}
+  await addColumn(`ALTER TABLE users ADD COLUMN email TEXT`);
 
-  try {
-    await run(`ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'`);
-  } catch (e) {}
+  await addColumn(`ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'`);
 
-  try {
-    await run(`ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'`);
-  } catch (e) {}
+  await addColumn(`ALTER TABLE users ADD COLUMN status TEXT DEFAULT 'active'`);
 
-  try {
-    await run("ALTER TABLE users ADD COLUMN invitation_token TEXT");
-  } catch (e) {}
+  await addColumn("ALTER TABLE users ADD COLUMN invitation_token TEXT");
 
-  try {
-    await run("ALTER TABLE users ADD COLUMN created_at TEXT");
-  } catch (e) {}
+  await addColumn("ALTER TABLE users ADD COLUMN created_at TEXT");
 
   try {
     await run("UPDATE users SET created_at = datetime('now') WHERE created_at IS NULL");
   } catch (e) {}
 
-  try {
-    await run("ALTER TABLE users ADD COLUMN force_password_change INTEGER DEFAULT 0");
-  } catch (e) {}
+  await addColumn("ALTER TABLE users ADD COLUMN force_password_change INTEGER DEFAULT 0");
 
-  try {
-    await run("ALTER TABLE users ADD COLUMN force_2fa INTEGER DEFAULT 0");
-  } catch (e) {}
+  await addColumn("ALTER TABLE users ADD COLUMN force_2fa INTEGER DEFAULT 0");
 
   // Migration: Google sign-in (a step towards eventually dropping password login)
-  try {
-    await run("ALTER TABLE users ADD COLUMN google_id TEXT");
-  } catch (e) {}
+  await addColumn("ALTER TABLE users ADD COLUMN google_id TEXT");
   try {
     await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL");
   } catch (e) {}
@@ -149,20 +162,14 @@ const initDb = async () => {
   // ("Hi Marcin, ..." rather than an impersonal tone) and shown in the profile.
   // Kept separate from `username`, the immutable technical login: a user may log in as
   // "mbeczynski" while the name they want to be called is "Marcin".
-  try {
-    await run("ALTER TABLE users ADD COLUMN first_name TEXT");
-  } catch (e) {}
+  await addColumn("ALTER TABLE users ADD COLUMN first_name TEXT");
 
-  try {
-    await run("ALTER TABLE users ADD COLUMN last_name TEXT");
-  } catch (e) {}
+  await addColumn("ALTER TABLE users ADD COLUMN last_name TEXT");
 
   // Migration: birth year - optional, used solely to compute a real maximum heart rate
   // (the 220 - age formula) for the cardio zones on the Dashboard, instead of the
   // hardcoded HRmax=190 constant (see routes/dashboard.js).
-  try {
-    await run("ALTER TABLE users ADD COLUMN birth_year INTEGER");
-  } catch (e) {}
+  await addColumn("ALTER TABLE users ADD COLUMN birth_year INTEGER");
 
   // Migration: "physique goal" - an optional text description plus a reference photo
   // (a picture of the physique the user is working towards, for instance). Stored directly
@@ -170,13 +177,9 @@ const initDb = async () => {
   // this is profile-like data, not a numeric target or a toggle. Used by dashboard.js
   // (AI advice) and chat.js (the AI dietician chat) so the model genuinely takes both the
   // written goal and the photo itself into account.
-  try {
-    await run("ALTER TABLE users ADD COLUMN body_goal_text TEXT");
-  } catch (e) {}
+  await addColumn("ALTER TABLE users ADD COLUMN body_goal_text TEXT");
 
-  try {
-    await run("ALTER TABLE users ADD COLUMN body_goal_photo_base64 TEXT");
-  } catch (e) {}
+  await addColumn("ALTER TABLE users ADD COLUMN body_goal_photo_base64 TEXT");
 
 
   // 1a. Tabela globalnej konfiguracji (np. ustawienia Mailgun)
@@ -259,28 +262,19 @@ const initDb = async () => {
   `);
 
   // Migration: add the image_base64 column to meals if missing
-  try {
-    await run(`ALTER TABLE meals ADD COLUMN image_base64 TEXT`);
-  } catch (e) {}
+  await addColumn(`ALTER TABLE meals ADD COLUMN image_base64 TEXT`);
 
   // Migration: add the user_id column to meals if missing
-  try {
-    await run(`ALTER TABLE meals ADD COLUMN user_id INTEGER DEFAULT 1`);
+  if (await addColumn(`ALTER TABLE meals ADD COLUMN user_id INTEGER DEFAULT 1`)) {
     console.log('[DB MIGRATE] Added the user_id column to the meals table.');
-  } catch (e) {}
+  }
 
   // Migration: meal micronutrients (fiber, sugar, sodium) - the extended AI prompt
   // (routes/meals.js) returns these alongside calories and macros. They may be NULL for
   // older meals analysed before this change.
-  try {
-    await run(`ALTER TABLE meals ADD COLUMN fiber REAL DEFAULT NULL`);
-  } catch (e) {}
-  try {
-    await run(`ALTER TABLE meals ADD COLUMN sugar REAL DEFAULT NULL`);
-  } catch (e) {}
-  try {
-    await run(`ALTER TABLE meals ADD COLUMN sodium REAL DEFAULT NULL`);
-  } catch (e) {}
+  await addColumn(`ALTER TABLE meals ADD COLUMN fiber REAL DEFAULT NULL`);
+  await addColumn(`ALTER TABLE meals ADD COLUMN sugar REAL DEFAULT NULL`);
+  await addColumn(`ALTER TABLE meals ADD COLUMN sodium REAL DEFAULT NULL`);
 
   // Assign legacy meals without a user_id to the first user
   await run(`UPDATE meals SET user_id = 1 WHERE user_id IS NULL OR user_id = 0`);
@@ -353,9 +347,7 @@ const initDb = async () => {
   `);
 
   // Migration: add the is_verified_2fa column to sessions if missing
-  try {
-    await run(`ALTER TABLE sessions ADD COLUMN is_verified_2fa INTEGER DEFAULT 0`);
-  } catch (e) {}
+  await addColumn(`ALTER TABLE sessions ADD COLUMN is_verified_2fa INTEGER DEFAULT 0`);
 
   // Migration: is_temp marks the 5-minute verification sessions (2FA setup, 2FA login,
   // forced password change) that must NOT authorise anything except finishing that one
@@ -371,11 +363,10 @@ const initDb = async () => {
   // log the whole user base out on deploy, to fix a window that closes on its own within
   // five minutes (the temporary TTL). The backfill below then repairs precisely the rows
   // that the default gets wrong.
-  try {
-    await run(`ALTER TABLE sessions ADD COLUMN is_temp INTEGER DEFAULT 0`);
-    // One-time backfill, executed only on the run that actually adds the column (an
-    // ALTER on an existing column throws and skips this line), so it can never overwrite
-    // the flag that createSession() writes from then on.
+  if (await addColumn(`ALTER TABLE sessions ADD COLUMN is_temp INTEGER DEFAULT 0`)) {
+    // One-time backfill, executed only on the run that actually adds the column (addColumn
+    // returns true exactly then), so it can never overwrite the flag that createSession()
+    // writes from then on.
     //
     // The token prefix is the ONLY evidence available about rows written before the
     // column existed, and here it is sound: every historical token came from
@@ -385,7 +376,7 @@ const initDb = async () => {
     // rather than a property of the session, and the first change to the token format
     // would silently reopen the hole.
     await run(`UPDATE sessions SET is_temp = 1 WHERE token LIKE 'temp_%'`);
-  } catch (e) {}
+  }
 
   // 5b. Tabela blokady brute-force logowania (login_attempts) - przeniesiona
   // from process memory (a Map) into the database, so that blocks survive a restart of the
@@ -441,26 +432,16 @@ const initDb = async () => {
     )
   `);
 
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN active_minutes INTEGER DEFAULT 0");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN active_minutes INTEGER DEFAULT 0");
 
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN ai_advice TEXT");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN ai_advice TEXT");
 
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN ai_advice_generated_at TEXT");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN ai_advice_generated_at TEXT");
 
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN last_meal_modified_at TEXT DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN last_meal_modified_at TEXT DEFAULT NULL");
 
   // Migration: water intake counter (a daily counter, like steps - resets each day)
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN water_ml INTEGER DEFAULT 0");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN water_ml INTEGER DEFAULT 0");
 
   // Migration: the source of the activity data (steps/active_calories/
   // total_calories_burned/active_minutes) for a given date - 'oura' or 'apple'. Needed for
@@ -470,24 +451,18 @@ const initDb = async () => {
   // Health, while the Apple Health webhook NEVER overwrote a row already marked
   // activity_source = 'oura'. That priority has since been inverted and centralised - see
   // utils/activitySources.js.
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN activity_source TEXT DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN activity_source TEXT DEFAULT NULL");
 
   // Migration: respiratory rate during sleep (Oura, the average_breath field from the
   // /v2/usercollection/sleep endpoint we already call in sync.js - this field used to be
   // ignored). The "Respiratory rate" card on the Dashboard previously showed a hardcoded
   // "13.8"; it now shows this real value.
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN respiratory_rate REAL DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN respiratory_rate REAL DEFAULT NULL");
 
   // Migracja: dobowe SpO2 z Oury (endpoint /v2/usercollection/daily_spo2, NOWE
   // request in sync.js - available only on Gen 3 rings; on older models the field stays
   // NULL). The "Blood oxygen" card previously showed a hardcoded "98.4".
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN spo2_percentage REAL DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN spo2_percentage REAL DEFAULT NULL");
 
   // Migracja: absolutna temperatura nadgarstka z Apple Watch (Health Auto Export,
   // the "Wrist Temperature" metric arrives as name: "wrist_temperature", see
@@ -496,46 +471,30 @@ const initDb = async () => {
   // reading. It is available only on Apple Watch Series 8+/Ultra, and only when the user
   // enables that metric in the Health Auto Export automation on their phone. The "Wrist
   // temperature" card previously showed a hardcoded "35.4".
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN wrist_temperature REAL DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN wrist_temperature REAL DEFAULT NULL");
 
   // Migracja: dystans (metry) - z Oury (equivalent_walking_distance), Google Fit
   // (distance.delta) or Apple Health (walking_running_distance, via the webhook). Taken
   // from the same source as the rest of the activity data (priority apple > google_fit >
   // oura, see activity_source and utils/activitySources.js).
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN distance_meters REAL DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN distance_meters REAL DEFAULT NULL");
 
   // Migration: the day broken down into minutes by activity intensity (Oura returns
   // seconds; we store minutes after conversion). This shows what the day actually looked
   // like rather than just a total of "active minutes". medium+high are already counted
   // together as active_minutes (see sync.js) - here we only add the missing categories.
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN sedentary_minutes INTEGER DEFAULT NULL");
-  } catch (e) {}
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN low_activity_minutes INTEGER DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN sedentary_minutes INTEGER DEFAULT NULL");
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN low_activity_minutes INTEGER DEFAULT NULL");
 
   // Migracja: realny poziom stresu z Oury (endpoint /v2/usercollection/daily_stress,
   // available only on rings that support it - otherwise the fields stay NULL).
   // This is NOT a revival of the old hardcoded stress section (see the comment where it was
   // removed in Dashboard.jsx) - these are real values from the Oura API.
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN stress_high_minutes REAL DEFAULT NULL");
-  } catch (e) {}
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN stress_recovery_minutes REAL DEFAULT NULL");
-  } catch (e) {}
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN stress_summary TEXT DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN stress_high_minutes REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN stress_recovery_minutes REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN stress_summary TEXT DEFAULT NULL");
 
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN supplements TEXT DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN supplements TEXT DEFAULT NULL");
 
   // Migration: blood pressure from Withings (the getmeas endpoint, meastype 9 = diastolic
   // and 10 = systolic; measured with a Withings blood pressure monitor synced through the
@@ -543,12 +502,8 @@ const initDb = async () => {
   // Separate columns rather than one text field, so the values can be used in trends and
   // charts.
   // tak samo jak weight/fat_ratio/muscle_mass.
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN blood_pressure_systolic REAL DEFAULT NULL");
-  } catch (e) {}
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN blood_pressure_diastolic REAL DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN blood_pressure_systolic REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN blood_pressure_diastolic REAL DEFAULT NULL");
 
   // Migration: cache for the short AI "why" explanation covering the largest deviation of a
   // daily metric (sleep/readiness/RHR/HRV) from that day's own baseline - in the style of
@@ -556,24 +511,16 @@ const initDb = async () => {
   // Kept in its own column, separate from ai_advice/ai_advice_generated_at, because it is
   // different content (a short, targeted explanation of ONE deviation rather than the full
   // daily advice) on a different refresh rhythm (cached per day, not every 30 minutes).
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN ai_explanation TEXT DEFAULT NULL");
-  } catch (e) {}
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN ai_explanation_generated_at TEXT DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN ai_explanation TEXT DEFAULT NULL");
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN ai_explanation_generated_at TEXT DEFAULT NULL");
 
   // Migration: the daily wellbeing tracker (energy level and mood, on a 1-5 scale).
   // Both fields are entered by hand through the form on the Dashboard (POST /api/feeling in
   // health.js). They enable correlations against data the app already has: energy versus
   // sleep/HRV/meals, mood versus activity/stress - with no new integrations.
   // NULL means no entry for that day (the user did not rate it).
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN energy_level INTEGER DEFAULT NULL");
-  } catch (e) {}
-  try {
-    await run("ALTER TABLE health_metrics ADD COLUMN mood INTEGER DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN energy_level INTEGER DEFAULT NULL");
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN mood INTEGER DEFAULT NULL");
 
   // Default water target (ml) for the existing admin account, if not already set
   await run(`INSERT OR IGNORE INTO settings (user_id, key, value) VALUES (1, 'target_water_ml', '2500')`);
@@ -620,9 +567,7 @@ const initDb = async () => {
   // empty `workouts: []` even though this table was in fact collecting workouts - without
   // the workout type, the "Latest activity" section on the Dashboard could not show a
   // meaningful icon or label (getWorkoutIcon and the type field in Dashboard.jsx).
-  try {
-    await run("ALTER TABLE apple_health_workouts ADD COLUMN workout_type TEXT DEFAULT NULL");
-  } catch (e) {}
+  await addColumn("ALTER TABLE apple_health_workouts ADD COLUMN workout_type TEXT DEFAULT NULL");
 
   // Migration: per-workout heart rate (Health Auto Export, the "Include Workout Metrics"
   // toggle in the phone automation). When enabled, the workout payload carries
@@ -636,13 +581,13 @@ const initDb = async () => {
   // All of these columns stay NULL when the payload carries no heart-rate data, or when the
   // user has not set a birth year in their profile (HRmax unknown, so zones cannot be
   // computed) - cards and insights built on them must treat NULL as "no data", not zero.
-  try { await run("ALTER TABLE apple_health_workouts ADD COLUMN avg_heart_rate REAL DEFAULT NULL"); } catch (e) {}
-  try { await run("ALTER TABLE apple_health_workouts ADD COLUMN max_heart_rate REAL DEFAULT NULL"); } catch (e) {}
-  try { await run("ALTER TABLE apple_health_workouts ADD COLUMN zone1_minutes REAL DEFAULT NULL"); } catch (e) {}
-  try { await run("ALTER TABLE apple_health_workouts ADD COLUMN zone2_minutes REAL DEFAULT NULL"); } catch (e) {}
-  try { await run("ALTER TABLE apple_health_workouts ADD COLUMN zone3_minutes REAL DEFAULT NULL"); } catch (e) {}
-  try { await run("ALTER TABLE apple_health_workouts ADD COLUMN zone4_minutes REAL DEFAULT NULL"); } catch (e) {}
-  try { await run("ALTER TABLE apple_health_workouts ADD COLUMN zone5_minutes REAL DEFAULT NULL"); } catch (e) {}
+  await addColumn("ALTER TABLE apple_health_workouts ADD COLUMN avg_heart_rate REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE apple_health_workouts ADD COLUMN max_heart_rate REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE apple_health_workouts ADD COLUMN zone1_minutes REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE apple_health_workouts ADD COLUMN zone2_minutes REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE apple_health_workouts ADD COLUMN zone3_minutes REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE apple_health_workouts ADD COLUMN zone4_minutes REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE apple_health_workouts ADD COLUMN zone5_minutes REAL DEFAULT NULL");
 
   // 8. Body circumference measurements table (body_measurements)
   await run(`
@@ -667,11 +612,11 @@ const initDb = async () => {
   `);
 
   // Supporting ALTER TABLE statements for the extended body circumferences
-  try { await run("ALTER TABLE body_measurements ADD COLUMN biceps_left REAL DEFAULT NULL"); } catch (e) {}
-  try { await run("ALTER TABLE body_measurements ADD COLUMN biceps_right REAL DEFAULT NULL"); } catch (e) {}
-  try { await run("ALTER TABLE body_measurements ADD COLUMN shoulders REAL DEFAULT NULL"); } catch (e) {}
-  try { await run("ALTER TABLE body_measurements ADD COLUMN waist_above REAL DEFAULT NULL"); } catch (e) {}
-  try { await run("ALTER TABLE body_measurements ADD COLUMN waist_below REAL DEFAULT NULL"); } catch (e) {}
+  await addColumn("ALTER TABLE body_measurements ADD COLUMN biceps_left REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE body_measurements ADD COLUMN biceps_right REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE body_measurements ADD COLUMN shoulders REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE body_measurements ADD COLUMN waist_above REAL DEFAULT NULL");
+  await addColumn("ALTER TABLE body_measurements ADD COLUMN waist_below REAL DEFAULT NULL");
 
   // 9. Application log table (app_logs)
   await run(`
@@ -903,5 +848,8 @@ module.exports = {
   run,
   get,
   all,
+  // Exported for tests/test-db-migrations.js, which has to be able to feed it a migration
+  // that genuinely fails. Application code has no reason to call it outside initDb.
+  addColumn,
   db
 };

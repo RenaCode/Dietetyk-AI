@@ -36,7 +36,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
           // Expired session - without this Trends simply stopped refreshing silently (the
           // hourly interval kept running, but every fetch returned 401), while the rest of the
           // app (App.jsx) consistently signs the user out and shows a message.
-          // "Sesja wygasła" w tej sytuacji.
+          // "Sesja wygasła" in this situation.
           if (onLogout) onLogout();
         }
       } catch (err) {
@@ -69,7 +69,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
 
   // toISOString() converts to UTC, which by itself could again shift the day by -1 in
   // timezones west of UTC - we compensate for the offset before converting,
-  // analogicznie do getLocalDateString() w App.jsx.
+  // mirroring getLocalDateString() in App.jsx.
   const toDateStr = (date) => {
     const tzOffset = date.getTimezoneOffset() * 60000;
     return new Date(date.getTime() - tzOffset).toISOString().slice(0, 10);
@@ -333,7 +333,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
                     ry="2"
                     fill={val > 0 ? (isActive ? '#a3e6ff' : '#ffffff') : 'rgba(255,255,255,0.08)'}
                   />
-                  {/* Etykieta dnia tygodnia */}
+                  {/* Weekday label */}
                   {(() => {
                     const shouldShowLabel = 
                       currentWeekDays.length <= 7 
@@ -384,7 +384,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
 
   // Y-scale bounds - computed from validVals (already filtered of null/undefined, see above)
   // rather than from || 9999 / || 0, which would confuse missing data with a real zero.
-    // (analogicznie do getMinMax w ActivityTracker.jsx).
+    // (mirroring getMinMax in ActivityTracker.jsx).
     const minVal = Math.min(...(validVals.length ? validVals : [0]), ...ticks, 1);
     const maxVal = Math.max(...(validVals.length ? validVals : [0]), ...ticks, 1);
     const range = maxVal - minVal || 1;
@@ -419,7 +419,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
   // The average value projected onto the Y axis
     const avgY = svgHeight - topMargin - ((stats.avg - minVal) / range) * chartHeight;
 
-    // Znajdowanie ostatniego punktu do postawienia kropki
+    // Finding the last point to place the dot on
     const lastPoint = activePoints[activePoints.length - 1];
 
     return (
@@ -481,7 +481,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
               />
             )}
 
-            {/* Obszar pod wykresem z gradientem */}
+            {/* The gradient-filled area below the chart */}
             {hasData && areaPath && (
               <path d={areaPath} fill={`url(#gradient-${key})`} />
             )}
@@ -535,7 +535,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
               );
             })}
 
-            {/* Dni tygodnia */}
+            {/* Weekdays */}
             {currentWeekDays.map((day, idx) => {
               const shouldShowLabel = 
                 currentWeekDays.length <= 7 
@@ -678,7 +678,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
                   {/* Niewidoczne, szersze pole interakcji */}
                   <line x1={p.x} y1={topMargin} x2={p.x} y2={svgHeight - 15} stroke="transparent" strokeWidth="12" />
                   
-                  {/* Skurczowe kropka */}
+                  {/* Systolic dot */}
                   <circle
                     cx={p.x}
                     cy={p.y}
@@ -688,7 +688,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
                     strokeWidth="1.5"
                   />
                   
-                  {/* Rozkurczowe kropka */}
+                  {/* Diastolic dot */}
                   {diaP && (
                     <circle
                       cx={diaP.x}

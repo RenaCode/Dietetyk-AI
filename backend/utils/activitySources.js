@@ -2,9 +2,9 @@
 //
 // The problem this solves: three independent sources write to health_metrics - the Apple
 // Health webhook/HealthKit, active polling of Google Fit, and active polling of Oura.
-// Each upsert used to guard only
-// przed nadpisaniem danych z 'apple' (CASE WHEN activity_source = 'apple' ...),
-// while Google Fit and Oura were treated as equals. The effect: for the same day the
+// Each upsert used to guard only against overwriting data from 'apple'
+// (CASE WHEN activity_source = 'apple' ...), while Google Fit and Oura were treated as
+// equals. The effect: for the same day the
 // result depended on the ORDER of syncs within that hour - Oura could overwrite fresher
 // step counts from Google Fit and vice versa, so the same date showed different numbers
 // on successive refreshes.
@@ -42,7 +42,7 @@ const EXISTING_RANK_SQL = `CASE activity_source ${Object.entries(ACTIVITY_SOURCE
  * not enough - a day where Apple Health reported no distance should still be fillable
  * from Oura.
  *
- * @param {string} column nazwa kolumny (np. 'steps')
+ * @param {string} column the column name (e.g. 'steps')
  * @param {number} incomingRank rank of the source currently writing
  */
 function preserveHigherPriority(column, incomingRank) {

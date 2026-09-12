@@ -23,11 +23,11 @@ function testMidnightAlignment() {
   console.log('\n--- TEST 1: the day start falls exactly at midnight in Warsaw ---');
 
   const cases = [
-    { when: '2026-08-20T12:00:00Z', label: 'czas letni, południe UTC' },
-    { when: '2026-01-15T23:30:00Z', label: 'czas zimowy, po 23 UTC (w PL już jutro)' },
-    { when: '2026-01-01T00:30:00Z', label: 'zaraz po północy UTC, przełom roku' },
-    { when: '2026-03-29T05:00:00Z', label: 'dzień zmiany czasu na letni' },
-    { when: '2026-10-25T05:00:00Z', label: 'dzień zmiany czasu na zimowy' }
+    { when: '2026-08-20T12:00:00Z', label: 'summer time, UTC noon' },
+    { when: '2026-01-15T23:30:00Z', label: 'winter time, past 23:00 UTC (already tomorrow in PL)' },
+    { when: '2026-01-01T00:30:00Z', label: 'just past UTC midnight, the year boundary' },
+    { when: '2026-03-29T05:00:00Z', label: 'the day the clocks go forward' },
+    { when: '2026-10-25T05:00:00Z', label: 'the day the clocks go back' }
   ];
 
   for (const { when, label } of cases) {
@@ -35,7 +35,7 @@ function testMidnightAlignment() {
       const ms = getWarsawDayStartMillis(new Date(when), delta);
       const rendered = warsawFormat(new Date(ms));
       assert.ok(rendered.endsWith('00:00:00'),
-        `${label}, delta=${delta}: początek doby to ${rendered}, a nie północ.`);
+        `${label}, delta=${delta}: the start of the day is ${rendered}, not midnight.`);
     }
     console.log(`  ${label}: OK`);
   }
@@ -51,15 +51,15 @@ function testCalendarShiftNotMillisecondShift() {
   const start = getWarsawDayStartMillis(base, -7);
   const expected = getWarsawDayStartMillis(new Date('2026-10-20T10:00:00Z'), 0);
 
-  console.log(`  -7 dni od 2026-10-27 -> ${warsawFormat(new Date(start))}`);
-  assert.strictEqual(start, expected, 'Przesunięcie o 7 dni przez zmianę czasu dało inny dzień.');
+  console.log(`  -7 days from 2026-10-27 -> ${warsawFormat(new Date(start))}`);
+  assert.strictEqual(start, expected, 'Shifting by 7 days across the clock change produced a different day.');
 
   // 22:00 UTC on 31 December is 23:00 Warsaw time on THE SAME day, so +1 day must give
   // 1 January of the following year.
   const forward = getWarsawDayStartMillis(new Date('2026-12-31T22:00:00Z'), 1);
   console.log(`  +1 day across the year boundary -> ${warsawFormat(new Date(forward))}`);
   assert.ok(warsawFormat(new Date(forward)).startsWith('2027-01-01'),
-    `Przekroczenie granicy roku dało ${warsawFormat(new Date(forward))} zamiast 2027-01-01.`);
+    `Crossing the year boundary produced ${warsawFormat(new Date(forward))} instead of 2027-01-01.`);
 
   // The check from the other side of the boundary: 23:30 UTC is already 1 January in
   // Poland, so +1 day is 2 January. Without the timezone conversion both cases would give
@@ -67,7 +67,7 @@ function testCalendarShiftNotMillisecondShift() {
   const acrossMidnight = getWarsawDayStartMillis(new Date('2026-12-31T23:30:00Z'), 1);
   console.log(`  +1 day from past Warsaw midnight -> ${warsawFormat(new Date(acrossMidnight))}`);
   assert.ok(warsawFormat(new Date(acrossMidnight)).startsWith('2027-01-02'),
-    `Oczekiwano 2027-01-02, było ${warsawFormat(new Date(acrossMidnight))}.`);
+    `Expected 2027-01-02, got ${warsawFormat(new Date(acrossMidnight))}.`);
 
   console.log('✅ Shifts survive the DST change and the year boundary.');
 }
@@ -92,7 +92,7 @@ function testBucketLabellingSurvivesDstChange() {
 
   const unique = new Set(labels);
   assert.strictEqual(unique.size, labels.length,
-    `Dwa kubełki dostały tę samą datę - dane jednego dnia nadpisałyby drugi: ${labels.join(', ')}`);
+    `Two buckets got the same date - one day's data would overwrite the other: ${labels.join(', ')}`);
 
   // The labels must be consecutive calendar days, with no gaps.
   for (let i = 1; i < labels.length; i++) {
@@ -100,9 +100,9 @@ function testBucketLabellingSurvivesDstChange() {
     const curr = new Date(`${labels[i]}T00:00:00Z`);
     const diffDays = (curr - prev) / 86400000;
     assert.strictEqual(diffDays, 1,
-      `Przerwa lub cofnięcie między ${labels[i - 1]} a ${labels[i]}.`);
+      `A gap or a step backwards between ${labels[i - 1]} and ${labels[i]}.`);
   }
-  console.log('✅ Siedem kolejnych, unikalnych dni mimo zmiany czasu w oknie.');
+  console.log('✅ Seven consecutive, unique days despite a clock change inside the window.');
 }
 
 function testLocalDateStringMatchesWarsaw() {
@@ -110,7 +110,7 @@ function testLocalDateStringMatchesWarsaw() {
   // 23:30 UTC in January is already 00:30 the next day in Poland.
   const late = new Date('2026-01-15T23:30:00Z');
   assert.strictEqual(dateObjToLocalDateString(late), '2026-01-16',
-    'Data nocna nie została przeliczona na strefę warszawską.');
+    'A late-night date was not converted to the Warsaw timezone.');
   console.log(`  2026-01-15T23:30:00Z -> ${dateObjToLocalDateString(late)}`);
   console.log('✅ Formatting independent of the Node process timezone.');
 }

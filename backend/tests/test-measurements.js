@@ -25,7 +25,7 @@ async function runTest() {
 
     console.log('✅ Insert/update succeeded.');
 
-    // 2. Pobranie pomiaru
+    // 2. Fetching the measurement
     const row = await db.get(`
       SELECT * FROM body_measurements 
       WHERE user_id = ? AND date = ?

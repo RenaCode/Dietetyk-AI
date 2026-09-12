@@ -224,7 +224,7 @@ const MANUAL_GEOCODING_OVERRIDES = {
 // location in Settings instead of entering coordinates by hand. Names are often ambiguous -
 // the same place name exists in several countries - which is why we return several
 // candidates to choose from rather than
-// automatycznie pierwszy wynik.
+// the first result automatically.
 async function geocodeLocation(query) {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return [];

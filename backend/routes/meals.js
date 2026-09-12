@@ -167,7 +167,7 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
 
     // The calorie baseline is computed ONCE per request rather than per meal - with a photo
     // split into several sections (breakfast/lunch/dinner) all of them are compared
-    // do tej samej, historycznej linii bazowej z dni PRZED targetDate.
+    // against the same historical baseline from the days BEFORE targetDate.
     const calorieBaseline = await getCalorieBaseline(req.user.id, targetDate);
 
     const insertedMeals = [];

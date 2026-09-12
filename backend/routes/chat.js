@@ -185,7 +185,7 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
       }
     }
 
-    // Formatowanie historii czatu z tej sesji
+    // Formatting the chat history from this session
     let historyContext = '';
     if (Array.isArray(history) && history.length > 0) {
     // Filter out empty entries

@@ -107,7 +107,7 @@ export default function App() {
     }
   };
 
-  // Rejestracja z zaproszenia
+  // Registration from an invitation
   const [registerToken, setRegisterToken] = useState('');
   const [invitedEmail, setInvitedEmail] = useState('');
   const [registerError, setRegisterError] = useState('');
@@ -197,7 +197,7 @@ export default function App() {
 // Receiving the token after returning from Google sign-in. This works independently of
 // sessionToken, because for a new or signed-out user this token is what establishes the session.
   //
-  // Tokeny (google_token/google_temp_token) backend przekazuje w FRAGMENCIE URL (#),
+  // Tokens (google_token/google_temp_token) are passed by the backend in the URL FRAGMENT (#),
 // not in the query string - the fragment is never sent to the server with the page request,
 // so a live session token does not end up in the server logs (morgan) or in the browser
 // history/Referer. google_error is not a secret, so it still arrives through an ordinary
@@ -508,7 +508,7 @@ export default function App() {
     setIsAnalyzing(true);
     setErrorMessage('');
 // The returned boolean (success/failure) - MealLogger.jsx waits for it so it can show the
-// "Meal saved" message ONLY after the save genuinely succeeded, rather than optimistically
+// "Posiłek zapisany!" message ONLY after the save genuinely succeeded, rather than optimistically
 // right after the click (previously the form gave no confirmation beyond a new entry in the
 // list, which could easily be lost in a long list of that day's meals).
     let success = false;

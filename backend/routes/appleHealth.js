@@ -12,7 +12,7 @@ const { parseHealthAutoExportDate, dateObjToLocalDateString, getWarsawWallClock 
 // `sync_token` (the users.sync_token column, long present in the database and visible in
 // Settings) written directly into the webhook URL. This router MUST therefore be mounted
 // in server.js BEFORE
-// `app.use('/api', requireAuth)` - tak samo jak routes/healthcheck.js.
+// `app.use('/api', requireAuth)` - just like routes/healthcheck.js.
 //
 // RECONCILIATION WITH OURA: the Oura Ring also provides steps/active_calories/
 // total_calories (services/sync.js). Oura used to be treated as the more authoritative
@@ -32,7 +32,7 @@ const { parseHealthAutoExportDate, dateObjToLocalDateString, getWarsawWallClock 
 //     only thing guarded against was overwriting 'apple', while Google Fit and Oura
 //     overwrote each other - the result for a given day then depended on sync order.
 //
-// FORMAT PAYLOADU (Health Auto Export, "Automatyzacja typu REST API"):
+// PAYLOAD FORMAT (Health Auto Export, the "REST API" automation type):
 //   { "data": { "metrics": [ { "name": "step_count", "units": "steps",
 //       "data": [ { "date": "2026-06-18 14:00:00 +0200", "qty": 1234 }, ... ] }, ... ] } }
 // The "name" field is always a snake_case metric identifier ("step_count",
@@ -223,13 +223,13 @@ function computeWorkoutHrZones(workout, userMaxHr, rhr, durationMinutes) {
   };
 }
 
-// Mapowanie nazw metryk Health Auto Export -> nasze pola w health_metrics.
+// Mapping of Health Auto Export metric names -> our fields in health_metrics.
 // `field` is our internal bucket (see `byDate` below), not a 1:1 SQL column name -
 // total_calories_burned is computed as active_calories + basal_calories.
 // `mode: 'last'` (as opposed to the default summing): for wrist temperature we do NOT add
 // up successive entries from the same day. It is a single overnight measurement, not a
 // cumulative value like steps or calories - so we take the last value
-// z paczki danych.
+// from the data batch.
 const METRIC_FIELD_MAP = {
   step_count: { field: 'steps', convert: (qty) => qty },
   active_energy: { field: 'active_calories', convert: toKcal },
@@ -255,7 +255,7 @@ const METRIC_FIELD_MAP = {
   // Auto Export documentation, whose wiki describes the general structure rather than a full
   // list of field names. If no water entries appear in the server log after enabling the
   // sync, check the webhook log to see which
-  // nazwa faktycznie przychodzi w payloadzie, i popraw klucz w tej mapie.
+  // name actually arrives in the payload, and correct the key in this map.
   dietary_water: { field: 'water_ml', convert: toMilliliters },
   resting_heart_rate: { field: 'rhr', convert: (qty) => qty, mode: 'last' },
   heart_rate_variability: { field: 'hrv', convert: (qty) => qty, mode: 'last' },
@@ -321,15 +321,15 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
   // An automation with 'Data type: Workouts' sends its payload in a DIFFERENT format from
   // the general health-metrics automation - the data is in data.workouts[] rather than
   // data.metrics[] (confirmed from a manual 'Workouts-*.csv' export:
-    // kolumny Workout Type/Start/End/Aktywna Energia (kJ)/Energia Spoczynkowa (kJ)/...).
+    // the Workout Type/Start/End/Active Energy (kJ)/Basal Energy (kJ)/... columns).
   // The exact shape of the workout object in JSON, confirmed from production logs:
     //   { id, name, start: "2026-06-18 06:00:26 +0200", end: "...",
-    //     duration: 4715.99 (SEKUNDY), activeEnergyBurned: { qty: 2299.5, units: "kJ" },
+    //     duration: 4715.99 (SECONDS), activeEnergyBurned: { qty: 2299.5, units: "kJ" },
     //     intensity: {...}, temperature: {...}, humidity: {...}, metadata: {} }
-    // Mapujemy: activeEnergyBurned -> active_calories (po konwersji do kcal), duration
-    // (sekundy -> minuty) -> active_minutes, przypisane do dnia kalendarzowego pola `start`.
+    // We map: activeEnergyBurned -> active_calories (after converting to kcal), and duration
+    // (seconds -> minutes) -> active_minutes, assigned to the calendar day of the `start` field.
   // A workout does NOT provide basal_calories, so total_calories_burned is not computed here
-    // (dashboard.js i tak ma fallback bmr + active_calories, gdy total_calories_burned brak).
+    // (dashboard.js falls back to bmr + active_calories anyway when total_calories_burned is missing).
     //
   // NO RISK OF DOUBLE COUNTING: the user confirmed this is the ONLY configured Health Auto
   // Export automation - there is no parallel general-metrics automation already folding
@@ -522,7 +522,7 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
           durationMinutes = durationSec / 60;
         }
 
-        // `workout.name` to typ treningu z UI apki (np. "Running", "Functional
+        // `workout.name` is the workout type from the app's UI (e.g. "Running", "Functional
       // Strength Training') - see the confirmed workout object shape in the comment above
       // this handler. We store it so the Dashboard can show
       // the 'Latest activity' section with a real name and icon rather than an empty list.
@@ -601,7 +601,7 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
         if (bucket.sleep_deep > 24) bucket.sleep_deep = 24;
         if (bucket.sleep_rem > 24) bucket.sleep_rem = 24;
         
-        // Obliczanie sleep_score (0-100) na podstawie celu snu
+        // Computing sleep_score (0-100) from the sleep goal
         bucket.sleep_score = Math.min(100, Math.round((bucket.sleep_duration / targetSleep) * 100));
       }
     }

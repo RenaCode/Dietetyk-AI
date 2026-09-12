@@ -12,7 +12,7 @@ const db = require('../db');
 //    the stated calories) - this usually indicates an AI estimation error (a misread
 //    portion size, say) rather than an unusual meal as such.
 // 2) A statistical outlier in meal calories relative to the user's OWN history
-//    (z-score na bazie ostatnich ANOMALY_LOOKBACK_DAYS dni) - wymaga minimalnej
+//    (a z-score over the last ANOMALY_LOOKBACK_DAYS days) - it requires a minimum
 //    number of earlier meals (MIN_MEALS_FOR_STATS_ANOMALY), otherwise the first few
 //    entries in the app would always look like "anomalies" relative to themselves.
 const ANOMALY_LOOKBACK_DAYS = 60;

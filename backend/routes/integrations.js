@@ -164,7 +164,7 @@ router.post('/api/auth/oura/disconnect', requireAuth, async (req, res) => {
   }
 });
 
-// Trasy OAuth: Inicjalizacja Withings
+// OAuth routes: Withings initialisation
 router.get('/api/auth/withings', async (req, res) => {
   const { token } = req.query;
   if (!token) return res.status(401).send('Brak tokenu autoryzacji.');
@@ -393,7 +393,7 @@ router.post('/api/sync/manual', requireAuth, async (req, res) => {
   let withingsError = null;
   let googleFitError = null;
 
-  // Sprawdzamy czy ma tokeny Oura
+  // Check whether the user has Oura tokens
   const hasOura = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'oura'`, [userId]);
   if (hasOura) {
     try {
@@ -405,7 +405,7 @@ router.post('/api/sync/manual', requireAuth, async (req, res) => {
     }
   }
 
-  // Sprawdzamy czy ma tokeny Withings
+  // Check whether the user has Withings tokens
   const hasWithings = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'withings'`, [userId]);
   if (hasWithings) {
     try {
@@ -417,7 +417,7 @@ router.post('/api/sync/manual', requireAuth, async (req, res) => {
     }
   }
 
-  // Sprawdzamy czy ma tokeny Google Fit
+  // Check whether the user has Google Fit tokens
   const hasGoogleFit = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'google_fit'`, [userId]);
   if (hasGoogleFit) {
     try {

@@ -383,7 +383,7 @@ async function syncOura(userId) {
   }
 }
 
-// Synchronizacja danych Withings
+// Withings data sync
 async function syncWithings(userId) {
   const accessToken = await getOrRefreshToken(userId, 'withings');
   if (!accessToken) {
@@ -408,7 +408,7 @@ async function syncWithings(userId) {
         action: 'getmeas',
       // 1: weight (kg), 6: body fat %, 76: muscle mass (kg), 9: diastolic blood pressure
       // (mmHg), 10: systolic blood pressure (mmHg) - from a blood pressure monitor
-        // Withings (np. BPM Core), zapisywane w tej samej grupie pomiarowej co waga.
+        // Withings (a BPM Core, for instance), stored in the same measurement group as the weight.
         meastypes: '1,6,76,9,10',
         category: '1',
         lastupdate: String(startTimestamp)

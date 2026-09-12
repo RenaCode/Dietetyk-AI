@@ -5,7 +5,7 @@
 // user-facing output, which stays Polish by design - translating the assertions would break
 // them.
 //
-// Test uruchamia REALNY router Express na TYMCZASOWEJ bazie (DATABASE_DIR w katalogu
+// The test runs the REAL Express router against a TEMPORARY database (DATABASE_DIR in the
 // system temp directory), never against backend/dietetyk.db - so it can be run locally
 // without any risk of polluting development data.
 //
@@ -52,7 +52,7 @@ function getJson(pathAndQuery) {
         try {
           resolve({ status: res.statusCode, body: JSON.parse(body) });
         } catch (err) {
-          reject(new Error(`Odpowiedź nie jest JSON-em (status ${res.statusCode}): ${body.slice(0, 200)}`));
+          reject(new Error(`The response is not JSON (status ${res.statusCode}): ${body.slice(0, 200)}`));
         }
       });
     }).on('error', reject);
@@ -130,7 +130,7 @@ async function testNoDataIsHonest() {
 
   const res = await getJson(`/api/dashboard/energy-battery?date=${today}`);
   assert.strictEqual(res.status, 200);
-  assert.strictEqual(res.body.hasEnoughData, false, 'Bateria wymyśliła liczbę bez danych o śnie.');
+  assert.strictEqual(res.body.hasEnoughData, false, 'The battery invented a number with no sleep data.');
   assert.strictEqual(res.body.reason, 'no_sleep_data');
   console.log(`  reason=${res.body.reason}`);
   console.log('✅ Missing data is reported plainly, with no invented number.');
@@ -149,8 +149,8 @@ async function testGoodNightGivesHighBattery() {
 
   const { body } = await getJson(`/api/dashboard/energy-battery?date=${today}`);
   assert.strictEqual(body.hasEnoughData, true);
-  assert.ok(body.battery >= 50, `Oczekiwano wysokiej baterii, było ${body.battery}`);
-  assert.strictEqual(body.sleepDebt.hours, 0, 'Przy nocach powyżej celu dług snu powinien być zerowy.');
+  assert.ok(body.battery >= 50, `Expected a high battery, got ${body.battery}`);
+  assert.strictEqual(body.sleepDebt.hours, 0, 'With nights above the goal the sleep debt should be zero.');
   console.log(`  battery=${body.battery} (${body.label}), sleep debt=${body.sleepDebt.hours}h`);
   console.log(`  recommendation: ${body.recommendation}`);
   console.log('✅ High battery after a good night.');
@@ -184,11 +184,11 @@ async function testSleepDebtDragsBatteryDown() {
   console.log(`  in debt: battery=${indebted.battery}, debt=${indebted.sleepDebt.hours}h`);
   console.log(`  recommendation under debt: ${indebted.recommendation}`);
 
-  assert.ok(indebted.sleepDebt.hours > 20, `Dług snu powinien być duży, było ${indebted.sleepDebt.hours}h`);
+  assert.ok(indebted.sleepDebt.hours > 20, `The sleep debt should be large, got ${indebted.sleepDebt.hours}h`);
   assert.ok(indebted.battery < rested.battery,
-    'Dług snu nie obniżył baterii mimo identycznych danych bieżącego dnia.');
+    'The sleep debt did not lower the battery despite identical data for the current day.');
   assert.ok(indebted.recommendation.includes('Dług snu'),
-    'Przy dużym długu snu zalecenie powinno wskazywać właśnie na sen.');
+    'With a large sleep debt the recommendation should point at sleep.');
   console.log('✅ Sleep debt genuinely lowers the battery and changes the recommendation.');
 }
 
@@ -211,8 +211,8 @@ async function testHardDayDrainsMoreThanEasyDay() {
   console.log(`  hard day: battery=${hard.battery}, drain=${hard.components.dayDrain}, ratio=${hard.strain.ratioToBaseline}`);
 
   assert.ok(hard.components.dayDrain > easy.components.dayDrain,
-    'Cięższy dzień nie zużył więcej baterii niż lekki.');
-  assert.ok(hard.battery < easy.battery, 'Cięższy dzień nie obniżył baterii.');
+    'A harder day did not use more battery than a light one.');
+  assert.ok(hard.battery < easy.battery, 'A harder day did not lower the battery.');
   assert.ok(hard.strain.ratioToBaseline > easy.strain.ratioToBaseline);
   console.log('✅ Drain scales with load relative to the user own baseline.');
 }
@@ -229,7 +229,7 @@ async function testHistoricalDayIsFullDay() {
   });
 
   const { body } = await getJson(`/api/dashboard/energy-battery?date=${past}`);
-  assert.strictEqual(body.isLive, false, 'Dzień historyczny nie powinien być oznaczony jako bieżący.');
+  assert.strictEqual(body.isLive, false, 'A historical day should not be marked as live.');
   assert.strictEqual(body.date, past);
   console.log(`  data=${body.date}, isLive=${body.isLive}, bateria=${body.battery}`);
   console.log('✅ Historical dates are distinguished from the live state.');
@@ -250,9 +250,9 @@ async function testBatchReturnsSameAsIndividual() {
 
   for (const id of ids) {
     const single = (await getJson(`/api/dashboard/${id}?date=${today}`)).body;
-    assert.strictEqual(batch.results[id].status, 'ok', `Insight ${id} nie zwrócił ok we wsadzie.`);
+    assert.strictEqual(batch.results[id].status, 'ok', `Insight ${id} did not return ok in the batch.`);
     assert.deepStrictEqual(batch.results[id].data, single,
-      `Wynik wsadowy różni się od pojedynczego dla ${id}.`);
+      `The batched result differs from the individual one for ${id}.`);
     console.log(`  ${id}: batch == individual request ✓`);
   }
   console.log('✅ The batch yields results identical to individual requests.');
@@ -275,12 +275,12 @@ async function testBatchIsolatesUnknownIds() {
 async function testBatchRejectsEmptyAndOversizedRequests() {
   console.log('\n--- TEST 8: walidacja parametru ids ---');
   const empty = await getJson('/api/dashboard/insights');
-  assert.strictEqual(empty.status, 400, 'Brak ids powinien dać 400.');
+  assert.strictEqual(empty.status, 400, 'Missing ids should give a 400.');
   assert.ok(Array.isArray(empty.body.available) && empty.body.available.length > 40,
-    'Odpowiedź 400 powinna podpowiadać listę dostępnych insightów.');
+    'The 400 response should suggest the list of available insights.');
 
   const tooMany = await getJson(`/api/dashboard/insights?ids=${Array.from({ length: 101 }, (_, i) => `x${i}`).join(',')}`);
-  assert.strictEqual(tooMany.status, 400, 'Przekroczenie limitu ids powinno dać 400.');
+  assert.strictEqual(tooMany.status, 400, 'Exceeding the ids limit should give a 400.');
 
   console.log(`  no ids -> 400, registered insights: ${empty.body.available.length}`);
   console.log(`  101 pozycji -> 400`);
@@ -294,15 +294,16 @@ async function testLabelAndRecommendationAgree() {
   // We check several charge levels, including values just under the band boundaries - that
   // is where the contradiction 'Niska' + 'Bateria w normie' appeared.
   const scenarios = [
-    { name: 'wysoka', day: { active_calories: 60, active_minutes: 5, steps: 1500 }, night: { sleep_score: 92, sleep_duration: 8.2, readiness_score: 90 } },
-    { name: 'średnia', day: { active_calories: 500, active_minutes: 45, steps: 9000 }, night: { sleep_score: 78, sleep_duration: 7.2, readiness_score: 76 } },
-    { name: 'niska', day: { active_calories: 900, active_minutes: 90, steps: 16000 }, night: { sleep_score: 62, sleep_duration: 6.2, readiness_score: 58 } },
-    { name: 'rezerwa', day: { active_calories: 1600, active_minutes: 150, steps: 25000 }, night: { sleep_score: 40, sleep_duration: 4.5, readiness_score: 38 } }
+    { name: 'high', day: { active_calories: 60, active_minutes: 5, steps: 1500 }, night: { sleep_score: 92, sleep_duration: 8.2, readiness_score: 90 } },
+    { name: 'average', day: { active_calories: 500, active_minutes: 45, steps: 9000 }, night: { sleep_score: 78, sleep_duration: 7.2, readiness_score: 76 } },
+    { name: 'low', day: { active_calories: 900, active_minutes: 90, steps: 16000 }, night: { sleep_score: 62, sleep_duration: 6.2, readiness_score: 58 } },
+    { name: 'reserve', day: { active_calories: 1600, active_minutes: 150, steps: 25000 }, night: { sleep_score: 40, sleep_duration: 4.5, readiness_score: 38 } }
   ];
 
   // Which phrasings are acceptable for which label. 'Na rezerwie' and 'Niska' must never
-  // receive a sentence saying things are normal, or that it is a good day
-  // na mocniejszy trening.
+  // receive a sentence saying things are normal, or that it is a good day for a harder
+  // workout. The forbidden phrases stay Polish: they are matched against the backend's
+  // own Polish recommendation text.
   const FORBIDDEN = {
     'Na rezerwie': ['w normie', 'dobry dzień na mocniejszy trening'],
     'Niska': ['w normie', 'dobry dzień na mocniejszy trening']
@@ -319,7 +320,7 @@ async function testLabelAndRecommendationAgree() {
     const forbidden = FORBIDDEN[body.label] || [];
     for (const phrase of forbidden) {
       assert.ok(!body.recommendation.includes(phrase),
-        `Etykieta "${body.label}" (${body.battery}) razem z zaleceniem zawierającym "${phrase}".`);
+        `Label "${body.label}" (${body.battery}) together with a recommendation containing "${phrase}".`);
     }
   }
   console.log('✅ The label and the recommendation always say the same thing.');
@@ -328,7 +329,7 @@ async function testLabelAndRecommendationAgree() {
 async function testRegistryCoversAllInsightRoutes() {
   console.log('\n--- TEST 9: the registry covers every insight route ---');
   // The registry is built by intercepting router.get - if someone adds an insight
-  // w innym stylu, ten test to wychwyci, zanim karta po cichu wypadnie z dashboardu.
+  // in a different style, this test catches it before the card silently drops off the dashboard.
   const source = fs.readFileSync(path.join(__dirname, '..', 'routes', 'dashboard.js'), 'utf8');
   const declared = [...source.matchAll(/router\.get\('\/api\/dashboard\/([a-z0-9-]+)'/g)]
     .map(m => m[1]);
@@ -336,8 +337,8 @@ async function testRegistryCoversAllInsightRoutes() {
   const available = (await getJson('/api/dashboard/insights')).body.available;
   const missing = declared.filter(id => !available.includes(id));
 
-  console.log(`  tras w pliku: ${declared.length}, w rejestrze: ${available.length}`);
-  assert.strictEqual(missing.length, 0, `Poza rejestrem zostały: ${missing.join(', ')}`);
+  console.log(`  routes in the file: ${declared.length}, in the registry: ${available.length}`);
+  assert.strictEqual(missing.length, 0, `Left outside the registry: ${missing.join(', ')}`);
   console.log('✅ Every insight joins the batch automatically.');
 }
 
@@ -367,7 +368,7 @@ async function main() {
     failed = true;
   } finally {
     if (server) server.close();
-    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* katalog tymczasowy */ }
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* the temp directory may already be gone */ }
     // db.js holds an open connection and timers - exit the process explicitly.
     process.exit(failed ? 1 : 0);
   }

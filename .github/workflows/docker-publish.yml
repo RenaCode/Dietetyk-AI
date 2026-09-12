@@ -10,16 +10,14 @@ name: Build and publish Docker images
 # triggers a pointless rebuild and redeploy of the frontend image, and vice versa. A manual
 # run via workflow_dispatch always builds both images.
 #
-# After the images are built and pushed (CI), the deploy job (CD) connects over SSH to the
-# production server and refreshes the containers (docker compose pull + up -d).
-# Wymaga ustawienia w repo (Settings -> Secrets and variables -> Actions):
-#   VPS_HOST     - adres IP lub domena serwera (np. 185.201.112.104)
+# Requires the following to be set in the repo (Settings -> Secrets and variables -> Actions):
+#   VPS_HOST     - the server's IP address or domain (e.g. 185.201.112.104)
 #   VPS_USER     - a dedicated, UNPRIVILEGED SSH user (e.g. "deploy") belonging to the
 #                  "docker" group - deliberately NOT root. See the repository notes for
 #                  instructions on creating that account on the server.
 #   VPS_SSH_KEY  - the private SSH key (dedicated to CI/CD only), whose public counterpart
-#                  must be added to ~/.ssh/authorized_keys
-#                  konta "deploy" na serwerze)
+#                  must be added to ~/.ssh/authorized_keys of the "deploy" account on the
+#                  server
 #   VPS_SSH_PORT - (optional) SSH port, 22 by default
 
 on:

@@ -1,7 +1,7 @@
 const { test, expect } = require('@playwright/test');
 
 test.describe('Autoryzacja (Login i Logout)', () => {
-  test('Powinno wyświetlić stronę logowania i zalogować administratora bez 2FA', async ({ page }) => {
+  test('shows the login page and signs in an administrator without 2FA', async ({ page }) => {
     // 1. Open the home page
     await page.goto('/');
 
@@ -28,7 +28,7 @@ test.describe('Autoryzacja (Login i Logout)', () => {
     await expect(page.locator('h2')).toContainText('Dietetyk AI');
   });
 
-  test('Powinno zalogować administratora przy użyciu adresu e-mail', async ({ page }) => {
+  test('signs in an administrator using an e-mail address', async ({ page }) => {
     await page.goto('/');
     // Use the admin email instead of the username
     await page.fill('input[placeholder="Wpisz login lub e-mail..."]', 'admin@dietetyk-ai.local');
@@ -43,7 +43,7 @@ test.describe('Autoryzacja (Login i Logout)', () => {
     await expect(page.locator('h2')).toContainText('Dietetyk AI');
   });
 
-  test('Powinno pokazać błąd przy niepoprawnych danych logowania', async ({ page }) => {
+  test('shows an error on invalid credentials', async ({ page }) => {
     await page.goto('/');
     await page.fill('input[placeholder="Wpisz login lub e-mail..."]', 'nieistniejacy_user');
     await page.fill('input[placeholder="Wpisz hasło..."]', 'blednehaslo');

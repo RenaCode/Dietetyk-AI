@@ -1,6 +1,6 @@
 // Default health_metrics object - used as the fallback in routes/dashboard.js and
 // routes/chat.js when no health_metrics row exists yet for a given
-// (user, data) - np. zanim pierwsza synchronizacja Oura/Withings/Apple Health danego
+// (user, date) - before the first Oura/Withings/Apple Health sync of that day, for instance,
 // before that day has any real data. Both files used to define this object
 // independently, with slightly different fields - this is the UNION of every field used
 // in either place (built on the more complete version from dashboard.js).

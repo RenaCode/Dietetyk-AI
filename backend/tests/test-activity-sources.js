@@ -121,7 +121,7 @@ async function testLowerSourceFillsGaps() {
 
   assert.strictEqual(row.steps, 12000, 'The Apple Health step count was overwritten.');
   assert.strictEqual(row.active_calories, 450, 'An empty column was not filled in by Oura.');
-  assert.strictEqual(row.distance_meters, 6000, 'Pusta kolumna nie została uzupełniona przez Ourę.');
+  assert.strictEqual(row.distance_meters, 6000, 'An empty column was not filled in by Oura.');
   assert.strictEqual(row.activity_source, 'apple', 'The label should stay with apple - it holds real steps.');
 
   console.log(`  steps=${row.steps} (apple), kcal=${row.active_calories} (oura), dystans=${row.distance_meters} (oura)`);

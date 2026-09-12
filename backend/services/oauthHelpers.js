@@ -95,13 +95,28 @@ function generateOAuthState(userId, service = 'oura') {
 
 function verifyOAuthState(state) {
   if (!state) return null;
-  // The current format is always four parts (userId:service:salt:hmac), produced solely by
-  // generateOAuthState above. The dead branch handling the old three-part format
-  // (userId:salt:hmac, with a default service='oura') was removed - no current state
-  // generator produces it any more.
+  // The format is userId:service:salt:hmac - but `service` may itself contain colons, so the
+  // field count is NOT fixed and the parts must be read from both ends, never by position
+  // from the left alone.
+  //
+  // This is the bug that made "Sign in with Google" impossible to complete. routes/auth.js
+  // binds the sign-in state to the client by passing `google_login:<sha256 fingerprint>` as
+  // the service, which makes the state FIVE colon-separated fields instead of four. The old
+  // `if (parts.length === 4)` check simply fell through for every one of them, so
+  // verifyOAuthState returned null on every legitimate callback and the flow ended at
+  // `/?google_error=csrf_failed` - a CSRF rejection of the application's own state. The
+  // account-linking flow (service 'google_link', no colon) kept working, which is why this
+  // looked like "Google sign-in is broken" rather than "state verification is broken".
+  //
+  // Reading userId from the front and salt/hmac from the back keeps every state that
+  // generateOAuthState can produce verifiable, whatever the service string contains, and
+  // stays compatible with the four-field states already in flight.
   const parts = state.split(':');
-  if (parts.length === 4) {
-    const [userId, service, salt, hmac] = parts;
+  if (parts.length >= 4) {
+    const userId = parts[0];
+    const service = parts.slice(1, -2).join(':');
+    const salt = parts[parts.length - 2];
+    const hmac = parts[parts.length - 1];
     const expectedHmac = crypto.createHmac('sha256', OAUTH_STATE_SECRET).update(`${userId}:${service}:${salt}`).digest('hex');
   // Bug fix: comparing HMACs with `===` compares the strings byte by byte and stops at the
   // first difference, which in theory leaks through response timing how many leading

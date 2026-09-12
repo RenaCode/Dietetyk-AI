@@ -118,10 +118,21 @@ jobs:
         working-directory: ./backend
         run: npm ci
 
+      # Test secrets are generated per run instead of being written into this file. A constant
+      # here would be the same mistake as the constant that used to sit in backend/.env.example:
+      # a value in the repository is a value an attacker has, and APP_PASSWORD is the material
+      # ENCRYPTION_KEY is derived from (backend/utils/encryption.js). These values live only for
+      # the length of the job, against a throwaway database.
+      - name: Generate ephemeral test secrets
+        run: |
+          for name in APP_PASSWORD OAUTH_STATE_SECRET; do
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::$value"
+            echo "$name=$value" >> "$GITHUB_ENV"
+          done
+
       - name: Unit tests (backend)
         working-directory: ./backend
-        env:
-          APP_PASSWORD: dietetyk-ci-test-password
         run: npm test
 
       # Pass the freshly regenerated lockfile to the build-backend job (a separate runner means
@@ -316,10 +327,25 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
+      # Test secrets are generated per run instead of being written into this file. A constant
+      # here would be the same mistake as the constant that used to sit in backend/.env.example:
+      # a value in the repository is a value an attacker has, and APP_PASSWORD is the material
+      # ENCRYPTION_KEY is derived from (backend/utils/encryption.js). These values live only for
+      # the length of the job, against a throwaway database.
+      - name: Generate ephemeral test secrets
+        run: |
+          for name in APP_PASSWORD OAUTH_STATE_SECRET; do
+            value="$(openssl rand -hex 32)"
+            echo "::add-mask::$value"
+            echo "$name=$value" >> "$GITHUB_ENV"
+          done
+
+      # ADMIN_INITIAL_PASSWORD stays a literal: it is not key material, it is the fixture password
+      # the Playwright specs type into the login form (e2e-tests/auth.spec.js), so both sides have
+      # to agree on it. It only ever unlocks the throwaway database created inside this job.
       - name: Run E2E tests
         env:
           ADMIN_INITIAL_PASSWORD: 3bda877d518c8cf7a80b32bb
-          APP_PASSWORD: dietetyk-admin
           CI: true
         run: npm run test:e2e
 
@@ -369,10 +395,15 @@ jobs:
             git reset --hard origin/main
 
             if [ "${{ needs.build-backend.result }}" = "success" ]; then
-              sed -i '/backend:/,/tag:/ { s/tag: .*/tag: "sha-${{ steps.vars.outputs.sha_short }}"/ }' charts/dietetyk/values.yaml
+              # Zakres konczy sie na PRAWDZIWYM tagu, nie na pierwszej linii
+              # zawierajacej "tag:" - komentarz z takim ciagiem przejmowalby
+              # podmiane na siebie, zostawiajac prawdziwy tag nietkniety.
+              sed -i -E "/^[[:space:]]*backend:/,/^[[:space:]]*tag: \"sha-/ { s|^([[:space:]]*)tag: \"sha-[^\"]*\"$|\1tag: \"sha-${{ steps.vars.outputs.sha_short }}\"| }" charts/dietetyk/values.yaml
+              grep -q 'tag: "sha-${{ steps.vars.outputs.sha_short }}"' charts/dietetyk/values.yaml || { echo "::error::sed nie podmienil tagu backendu"; exit 1; }
             fi
             if [ "${{ needs.build-frontend.result }}" = "success" ]; then
-              sed -i '/frontend:/,/tag:/ { s/tag: .*/tag: "sha-${{ steps.vars.outputs.sha_short }}"/ }' charts/dietetyk/values.yaml
+              sed -i -E "/^[[:space:]]*frontend:/,/^[[:space:]]*tag: \"sha-/ { s|^([[:space:]]*)tag: \"sha-[^\"]*\"$|\1tag: \"sha-${{ steps.vars.outputs.sha_short }}\"| }" charts/dietetyk/values.yaml
+              grep -q 'tag: "sha-${{ steps.vars.outputs.sha_short }}"' charts/dietetyk/values.yaml || { echo "::error::sed nie podmienil tagu frontendu"; exit 1; }
             fi
             git add charts/dietetyk/values.yaml
 

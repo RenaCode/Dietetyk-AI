@@ -3,19 +3,30 @@ const db = require('../db');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const { encrypt, decrypt } = require('../utils/encryption');
 
-// Secret used to sign (HMAC) the `state` parameter in the OAuth flow.
-// Previously, if APP_PASSWORD was missing from the environment the code silently fell back
-// to a fixed string 'default_secret' that is visible in the source - which would make the
-// signature trivial to forge (a CSRF attack on the OAuth flow) after a .env misconfiguration
-// in production. Now a missing configuration is a startup error (fail-fast), so such a
-// mistake can never pass unnoticed.
-// It can be overridden with a dedicated OAUTH_STATE_SECRET variable, so the admin panel
-// password (APP_PASSWORD) need not double as a cryptographic secret.
-const OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || process.env.APP_PASSWORD;
+// Secret used to sign (HMAC) the `state` parameter in the OAuth flow. REQUIRED, with no
+// fallback to any other variable.
+//
+// Two earlier versions of this line were wrong in the same way. The first fell back to a fixed
+// 'default_secret' literal visible in the source; the second fell back to APP_PASSWORD. The
+// second looked safe - APP_PASSWORD is required for the backend to start anyway - but it made a
+// single value both the OAuth signing key and the key material for encrypting the database
+// (utils/encryption.js), and backend/.env.example shipped a CONCRETE value for it, committed to
+// the repository. Anyone who read the repo could therefore sign
+// `<victimId>:google_link:<salt>:<hmac>`, complete the Google consent screen on their OWN Google
+// account, and routes/auth.js would write that Google account onto the victim's user row - after
+// which the ordinary "Sign in with Google" button issues a session for the victim's account.
+//
+// Hence fail-fast instead of a quiet downgrade: a deployment that silently signs state with a
+// weaker (or publicly known) secret looks perfectly healthy while its CSRF protection is
+// forgeable, and nothing in the logs would ever say so. Refusing to start is the louder, safer
+// failure.
+const OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET;
 if (!OAUTH_STATE_SECRET) {
   throw new Error(
-    'Brak OAUTH_STATE_SECRET (lub zapasowo APP_PASSWORD) w zmiennych środowiskowych. ' +
-    'Ustaw jedną z nich w backend/.env, inaczej przepływ OAuth (Oura/Withings/Google) nie jest bezpieczny.'
+    'OAUTH_STATE_SECRET is missing from the environment. It signs the `state` parameter of the ' +
+    'OAuth flow (Oura/Withings/Google) and must be a dedicated random value - NOT APP_PASSWORD ' +
+    'and not any other secret reused elsewhere. Generate one with `openssl rand -hex 32` and add ' +
+    'OAUTH_STATE_SECRET=<value> to backend/.env (see backend/docs/secret-rotation.md).'
   );
 }
 
@@ -51,7 +62,7 @@ async function getUserSetting(userId, key) {
 async function getVerifiedSessionByToken(token) {
   if (!token) return null;
   const session = await db.get(`
-    SELECT s.user_id, s.expires_at, s.is_verified_2fa, u.totp_enabled
+    SELECT s.user_id, s.expires_at, s.is_verified_2fa, s.is_temp, u.totp_enabled
     FROM sessions s
     JOIN users u ON s.user_id = u.id
     WHERE s.token = ?
@@ -59,6 +70,12 @@ async function getVerifiedSessionByToken(token) {
 
   if (!session) return null;
   if (new Date(session.expires_at.replace(' ', 'T') + 'Z') < new Date()) return null;
+  // A temporary verification session (5-minute 2FA setup / 2FA login / forced password
+  // change) may never link an external account. The totp_enabled check below does not
+  // cover it: a user being forced INTO 2FA setup still has totp_enabled = 0, which is
+  // precisely the gap that let a temporary token pass for a full one - see the longer
+  // note in middleware/auth.js.
+  if (session.is_temp === 1) return null;
   if (session.totp_enabled === 1 && session.is_verified_2fa === 0) return null;
 
   return session;

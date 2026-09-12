@@ -60,7 +60,26 @@ async function requireAuth(req, res, next) {
       return res.status(401).json({ error: 'Sesja wygasła lub jest niepoprawna. Zaloguj się ponownie.' });
     }
 
-    // Deny access when the user has 2FA enabled but the session is not yet verified
+    // A temporary session authorises exactly one thing: finishing the step it was issued
+    // for. Those steps live on the exception list at the top of this function
+    // (/verify-2fa-setup, /login-2fa, /change-password-forced), which validates the token
+    // from the request body itself - so nothing reachable from here should ever accept one.
+    //
+    // This check must come from the session row, not from `totp_enabled` below and not from
+    // the token's 'temp_' prefix. The totp_enabled path was the actual hole: a user being
+    // forced through 2FA setup has totp_enabled = 0 by definition, so the check underneath
+    // never fired and Bearer temp_… returned /api/user/profile and /api/settings with a
+    // 200. Once the 5 minutes ran out the attacker just logged in again for a fresh one,
+    // which made force_2fa purely decorative. Matching on the prefix instead would test a
+    // property of the string rather than of the session, and would fail open the day the
+    // token format changes.
+    if (session.is_temp === 1) {
+      return res.status(401).json({ error: 'Sesja tymczasowa. Dokończ logowanie (2FA / zmiana hasła).' });
+    }
+
+    // Deny access when the user has 2FA enabled but the session is not yet verified.
+    // Still needed alongside is_temp: a full 7-day session issued while the account had no
+    // 2FA keeps is_verified_2fa = 0, so enabling 2FA later (Settings) must invalidate it.
     if (session.totp_enabled === 1 && session.is_verified_2fa === 0) {
       return res.status(401).json({ error: 'Wymagana weryfikacja 2FA. Uzupełnij kod.' });
     }

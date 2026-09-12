@@ -18,10 +18,20 @@ const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 // `ttlDays` also accepts fractional values (5-minute temporary sessions, see
 // TEMP_SESSION_TTL_DAYS below) - it is computed in milliseconds anyway.
 // The token prefix ('temp_' for short-lived verification sessions, 'sess_' for real login
-// sessions) preserves exactly the same token patterns that
-// rozpoznaje reszta kodu (np. getVerifiedSessionByToken, middleware/auth.js).
+// sessions) is kept only so that tokens stay recognisable to a human reading a log or a
+// database row. NOTHING may authorise on it: the authoritative marker is the is_temp column
+// written below and read by middleware/auth.js and getVerifiedSessionByToken.
 const TEMP_SESSION_TTL_DAYS = 5 / (24 * 60); // 5 minutes expressed in days
 const PERMANENT_SESSION_TTL_DAYS = 7;
+
+// Brute-force key for the 2FA code, namespaced so it cannot collide with the login keys,
+// which are built from a username. It is keyed by user id rather than by the tempToken it
+// used to use: every successful password login mints a fresh random tempToken, so the
+// counter reset itself on every retry. An attacker holding the password but not the TOTP
+// secret got 5 guesses, logged in again (which also cleared the password counter via
+// recordSuccess) and got another 5, without limit. The user id is stable across those
+// re-logins, which is exactly the property the counter needs.
+const twoFactorAttemptKey = (userId) => `2fa_user:${userId}`;
 
 const validatePassword = (password) => {
   if (!password || password.length < 8) {
@@ -34,13 +44,16 @@ const validatePassword = (password) => {
 };
 
 async function createSession(userId, isVerified2fa, ttlDays = PERMANENT_SESSION_TTL_DAYS) {
-  const tokenPrefix = ttlDays >= 1 ? 'sess_' : 'temp_';
-  const token = tokenPrefix + crypto.randomBytes(24).toString('hex');
+  // A sub-day TTL is only ever produced by TEMP_SESSION_TTL_DAYS, i.e. by a session that
+  // exists purely to carry the user through one verification step. Deriving both the flag
+  // and the prefix from the same expression keeps them from drifting apart.
+  const isTemp = ttlDays < 1;
+  const token = (isTemp ? 'temp_' : 'sess_') + crypto.randomBytes(24).toString('hex');
   const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
   await db.run(`
-    INSERT INTO sessions (token, user_id, expires_at, is_verified_2fa)
-    VALUES (?, ?, ?, ?)
-  `, [token, userId, expiresAt, isVerified2fa ? 1 : 0]);
+    INSERT INTO sessions (token, user_id, expires_at, is_verified_2fa, is_temp)
+    VALUES (?, ?, ?, ?, ?)
+  `, [token, userId, expiresAt, isVerified2fa ? 1 : 0, isTemp ? 1 : 0]);
   return token;
 }
 
@@ -345,23 +358,27 @@ router.post('/api/verify-2fa-setup', async (req, res) => {
     return res.status(400).json({ error: 'Tymczasowy token i kod są wymagane.' });
   }
 
-  const lockedMs = await loginAttempts.isLocked(req.ip, tempToken);
-  if (lockedMs > 0) {
-    return res.status(429).json({
-      error: `Za dużo nieudanych prób. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.`
-    });
-  }
-
   try {
+    // The session is resolved BEFORE the lockout check, because the counter is keyed by
+    // user id and the id is only known once the tempToken has been validated. Answering
+    // an unknown/expired token with a 401 ahead of the 429 costs nothing: no code was
+    // guessed, so there is nothing to rate-limit yet.
     const session = await db.get(`
       SELECT s.*, u.totp_secret
       FROM sessions s
       JOIN users u ON s.user_id = u.id
-      WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_verified_2fa = 0
+      WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_temp = 1 AND s.is_verified_2fa = 0
     `, [tempToken]);
 
     if (!session) {
       return res.status(401).json({ error: 'Tymczasowa sesja wygasła. Zaloguj się ponownie.' });
+    }
+
+    const lockedMs = await loginAttempts.isLocked(req.ip, twoFactorAttemptKey(session.user_id));
+    if (lockedMs > 0) {
+      return res.status(429).json({
+        error: `Za dużo nieudanych prób. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.`
+      });
     }
 
     const isValid = authenticator.verify({
@@ -370,12 +387,12 @@ router.post('/api/verify-2fa-setup', async (req, res) => {
     });
 
     if (!isValid) {
-      await loginAttempts.recordFailure(req.ip, tempToken);
+      await loginAttempts.recordFailure(req.ip, twoFactorAttemptKey(session.user_id));
       logger.security(`Niepoprawny kod 2FA podczas konfiguracji (UID: ${session.user_id})`, 'AUTH_2FA_FAILURE', { userId: session.user_id }, req.ip);
       return res.status(400).json({ error: 'Niepoprawny kod 2FA. Spróbuj ponownie.' });
     }
 
-    await loginAttempts.recordSuccess(req.ip, tempToken);
+    await loginAttempts.recordSuccess(req.ip, twoFactorAttemptKey(session.user_id));
 
     // Activate 2FA for the user
     await db.run(`UPDATE users SET totp_enabled = 1, force_2fa = 0 WHERE id = ?`, [session.user_id]);
@@ -400,23 +417,24 @@ router.post('/api/login-2fa', async (req, res) => {
     return res.status(400).json({ error: 'Tymczasowy token i kod są wymagane.' });
   }
 
-  const lockedMs = await loginAttempts.isLocked(req.ip, tempToken);
-  if (lockedMs > 0) {
-    return res.status(429).json({
-      error: `Za dużo nieudanych prób. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.`
-    });
-  }
-
   try {
+    // Session first, then the lockout - see the comment in /api/verify-2fa-setup above.
     const session = await db.get(`
       SELECT s.*, u.totp_secret
       FROM sessions s
       JOIN users u ON s.user_id = u.id
-      WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_verified_2fa = 0
+      WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_temp = 1 AND s.is_verified_2fa = 0
     `, [tempToken]);
 
     if (!session) {
       return res.status(401).json({ error: 'Tymczasowa sesja wygasła. Zaloguj się ponownie.' });
+    }
+
+    const lockedMs = await loginAttempts.isLocked(req.ip, twoFactorAttemptKey(session.user_id));
+    if (lockedMs > 0) {
+      return res.status(429).json({
+        error: `Za dużo nieudanych prób. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.`
+      });
     }
 
     const isValid = authenticator.verify({
@@ -425,12 +443,12 @@ router.post('/api/login-2fa', async (req, res) => {
     });
 
     if (!isValid) {
-      await loginAttempts.recordFailure(req.ip, tempToken);
+      await loginAttempts.recordFailure(req.ip, twoFactorAttemptKey(session.user_id));
       logger.security(`Niepoprawny kod 2FA podczas logowania (UID: ${session.user_id})`, 'AUTH_2FA_FAILURE', { userId: session.user_id }, req.ip);
       return res.status(400).json({ error: 'Niepoprawny kod 2FA. Spróbuj ponownie.' });
     }
 
-    await loginAttempts.recordSuccess(req.ip, tempToken);
+    await loginAttempts.recordSuccess(req.ip, twoFactorAttemptKey(session.user_id));
 
     // Issue a permanent session token (valid 7 days), already 2FA-verified
     const permanentToken = await createSession(session.user_id, true);
@@ -466,11 +484,15 @@ router.post('/api/change-password-forced', async (req, res) => {
   }
 
   try {
+    // `is_temp = 1` narrows this to the tokens actually minted for the forced-password-change
+    // step. Without it a full 7-day session token could be replayed into this endpoint as a
+    // "tempToken" (is_verified_2fa = 0 is true for ordinary sessions of users without 2FA)
+    // and change the account password with no knowledge of the current one.
     const session = await db.get(`
       SELECT s.*, u.username
       FROM sessions s
       JOIN users u ON s.user_id = u.id
-      WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_verified_2fa = 0
+      WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_temp = 1 AND s.is_verified_2fa = 0
     `, [tempToken]);
 
     if (!session) {

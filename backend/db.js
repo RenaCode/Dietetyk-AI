@@ -347,6 +347,7 @@ const initDb = async () => {
       user_id INTEGER NOT NULL,
       expires_at TEXT NOT NULL,
       is_verified_2fa INTEGER DEFAULT 0,
+      is_temp INTEGER DEFAULT 0,
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);

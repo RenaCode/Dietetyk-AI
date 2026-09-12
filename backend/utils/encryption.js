@@ -7,15 +7,22 @@ const crypto = require('crypto');
 // dietetyk-db container or a backup) had ready-to-use access tokens for users' Oura and
 // Withings accounts, plus the Gemini/Mailgun/Google API keys.
 //
-// The key is derived from APP_PASSWORD (scrypt + a fixed, unique "context" string)
-// rather than from a new dedicated environment variable such as ENCRYPTION_KEY.
-// APP_PASSWORD is ALREADY required for the backend to start (see OAUTH_STATE_SECRET in
-// oauthHelpers.js) and is maintained by hand in the .env on the production VPS
-// (docker-compose.yml mounts backend/.env into the container). Introducing another
-// required secret would risk the backend refusing to start after the next deploy until
-// someone updated that file on the server. The separate "context" string in scrypt keeps
-// the keys isolated - the field-encryption key differs from OAUTH_STATE_SECRET even
-// though both derive from the same base secret.
+// The key is derived from APP_PASSWORD (scrypt + a fixed, unique "context" string) rather than
+// from a separate ENCRYPTION_KEY variable: APP_PASSWORD is already required, and in production
+// the whole .env arrives as ONE value - the `dotenv` key of the Kubernetes Secret
+// `dietetyk-backend-secret`, mounted as /app/.env (charts/dietetyk/templates/backend-deployment.yaml).
+// A second required secret would live in that same blob, with the same blast radius, and buy no
+// isolation. The "context" string is what keeps this key distinct from any other use of the same
+// base secret.
+//
+// What the base secret must NOT be is a value anybody can look up. backend/.env.example used to
+// ship a CONCRETE APP_PASSWORD, which reduced "encrypted at rest" to "obfuscated at rest":
+// scrypt over a published string reproduces ENCRYPTION_KEY byte for byte, so a stolen .db file
+// (a copy from backend/backups/, the Docker volume, or the db-viewer container) decrypts with no
+// secret knowledge at all. Rotating APP_PASSWORD is therefore a real operation, not a formality -
+// and it must be done in the order described in backend/docs/secret-rotation.md, because a new
+// APP_PASSWORD means a new ENCRYPTION_KEY, and every value already stored under the old key
+// becomes unreadable until scripts/reencrypt-secrets.js has rewritten it.
 const APP_SECRET = process.env.APP_PASSWORD;
 if (!APP_SECRET) {
   throw new Error(
@@ -23,16 +30,31 @@ if (!APP_SECRET) {
   );
 }
 
-const ENCRYPTION_KEY = crypto.scryptSync(APP_SECRET, 'dietetyk-ai:field-encryption:v1', 32);
+// The scrypt "context" is part of the key identity: change it and every stored value becomes
+// undecryptable, exactly as if APP_PASSWORD had changed. Treat it as frozen; a new scheme gets a
+// new ENC_PREFIX version instead.
+const KEY_CONTEXT = 'dietetyk-ai:field-encryption:v1';
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
 const AUTH_TAG_LENGTH = 16;
 const ENC_PREFIX = 'enc:v1:';
 
-function encrypt(plaintext) {
+// Exported so scripts/reencrypt-secrets.js can hold TWO keys at once - the old APP_PASSWORD to
+// decrypt with and the new one to encrypt with - during a rotation. Application code never calls
+// this: it uses encrypt()/decrypt() below, which are bound to the key from the environment.
+function deriveKey(secret) {
+  if (!secret) {
+    throw new Error('deriveKey() requires a non-empty secret.');
+  }
+  return crypto.scryptSync(secret, KEY_CONTEXT, 32);
+}
+
+const ENCRYPTION_KEY = deriveKey(APP_SECRET);
+
+function encryptWith(key, plaintext) {
   if (plaintext === null || plaintext === undefined || plaintext === '') return plaintext;
   const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv(ALGORITHM, ENCRYPTION_KEY, iv);
+  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
   const ciphertext = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
   const authTag = cipher.getAuthTag();
   return ENC_PREFIX + Buffer.concat([iv, authTag, ciphertext]).toString('base64');
@@ -42,15 +64,23 @@ function encrypt(plaintext) {
 // empty/missing values and data written BEFORE this encryption was introduced (legacy
 // plaintext). That removes the need for a separate migration script: old values still
 // read correctly and get encrypted on their next write.
-function decrypt(value) {
+function decryptWith(key, value) {
   if (typeof value !== 'string' || !value.startsWith(ENC_PREFIX)) return value;
   const raw = Buffer.from(value.slice(ENC_PREFIX.length), 'base64');
   const iv = raw.subarray(0, IV_LENGTH);
   const authTag = raw.subarray(IV_LENGTH, IV_LENGTH + AUTH_TAG_LENGTH);
   const ciphertext = raw.subarray(IV_LENGTH + AUTH_TAG_LENGTH);
-  const decipher = crypto.createDecipheriv(ALGORITHM, ENCRYPTION_KEY, iv);
+  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(authTag);
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
 }
 
-module.exports = { encrypt, decrypt };
+function encrypt(plaintext) {
+  return encryptWith(ENCRYPTION_KEY, plaintext);
+}
+
+function decrypt(value) {
+  return decryptWith(ENCRYPTION_KEY, value);
+}
+
+module.exports = { encrypt, decrypt, deriveKey, encryptWith, decryptWith, ENC_PREFIX };

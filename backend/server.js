@@ -12,10 +12,44 @@ const { runHourlySyncIfDue } = require('./scheduler');
 
 const app = express();
 
-// Trust the X-Forwarded-For header from nginx (the reverse proxy in front of the backend
-// in docker-compose) so that req.ip shows the real client address rather than the nginx
-// container's. Required for the per-IP brute-force protection to work correctly.
-app.set('trust proxy', true);
+// How many reverse proxies sit in front of this process, counted from the socket
+// inwards. Express hands `req.ip` to every per-IP defence we have (the brute-force lock
+// in services/loginAttempts.js, the global limiter in middleware/rateLimit.js), so this
+// number decides whether those defences can be bypassed - or whether they misfire.
+//
+// DERIVED, NOT GUESSED. Production runs on k3s via ArgoCD (renacode-infra/argocd-apps.yaml
+// deploys charts/dietetyk). The request path is:
+//   client
+//     -> Traefik           (k3s built-in ingress controller in kube-system, LoadBalancer
+//                           on 80/443; charts/dietetyk/values.yaml sets
+//                           ingress.className: traefik)
+//     -> nginx             (the frontend pod; charts/dietetyk/templates/ingress.yaml
+//                           routes / to the -frontend Service, and
+//                           templates/nginx-configmap.yaml proxy_passes /api to the
+//                           -backend Service)
+//     -> this process
+// Exactly two of those hops are HTTP proxies that write X-Forwarded-For, so the value is
+// 2. The k3s LoadBalancer in front of Traefik is layer 4 and never touches the header, so
+// it does not count.
+//
+// `true` - what this used to be - was a real, exploited hole: it trusts EVERY entry, so
+// Express takes the LEFTMOST one, which is whatever the client typed. nginx uses
+// $proxy_add_x_forwarded_for, which only APPENDS, so a header forged outside survives all
+// the way here. An attacker rotating `X-Forwarded-For: 9.9.9.<n>` got a fresh brute-force
+// key (`${ip}::${username}`) and a fresh limiter bucket on every single request: 12 wrong
+// passwords in a row, 12 let through, 0 lockouts, against MAX_ATTEMPTS=5.
+//
+// Both directions of error hurt, so do not "round up for safety":
+//   too high  - the same bypass as `true`: every extra trusted hop is one more attacker-
+//               controlled entry that Express will believe.
+//   too low   - every user collapses onto the proxy's own address (with 1 here, that is
+//               the Traefik pod IP), giving the entire internet ONE shared counter: the
+//               first attacker to trip the 120 req/min limiter locks out everybody else.
+// Verified against express 4 / proxy-addr with a forged prefix `9.9.9.7, <client>,
+// <traefik>`: 2 yields <client>, `true` yields 9.9.9.7, 1 yields <traefik>.
+// tests/test-trust-proxy.js pins this down, and reads the number straight out of this
+// file so that changing it here cannot silently pass.
+app.set('trust proxy', 2);
 
 // Middleware
 // CORS restricted to the configured application URL (APP_URL). A bare cors() used to

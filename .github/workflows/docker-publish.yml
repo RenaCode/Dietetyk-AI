@@ -397,10 +397,15 @@ jobs:
             git reset --hard origin/main
 
             if [ "${{ needs.build-backend.result }}" = "success" ]; then
-              sed -i '/backend:/,/tag:/ { s/tag: .*/tag: "sha-${{ steps.vars.outputs.sha_short }}"/ }' charts/dietetyk/values.yaml
+              # Zakres konczy sie na PRAWDZIWYM tagu, nie na pierwszej linii
+              # zawierajacej "tag:" - komentarz z takim ciagiem przejmowalby
+              # podmiane na siebie, zostawiajac prawdziwy tag nietkniety.
+              sed -i -E "/^[[:space:]]*backend:/,/^[[:space:]]*tag: \"sha-/ { s|^([[:space:]]*)tag: \"sha-[^\"]*\"$|\1tag: \"sha-${{ steps.vars.outputs.sha_short }}\"| }" charts/dietetyk/values.yaml
+              grep -q 'tag: "sha-${{ steps.vars.outputs.sha_short }}"' charts/dietetyk/values.yaml || { echo "::error::sed nie podmienil tagu backendu"; exit 1; }
             fi
             if [ "${{ needs.build-frontend.result }}" = "success" ]; then
-              sed -i '/frontend:/,/tag:/ { s/tag: .*/tag: "sha-${{ steps.vars.outputs.sha_short }}"/ }' charts/dietetyk/values.yaml
+              sed -i -E "/^[[:space:]]*frontend:/,/^[[:space:]]*tag: \"sha-/ { s|^([[:space:]]*)tag: \"sha-[^\"]*\"$|\1tag: \"sha-${{ steps.vars.outputs.sha_short }}\"| }" charts/dietetyk/values.yaml
+              grep -q 'tag: "sha-${{ steps.vars.outputs.sha_short }}"' charts/dietetyk/values.yaml || { echo "::error::sed nie podmienil tagu frontendu"; exit 1; }
             fi
             git add charts/dietetyk/values.yaml
 

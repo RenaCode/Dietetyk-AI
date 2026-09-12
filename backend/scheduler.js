@@ -162,12 +162,8 @@ async function runHourlySyncIfDue() {
   const warsawHour = getWarsawWallClock(now).getUTCHours();
   const hourKey = `${getLocalDateString()}T${warsawHour}`;
 
-  if (!isWithinSyncWindow(now)) {
-    return; // Przerwa nocna (22:00 - 5:00) - brak synchronizacji
-  }
-
   if (hourKey === lastSyncedHourKey) {
-    return; // this hour's sync has already run
+    return; // this hour's tick has already run
   }
 
   if (isSyncRunning) {
@@ -177,14 +173,30 @@ async function runHourlySyncIfDue() {
 
   lastSyncedHourKey = hourKey;
   isSyncRunning = true;
-  console.log(`[SCHEDULER] Uruchamianie godzinowej synchronizacji danych (godzina ${warsawHour}:00)...`);
   try {
-    await syncAllOura();
-    await syncAllWithings();
-    await syncAllGoogleFit();
+    // The 05:00-22:00 window belongs to the EXTERNAL syncs only (Oura/Withings/Google Fit):
+    // there is nothing to fetch overnight and no reason to hold those API quotas open.
+    //
+    // The summary check must not share that window, and used to. The whole function returned
+    // early outside 05:00-22:00, so checkAndSendAutomatedSummaries never ran at 23:xx - and
+    // its own condition is `currentTimeStr >= scheduledTime` on a per-day idempotency key, so
+    // the send was not deferred to the next morning either: at 05:00 the next day
+    // '05:00' >= '23:30' is false, and every later tick that day is false as well. A user who
+    // picked any time between 23:00 and 23:59 in Settings (a plain <input type="time">, so
+    // every minute of the day is selectable) simply never received a daily, weekly or monthly
+    // summary, with nothing in the logs to say so. Times from 00:00 to 04:59 were not lost but
+    // were silently deferred to the 05:00 tick; they now fire at the hour the user chose.
+    if (isWithinSyncWindow(now)) {
+      console.log(`[SCHEDULER] Uruchamianie godzinowej synchronizacji danych (godzina ${warsawHour}:00)...`);
+      await syncAllOura();
+      await syncAllWithings();
+      await syncAllGoogleFit();
+    } else {
+      console.log(`[SCHEDULER] Outside the ${SYNC_WINDOW_START_HOUR}:00-${SYNC_WINDOW_END_HOUR}:00 sync window (hour ${warsawHour}) - skipping the external syncs, still checking scheduled summaries.`);
+    }
     await checkAndSendAutomatedSummaries();
     await runWeeklyAdminReportIfDue();
-    console.log('[SCHEDULER] Hourly sync and summaries finished.');
+    console.log('[SCHEDULER] Hourly tick finished.');
   } catch (err) {
     console.error('[SCHEDULER ERROR] Hourly sync failed:', err);
   } finally {

@@ -205,6 +205,48 @@ You need the **old** value at hand before you start; without it the encrypted da
 migrated at all. Requires the deployed image to contain `scripts/reencrypt-secrets.js` — that is,
 an image built from the commit that added it.
 
+> ### This runbook switches off the VPS alerting channel. Read before step 3.
+>
+> `/opt/dietetyk-ai/health-check.sh` (root's crontab, every 15 minutes) is the only thing that
+> has ever delivered a failure e-mail from this cluster, and it sends by `kubectl exec` into a
+> **Ready** `dietetyk-backend` pod, calling `require('/app/services/mailgun')`. Two consequences
+> that belong to this runbook specifically:
+>
+> - **Step 3 scales the Deployment to 0.** From that moment until step 7 brings it back there is
+>   no Ready backend pod, so the health check cannot mail at all: it takes the `[ -z
+>   "$BACKEND_POD" ]` branch, writes one `logger` line to syslog and exits 1. Anything that goes
+>   wrong on the VPS during your maintenance window — including anything *you* cause — is
+>   invisible. Worse, the script stamps its 6-hour cooldown file **before** attempting the send,
+>   so the first suppressed alert also silences the retries for the following six hours. Watch
+>   the machine yourself for the duration; do not rely on mail.
+> - **The Mailgun API key is one of the values being re-encrypted.** `app_config.mailgun_api_key`
+>   is in the list at the top of this document. If the migration is rolled back, or half-applied,
+>   or the new `APP_PASSWORD` in the Secret does not match what the data was encrypted with, then
+>   `decrypt()` throws inside `sendMailgunEmail` and alerting stays down after the window closes —
+>   with no symptom in the application, because nothing a user touches sends mail.
+>
+> So make "send an alert e-mail" an explicit item in step 7, not an assumption. The quickest
+> honest check, run after the Deployment is back up, is the same call the cron job makes:
+>
+> ```bash
+> POD=$(kubectl get pod -n default -l app.kubernetes.io/component=backend \
+>   -o jsonpath='{range .items[*]}{.metadata.name}{" "}{range .status.conditions[?(@.type=="Ready")]}{.status}{end}{"\n"}{end}' \
+>   | awk '$2=="True"{print $1; exit}')
+> kubectl exec "$POD" -n default -c backend -- node -e "
+>   require('dotenv').config({ path: '/app/.env' });
+>   require('/app/services/mailgun').sendMailgunEmail({
+>     to: 'mbeczynski@gmail.com',
+>     subject: '[TEST] rotacja APP_PASSWORD - kanal alarmowy dziala',
+>     html: '<pre>post-rotation check</pre>' })
+>     .then(r => { console.log('OK', r.id); process.exit(0); })
+>     .catch(e => { console.error('FAILED:', e.message); process.exit(1); });"
+> ```
+>
+> The e-mail has to arrive. `sendMailgunEmail` throws on every failure path — a wrong key, a
+> non-2xx from Mailgun, a timeout, missing configuration, or a value it cannot decrypt — and
+> `tests/test-mailgun-failure-modes.js` pins that down, so a clean exit here really does mean the
+> channel is alive rather than merely quiet.
+
 ### Why a Job with the Deployment scaled down, and not `kubectl exec`
 
 `kubectl exec` into the running pod is the wrong tool here, for two independent reasons:

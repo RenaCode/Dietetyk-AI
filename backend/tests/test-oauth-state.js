@@ -111,10 +111,60 @@ function testStateVerification() {
   assert(verifyOAuthState('7:google_link:abc') === null, 'a malformed state (wrong number of parts) is rejected');
 }
 
+// The regression that made "Sign in with Google" unusable: routes/auth.js binds the sign-in
+// state to the client with `google_login:<sha256 fingerprint>` as the service, which adds a
+// colon and therefore a fifth field to the state. verifyOAuthState only accepted exactly four
+// fields, so every genuine sign-in callback was rejected as CSRF and redirected to
+// /?google_error=csrf_failed. Nothing failed loudly - the application refused its own state.
+//
+// The fingerprint is reproduced here exactly as routes/auth.js builds it, so this test breaks
+// if that construction ever changes shape again.
+function testServiceContainingColons() {
+  const { generateOAuthState, verifyOAuthState } = require('../services/oauthHelpers');
+
+  const fingerprint = crypto.createHash('sha256').update('203.0.113.5' + 'Mozilla/5.0').digest('hex');
+  const service = `google_login:${fingerprint}`;
+  const state = generateOAuthState(0, service);
+
+  assert(
+    state.split(':').length === 5,
+    'the Google sign-in state really does carry five colon-separated fields, not four'
+  );
+
+  const verified = verifyOAuthState(state);
+  assert(
+    verified !== null,
+    'a Google sign-in state (service containing a colon) verifies at all - it used to be rejected outright'
+  );
+  assert(
+    verified.userId === 0 && verified.service === service,
+    'the service is reassembled whole, so routes/auth.js can compare it against the recomputed fingerprint'
+  );
+
+  // Accepting a variable field count must not weaken the signature. The fingerprint is the
+  // whole point of the sign-in state - it is what ties the callback to the browser that
+  // started the flow - so a state with a different fingerprint spliced in has to fail.
+  const parts = state.split(':');
+  const spliced = `${parts[0]}:${parts[1]}:${'b'.repeat(64)}:${parts[3]}:${parts[4]}`;
+  assert(
+    verifyOAuthState(spliced) === null,
+    'swapping the fingerprint inside the service field invalidates the state (the HMAC covers it)'
+  );
+
+  // Re-cutting the same characters into a different field boundary must not verify either -
+  // otherwise the variable field count would let one state be reinterpreted as another.
+  const shifted = `${parts[0]}:${parts[1]}:${parts[2]}${parts[3]}:x:${parts[4]}`;
+  assert(
+    verifyOAuthState(shifted) === null,
+    'moving the service/salt boundary within the same state is rejected - the HMAC pins the split'
+  );
+}
+
 function run() {
   console.log('\n--- TESTY: services/oauthHelpers.js (OAUTH_STATE_SECRET) ---');
   testStartupFailsWithoutSecret();
   testStateVerification();
+  testServiceContainingColons();
   console.log('\n🎉 OAUTH STATE TESTS PASSED\n');
 }
 

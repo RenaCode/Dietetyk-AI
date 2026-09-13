@@ -19,6 +19,17 @@
 // dangerous - too high re-opens the bypass, too low collapses the whole internet onto the
 // proxy's own address and one shared counter.
 //
+// WHAT THIS TEST DOES NOT COVER - read before trusting a green run. Every request below is
+// handed a hand-built `X-Forwarded-For: <forged>, <real client>, <traefik>`, so the test
+// ASSUMES the caller's address is somewhere in that header. On production it is not: klipper-lb
+// masquerades the connection before Traefik ever sees it, so the chain starts at the node
+// (10.42.0.1) and req.ip is that for every visitor on the internet - the exact "one shared
+// counter" failure the last assertion claims to rule out, arriving from one hop further out
+// than this test can reach. Measured 2026-09-12; see the long comment above
+// `app.set('trust proxy', ...)` in server.js. This file still proves what it can prove - that
+// the hop count is not spoofable and is not off by one - but a pass here is not evidence that
+// per-IP limiting works in the cluster.
+//
 // NOTE: the limiter disables itself under NODE_ENV=test / CI=true (see
 // middleware/rateLimit.js), so this test must set a different NODE_ENV explicitly to
 // exercise the limit at all.

@@ -72,3 +72,16 @@ playwright-report/
 # This negation re-includes the directory for this repo regardless of the global file.
 !scripts/
 !scripts/**
+
+# Lokalny stan narzedzi Claude / claude-flow / ruflo.
+# To sa artefakty konkretnej maszyny i sesji (liczniki edycji, polityki,
+# przyjeta konfiguracja) - nie opisuja projektu i nie naleza do repozytorium.
+# Definicje agentow (.claude/agents/) i CLAUDE.md zostaja SLEDZONE celowo.
+.claude-flow/
+.claude/proven-config.json
+.claude/.proven-config-version
+.claude/settings.local.json
+.claude/worktrees/
+.claude/sessions/
+.claude/todos/
+.specstory/

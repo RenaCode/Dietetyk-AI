@@ -15,7 +15,7 @@ backend:
   image:
     repository: ghcr.io/renacode/dietetyk-ai-backend
     tag: "sha-aec075d"
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   secretName: dietetyk-backend-secret
   resources:
     limits:
@@ -29,7 +29,7 @@ frontend:
   image:
     repository: ghcr.io/renacode/dietetyk-ai-frontend
     tag: "sha-aec075d"
-    pullPolicy: Always
+    pullPolicy: IfNotPresent
   resources:
     limits:
       cpu: 200m

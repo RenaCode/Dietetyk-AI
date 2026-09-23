@@ -8,6 +8,8 @@ const crypto = require('crypto');
 const loginAttempts = require('../services/loginAttempts');
 const logger = require('../services/logger');
 const { getAppConfig, generateOAuthState, verifyOAuthState, getVerifiedSessionByToken } = require('../services/oauthHelpers');
+const { revokeUserSessions } = require('../middleware/auth');
+const { revokeAllSharesForUser } = require('../services/sharedReports');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 
 // Helper for creating a session (temporary or permanent) - extracted because the same
@@ -24,6 +26,20 @@ const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const TEMP_SESSION_TTL_DAYS = 5 / (24 * 60); // 5 minutes expressed in days
 const PERMANENT_SESSION_TTL_DAYS = 7;
 
+// The ceiling on a session's TOTAL life, counted from the moment it is created and never
+// moved afterwards. It is what makes PERMANENT_SESSION_TTL_DAYS mean something: requireAuth
+// renews a session by another 7 days whenever fewer than 6 remain, and that renewal had no
+// end, so a token used at least once a week lived for ever. "Sessions expire after 7 days"
+// described only a token nobody touched - a stolen one being polled by a script is exactly
+// the one that never expired.
+//
+// 30 days, not 7: the rolling window exists so that someone using the app daily is not
+// logged out every week, and a cap at or below the renewal window would delete that property
+// entirely. 30 days keeps the convenience for ordinary use and still guarantees that every
+// session - including one nobody knows has leaked - reaches a forced re-authentication within
+// a month. The number is a judgement call about that trade, not a derived constant.
+const ABSOLUTE_SESSION_TTL_DAYS = 30;
+
 // Brute-force key for the 2FA code, namespaced so it cannot collide with the login keys,
 // which are built from a username. It is keyed by user id rather than by the tempToken it
 // used to use: every successful password login mints a fresh random tempToken, so the
@@ -32,6 +48,65 @@ const PERMANENT_SESSION_TTL_DAYS = 7;
 // recordSuccess) and got another 5, without limit. The user id is stable across those
 // re-logins, which is exactly the property the counter needs.
 const twoFactorAttemptKey = (userId) => `2fa_user:${userId}`;
+
+// Second brute-force key for password login, alongside the one built from whatever the
+// caller typed. /api/login accepts EITHER a username or an email address
+// (`WHERE username = ? OR email = ?`), and services/loginAttempts.js keys its counter on the
+// submitted string - so one account has as many independent counters as it has ways of being
+// named. An attacker guessing Alice's password gets 5 tries as `alice`, then 5 more as
+// `alice@firma.pl`: ten guesses where the limit says five, and more still if a second address
+// ever reaches that row. The account id is the one identifier that does not multiply.
+const loginAttemptKeyForUser = (userId) => `login_user:${userId}`;
+
+// ===== Binding the Google sign-in flow to the browser that started it =====
+// The `state` of the sign-in flow has to be tied to ONE browser, otherwise the flow is
+// login-CSRF-able: the attacker starts it themselves, approves Google consent on their OWN
+// Google account, and then hands the victim the callback URL carrying the attacker's `code`
+// and a state the backend accepts. The victim's browser is handed a session for the
+// attacker's account and the victim goes on logging meals, weight and Oura/Withings data
+// into an account the attacker can read at will.
+//
+// The previous binding was `sha256(req.ip + User-Agent)` and it bound nothing. req.ip is
+// 10.42.0.1 for every request from the internet (measured on production - see the long note
+// above `app.set('trust proxy', ...)` in server.js), and the User-Agent is a header the
+// attacker chooses when GENERATING the state, so reproducing the victim's fingerprint means
+// sending one common header value. No change inside this file could have fixed it: the
+// address never enters the cluster.
+//
+// A short-lived HttpOnly cookie is the one thing here the attacker cannot reproduce in the
+// victim's browser: it is set on the response to GET /api/auth/google and only the browser
+// that made THAT request ever stores it. SameSite=Lax still sends it on the top-level GET
+// navigation Google performs back to the callback (Lax excludes cross-site POSTs and
+// subresources, not top-level GETs), which is exactly the one case we need it in.
+const GOOGLE_LOGIN_NONCE_COOKIE = 'dai_google_login';
+// Scoped to the sign-in routes rather than '/', so the cookie is not attached to every
+// request to the application for the ten minutes it lives.
+const GOOGLE_LOGIN_COOKIE_PATH = '/api/auth/google';
+const GOOGLE_LOGIN_NONCE_TTL_MS = 10 * 60 * 1000;
+
+// Minimal cookie reader. cookie-parser is not a dependency of this project and the
+// project deliberately keeps its dependency surface small (see CLAUDE.md); one header,
+// parsed once, does not justify a package.
+function readCookie(req, name) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() === name) {
+      return decodeURIComponent(part.slice(eq + 1).trim());
+    }
+  }
+  return null;
+}
+
+// Only the HASH of the nonce travels in `state`; the nonce itself never leaves the cookie.
+// The state is visible to Google, to the address bar and to anything that logs the callback
+// URL, so a state that carried the raw nonce would hand back the very secret that proves
+// "this browser started the flow".
+function googleLoginService(nonce) {
+  return `google_login:${crypto.createHash('sha256').update(nonce).digest('hex')}`;
+}
 
 const validatePassword = (password) => {
   if (!password || password.length < 8) {
@@ -50,10 +125,26 @@ async function createSession(userId, isVerified2fa, ttlDays = PERMANENT_SESSION_
   const isTemp = ttlDays < 1;
   const token = (isTemp ? 'temp_' : 'sess_') + crypto.randomBytes(24).toString('hex');
   const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+
+  // The hard cap, written once here and never touched again - middleware/auth.js only reads
+  // it and clamps its renewals against it. A NEW session gets the FULL window measured from
+  // now, which is the difference between this and the backfill in db.js: that one writes
+  // `absolute_expires_at = expires_at` because a pre-migration row carries no evidence of
+  // when it was born, so the only safe move is to let it die in whatever time it has left.
+  // Here the birth moment IS now, so there is nothing to be cautious about.
+  //
+  // A temporary session gets its own expiry as the cap rather than the 30 days. It is never
+  // renewed at all (requireAuth refuses is_temp sessions outright), so a cap beyond its
+  // 5-minute life would cap nothing - and a row claiming a month of validity for a session
+  // that dies in five minutes is the kind of thing someone reads later and believes.
+  const absoluteExpiresAt = isTemp
+    ? expiresAt
+    : new Date(Date.now() + ABSOLUTE_SESSION_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+
   await db.run(`
-    INSERT INTO sessions (token, user_id, expires_at, is_verified_2fa, is_temp)
-    VALUES (?, ?, ?, ?, ?)
-  `, [token, userId, expiresAt, isVerified2fa ? 1 : 0, isTemp ? 1 : 0]);
+    INSERT INTO sessions (token, user_id, expires_at, absolute_expires_at, is_verified_2fa, is_temp)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `, [token, userId, expiresAt, absoluteExpiresAt, isVerified2fa ? 1 : 0, isTemp ? 1 : 0]);
   return token;
 }
 
@@ -71,8 +162,18 @@ router.get('/api/auth/google', async (req, res) => {
     const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
     const redirectUri = `${base}/api/auth/google/callback`;
 
-    const clientFingerprint = crypto.createHash('sha256').update(req.ip + (req.headers['user-agent'] || '')).digest('hex');
-    const state = generateOAuthState(0, `google_login:${clientFingerprint}`);
+    // See the comment on GOOGLE_LOGIN_NONCE_COOKIE: the cookie is what ties this flow to
+    // this browser. The state only carries its hash.
+    const loginNonce = crypto.randomBytes(32).toString('hex');
+    const state = generateOAuthState(0, googleLoginService(loginNonce));
+
+    res.cookie(GOOGLE_LOGIN_NONCE_COOKIE, loginNonce, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
+      maxAge: GOOGLE_LOGIN_NONCE_TTL_MS,
+      path: GOOGLE_LOGIN_COOKIE_PATH
+    });
 
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('openid email profile')}&state=${state}&prompt=select_account`;
     res.redirect(authUrl);
@@ -125,9 +226,20 @@ router.get('/api/auth/google/callback', async (req, res) => {
   const { code, error, state } = req.query;
   const verified = verifyOAuthState(state);
 
-  const clientFingerprint = crypto.createHash('sha256').update(req.ip + (req.headers['user-agent'] || '')).digest('hex');
-  const isLoginFlow = verified && verified.userId === 0 && verified.service === `google_login:${clientFingerprint}`;
-  const isLinkFlow = verified && verified.userId > 0 && verified.service === 'google_link';
+  // The sign-in flow is accepted only when the browser presents the nonce cookie whose hash
+  // is inside the signed state. An attacker can mint a state (the route is public) but cannot
+  // put their cookie into the victim's browser, so the victim's callback request simply does
+  // not match and ends as csrf_failed - before any code is exchanged for a session.
+  const loginNonce = readCookie(req, GOOGLE_LOGIN_NONCE_COOKIE);
+  const isLoginFlow = !!(verified && verified.userId === 0 && loginNonce && verified.service === googleLoginService(loginNonce));
+  const isLinkFlow = !!(verified && verified.userId > 0 && verified.service === 'google_link');
+
+  // One cookie, one flow: whatever happens below, this nonce must not stay usable for a
+  // second callback. Cleared for every state that claims to be a sign-in - including a
+  // rejected one - so a failed attempt cannot leave a live binding behind.
+  if (loginNonce) {
+    res.clearCookie(GOOGLE_LOGIN_NONCE_COOKIE, { path: GOOGLE_LOGIN_COOKIE_PATH });
+  }
 
   if (error) {
     console.error('[GOOGLE LOGIN CALLBACK ERROR]', error);
@@ -279,14 +391,27 @@ router.post('/api/login', async (req, res) => {
       return res.status(401).json({ error: 'Niepoprawny użytkownik lub hasło.' });
     }
 
+    // The per-account counter is checked only once the row is known - the id does not exist
+    // before that. The response is the same 429 the typed-identifier lockout produces, so an
+    // attacker cannot tell the two counters apart, and a legitimate user sees one consistent
+    // message whichever name they signed in with.
+    const userLockedMs = await loginAttempts.isLocked(req.ip, loginAttemptKeyForUser(user.id));
+    if (userLockedMs > 0) {
+      return res.status(429).json({
+        error: `Za dużo nieudanych prób logowania. Spróbuj ponownie za ${Math.ceil(userLockedMs / 60000)} min.`
+      });
+    }
+
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
       await loginAttempts.recordFailure(req.ip, username);
+      await loginAttempts.recordFailure(req.ip, loginAttemptKeyForUser(user.id));
       logger.security(`Nieudana próba logowania na konto: ${username} (błędne hasło)`, 'AUTH_LOGIN_FAILURE', { username }, req.ip);
       return res.status(401).json({ error: 'Niepoprawny użytkownik lub hasło.' });
     }
 
     await loginAttempts.recordSuccess(req.ip, username);
+    await loginAttempts.recordSuccess(req.ip, loginAttemptKeyForUser(user.id));
 
     // Check whether a password change is being forced
     if (user.force_password_change === 1) {
@@ -501,10 +626,26 @@ router.post('/api/change-password-forced', async (req, res) => {
 
     const newHash = await bcrypt.hash(newPassword, 10);
     await db.run(`
-      UPDATE users 
-      SET password_hash = ?, force_password_change = 0 
+      UPDATE users
+      SET password_hash = ?, force_password_change = 0
       WHERE id = ?
     `, [newHash, session.user_id]);
+
+    // Same reasoning as POST /api/user/change-password in routes/account.js: a password
+    // change that leaves the old sessions alive revokes nothing, and this path used to delete
+    // only the tempToken it was handed. A forced change is often the FIRST thing that happens
+    // after an administrator resets a compromised account - if any session from before the
+    // reset survives it, the reset was theatre. The tempToken is kept for the few lines below
+    // that still need it (2FA / setup_2fa branches delete it themselves).
+    const revokedSessions = await revokeUserSessions(session.user_id, tempToken);
+    const revokedShares = await revokeAllSharesForUser(session.user_id);
+    logger.security(
+      `Forced password change: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s) (UID: ${session.user_id})`,
+      'AUTH_PASSWORD_CHANGE',
+      { userId: session.user_id, revokedSessions, revokedShares },
+      req.ip,
+      session.user_id
+    );
 
     const user = await db.get(`SELECT totp_enabled, username, totp_secret, force_2fa FROM users WHERE id = ?`, [session.user_id]);
     

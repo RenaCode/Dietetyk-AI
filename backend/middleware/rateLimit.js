@@ -168,4 +168,63 @@ setInterval(() => {
   }
 }, 10 * 60 * 1000);
 
-module.exports = { apiRateLimiter, WINDOW_MS, MAX_REQUESTS, summaryEmailLimiter, aiRateLimiter };
+// A dedicated per-user limiter for PDF report generation (GET /api/user/export-pdf-report
+// and POST /api/user/shared-reports in routes/account.js). buildHealthReportPdf runs three
+// queries over a window of up to 180 days, aggregates them and renders a document in memory
+// - the most expensive thing this backend does outside Gemini - and until now NOTHING
+// limited it per user. The only cover was the global apiRateLimiter, which in this cluster
+// is one 120 req/min bucket shared by the entire internet (see the note above
+// `app.set('trust proxy', ...)` in server.js), so a loop on this endpoint is both cheap for
+// the caller and a denial of service for everyone else.
+// 10 per 10 minutes: generating a report for a doctor is something a person does once, twice
+// if they change the period - the limit is set where no honest use can reach it.
+const PDF_WINDOW_MS = 10 * 60 * 1000;
+const PDF_MAX_REQUESTS = 10;
+
+const pdfHits = new Map(); // userId -> { count, windowStart }
+
+function pdfRateLimiter(req, res, next) {
+  if (process.env.NODE_ENV === 'test' || process.env.CI === 'true') {
+    return next();
+  }
+  const userId = req.user && req.user.id;
+  if (!userId) return next(); // requireAuth should have caught this earlier; defensive only
+
+  const now = Date.now();
+  let rec = pdfHits.get(userId);
+
+  if (!rec || (now - rec.windowStart) > PDF_WINDOW_MS) {
+    rec = { count: 0, windowStart: now };
+  }
+
+  rec.count += 1;
+  pdfHits.set(userId, rec);
+
+  if (rec.count > PDF_MAX_REQUESTS) {
+    const retryAfterSec = Math.ceil((rec.windowStart + PDF_WINDOW_MS - now) / 1000);
+    res.set('Retry-After', String(Math.max(retryAfterSec, 1)));
+
+    logger.security(
+      `PDF report limit exceeded (${rec.count}/${PDF_MAX_REQUESTS})`,
+      'RATE_LIMIT_PDF',
+      { path: req.originalUrl, method: req.method },
+      req.ip || 'unknown',
+      userId
+    );
+
+    return res.status(429).json({ error: 'Zbyt wiele raportów PDF w krótkim czasie. Spróbuj ponownie za kilka minut.' });
+  }
+
+  next();
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, rec] of pdfHits.entries()) {
+    if ((now - rec.windowStart) > PDF_WINDOW_MS) {
+      pdfHits.delete(userId);
+    }
+  }
+}, 10 * 60 * 1000);
+
+module.exports = { apiRateLimiter, WINDOW_MS, MAX_REQUESTS, summaryEmailLimiter, aiRateLimiter, pdfRateLimiter, PDF_MAX_REQUESTS };

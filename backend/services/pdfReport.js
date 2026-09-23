@@ -45,15 +45,38 @@ async function buildHealthReportPdf(userId, requestedDays) {
     // The same tables and columns as the email reports (summaries.js) - without image_base64
     // or analysis_json, which this report never displays.
   const [meals, healthMetrics, bodyMeasurements] = await Promise.all([
+    // `date` is NOT an unused column here, however much it looks like one next to seven
+    // values that are only ever summed. aggregateNutritionAndHealth divides every nutrition
+    // total by the number of DISTINCT m.date values, so a SELECT without it makes the
+    // divisor 1 and turns "average daily intake" into the sum of the whole window - up to
+    // 180 days of meals reported to a doctor as a single day's eating. The same column was
+    // dropped from the weekly and monthly report queries for the same reason and with the
+    // same result (tests/test-summary-aggregation.js); summaries.js now rejects rows without
+    // it rather than averaging them, and tests/test-pdf-report.js pins the figure here.
     db.all(
-      `SELECT calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ?`,
+      `SELECT date, calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ?`,
       [userId, startDate]
     ),
     db.all(`SELECT * FROM health_metrics WHERE user_id = ? AND date >= ? ORDER BY date ASC`, [userId, startDate]),
     db.all(`SELECT * FROM body_measurements WHERE user_id = ? AND date >= ? ORDER BY date ASC`, [userId, startDate])
   ]);
 
-  const stats = aggregateNutritionAndHealth(meals, healthMetrics, days);
+  // `userId` and `startDate` are passed so workoutsCount is counted from apple_health_workouts,
+  // exactly as the weekly and monthly e-mail reports and routes/dashboard.js do it. Omitting
+  // them silently selects the fallback branch in aggregateNutritionAndHealth - days where
+  // active_calories > 0 - which is the measure audit round 12 REJECTED: it scores a day with
+  // three workouts as one, and misses strength training done without a watch entirely. So the
+  // document going to a doctor was showing the number this project had already thrown out,
+  // while the e-mail reports built from the same data showed the corrected one. Same failure
+  // shape as the missing `date` above: a fix applied at one call site, another left behind.
+  //
+  // await, because aggregateNutritionAndHealth is async (it may query apple_health_workouts).
+  // Without it `stats` was a Promise: every stats.avg* below read as undefined and the
+  // document handed to a doctor printed "Energia: undefined kcal" on every averages line,
+  // while still generating, downloading and opening like a valid report. Nothing else here
+  // would have caught it - the missing rejection handling made it worse rather than louder,
+  // since server.js's unhandledRejection handler logs and returns instead of exiting.
+  const stats = await aggregateNutritionAndHealth(meals, healthMetrics, days, userId, startDate);
   const firstMeasurement = bodyMeasurements.length > 0 ? bodyMeasurements[0] : null;
   const lastMeasurement = bodyMeasurements.length > 0 ? bodyMeasurements[bodyMeasurements.length - 1] : null;
 
@@ -108,7 +131,13 @@ async function buildHealthReportPdf(userId, requestedDays) {
       row('Kroki', `${stats.avgSteps}`);
       row('Aktywne kalorie spalone', `${stats.avgActiveCalories} kcal`);
       row('Nawodnienie', `${stats.avgWaterMl} ml`);
-      row('Liczba dni z treningiem', `${stats.workoutsCount}`);
+      // "Treningi", not "dni z treningiem": since the call above counts rows in
+      // apple_health_workouts, the figure is the number of WORKOUTS in the period, and two
+      // sessions in one day count as two. The wording follows the e-mail reports' own tables
+      // ("Treningi w tygodniu" / "Treningi w miesiącu" in services/summaries.js), so the same
+      // number is not given two different names in two documents the patient may show side
+      // by side.
+      row('Treningi w okresie', `${stats.workoutsCount}`);
 
     // --- Sleep, recovery, body composition ---
       sectionTitle('Sen, regeneracja i skład ciała (Oura / Withings)');

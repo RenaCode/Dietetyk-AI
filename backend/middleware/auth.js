@@ -1,5 +1,25 @@
 const db = require('../db');
 
+// Deletes a user's session rows. With `keepToken` the caller's own session survives, which is
+// what every "this was me, log everything else out" action wants: the user stays where they
+// are, every other device is cut off.
+//
+// This exists because changing a password used to do NOTHING to existing sessions. A stolen
+// session token (XSS against localStorage, a borrowed laptop, a token pulled out of an old
+// log line) remained valid after the victim changed their password, and middleware/auth.js
+// below re-extends any token used at least once a week - so the attacker's session simply
+// never expired. `DELETE FROM sessions WHERE user_id` appeared ONLY in the three admin
+// endpoints (routes/admin.js); no user-reachable path existed, which left the victim of a
+// token leak with no way whatsoever to revoke it. The password change is the one action a
+// user takes when they believe they have been compromised, so it must be the action that
+// ends every other session.
+async function revokeUserSessions(userId, keepToken = null) {
+  const result = keepToken
+    ? await db.run(`DELETE FROM sessions WHERE user_id = ? AND token != ?`, [userId, keepToken])
+    : await db.run(`DELETE FROM sessions WHERE user_id = ?`, [userId]);
+  return result.changes;
+}
+
 async function requireAuth(req, res, next) {
   // Exception for the public login/invitation/registration/callback routes
   if (
@@ -87,15 +107,54 @@ async function requireAuth(req, res, next) {
     // Extend the session by 7 days only when fewer than 6 days remain before expiry
     // (this avoids writing to SQLite on every single API request, which could cause
     // SQLITE_BUSY locks under the dashboard's parallel requests).
+    //
+    // The extension has no self-imposed end: a token used once a week is renewed for another
+    // seven days, for ever. "The session expires after 7 days" is therefore true only of a
+    // token nobody touches - a stolen token being polled by a script is precisely the one
+    // that never expires. The cap below is what makes the 7 days mean something, and it is
+    // read from the session row rather than computed here: only the row knows when the
+    // session was born.
+    //
+    // DEPENDENCY: `sessions.absolute_expires_at` does not exist yet - adding it belongs to
+    // db.js (schema + backfill), which this change deliberately does not touch. Until that
+    // migration lands the column reads as undefined and the code below behaves exactly as
+    // before; once it lands, the same code starts enforcing the cap with no further edit
+    // here. The column is expected to hold the same 'YYYY-MM-DD HH:MM:SS' UTC text format as
+    // expires_at, written once when the session is created.
     const expiresAtMs = new Date(session.expires_at.replace(' ', 'T') + 'Z').getTime();
     const nowMs = Date.now();
     const remainingTimeMs = expiresAtMs - nowMs;
     const sixDaysInMs = 6 * 24 * 60 * 60 * 1000;
+    const absoluteCapMs = session.absolute_expires_at
+      ? new Date(String(session.absolute_expires_at).replace(' ', 'T') + 'Z').getTime()
+      : null;
+
+    if (absoluteCapMs !== null && Number.isFinite(absoluteCapMs) && absoluteCapMs <= nowMs) {
+      // Past the hard limit the row is not merely unusable, it is deleted: leaving it in
+      // place would keep answering "session expired" while still being a live row that a
+      // future change to this query could re-admit.
+      await db.run(`DELETE FROM sessions WHERE token = ?`, [token]);
+      return res.status(401).json({ error: 'Sesja wygasła lub jest niepoprawna. Zaloguj się ponownie.' });
+    }
 
     if (remainingTimeMs < sixDaysInMs) {
-      const nextWeek = new Date(nowMs + 7 * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
-      await db.run(`UPDATE sessions SET expires_at = ? WHERE token = ?`, [nextWeek, token]);
+      let nextExpiryMs = nowMs + 7 * 24 * 60 * 60 * 1000;
+      if (absoluteCapMs !== null && Number.isFinite(absoluteCapMs)) {
+        nextExpiryMs = Math.min(nextExpiryMs, absoluteCapMs);
+      }
+      // Never move expiry backwards: with the cap less than 7 days away the renewal would
+      // otherwise SHORTEN a session that is still legitimately valid.
+      if (nextExpiryMs > expiresAtMs) {
+        const nextExpiry = new Date(nextExpiryMs).toISOString().replace('T', ' ').slice(0, 19);
+        await db.run(`UPDATE sessions SET expires_at = ? WHERE token = ?`, [nextExpiry, token]);
+      }
     }
+
+    // The routes need the token that authenticated this request, so that "log out everywhere
+    // else" and the post-password-change revocation can keep exactly this session alive while
+    // deleting the rest. Reading the Authorization header again inside each route would
+    // duplicate the 'Bearer ' handling above and drift from it.
+    req.sessionToken = token;
 
     req.user = {
       id: session.user_id,
@@ -122,5 +181,6 @@ function requireAdmin(req, res, next) {
 
 module.exports = {
   requireAuth,
-  requireAdmin
+  requireAdmin,
+  revokeUserSessions
 };

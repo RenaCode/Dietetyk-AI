@@ -7,6 +7,25 @@ const { syncOura, syncWithings, syncGoogleFit } = require('../services/sync');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const { encrypt } = require('../utils/encryption');
 
+// The redirect_uri sent to Withings, computed in ONE place.
+//
+// OAuth 2.0 requires the redirect_uri presented when the code is exchanged to be identical to
+// the one used to obtain it. This code used to compute it twice, differently: the
+// authorisation URL honoured the user's optional `withings_redirect_uri` setting (Settings ->
+// "Withings Custom Redirect URI", the field exists for people whose Withings Developer portal
+// entry points at another domain), while the exchange always rebuilt `${base}${req.path}`.
+// Filling that field in therefore broke the integration deterministically: the consent screen
+// worked, the exchange came back with an invalid_grant-class error, and the user was dropped
+// at /?tab=setup&error=withings_exchange_failed with nothing pointing at the setting they had
+// just changed. `defaultPath` exists because the exchange can arrive at either callback route
+// (the Oura callback also handles states whose service is 'withings').
+async function resolveWithingsRedirectUri(req, userId, defaultPath) {
+  const appUrl = await getAppConfig('app_url');
+  const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
+  const userRedirectUri = await getUserSetting(userId, 'withings_redirect_uri');
+  return userRedirectUri || process.env.WITHINGS_REDIRECT_URI || `${base}${defaultPath}`;
+}
+
 router.get('/api/auth/oura', async (req, res) => {
   const { token } = req.query;
   if (!token) return res.status(401).send('Brak tokenu autoryzacji.');
@@ -57,9 +76,9 @@ router.get('/api/auth/oura/callback', async (req, res) => {
     try {
       const clientId = await getUserSetting(userId, 'withings_client_id');
       const clientSecret = await getUserSetting(userId, 'withings_client_secret');
-      const appUrl = await getAppConfig('app_url');
-      const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
-      const redirectUri = `${base}${req.path}`; // dynamiczny matching: /api/auth/oura/callback
+      // The same value the authorisation used - see resolveWithingsRedirectUri. req.path is
+      // the fallback because this exchange happens on the Oura callback route.
+      const redirectUri = await resolveWithingsRedirectUri(req, userId, req.path);
 
       const response = await fetchWithTimeout('https://wbsapi.withings.net/v2/oauth2', {
         method: 'POST',
@@ -181,10 +200,7 @@ router.get('/api/auth/withings', async (req, res) => {
     }
 
     const state = generateOAuthState(session.user_id, 'withings');
-    const appUrl = await getAppConfig('app_url');
-    const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
-    const dbRedirectUri = await getUserSetting(session.user_id, 'withings_redirect_uri');
-    const redirectUri = dbRedirectUri || process.env.WITHINGS_REDIRECT_URI || `${base}/api/auth/withings/callback`;
+    const redirectUri = await resolveWithingsRedirectUri(req, session.user_id, '/api/auth/withings/callback');
 
     const authUrl = `https://account.withings.com/oauth2_user/authorize2?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=user.metrics,user.activity`;
     res.redirect(authUrl);
@@ -206,7 +222,12 @@ router.get('/api/auth/withings/callback', async (req, res) => {
   }
 
   const verified = verifyOAuthState(state);
-  if (!verified) {
+  // `service` is checked here the way the Google Fit callback checks it (see
+  // /api/auth/google-fit/callback below). The userId comes from the signed state either way,
+  // so this is not a way between accounts - but without it a state minted for another service
+  // stores its token under 'withings' in the caller's own account, and the next sync reads a
+  // Withings token that is not one.
+  if (!verified || verified.service !== 'withings') {
     return res.status(400).send('Nieprawidłowy parametr state (zabezpieczenie CSRF).');
   }
   const { userId } = verified;
@@ -214,9 +235,7 @@ router.get('/api/auth/withings/callback', async (req, res) => {
   try {
     const clientId = await getUserSetting(userId, 'withings_client_id');
     const clientSecret = await getUserSetting(userId, 'withings_client_secret');
-    const appUrl = await getAppConfig('app_url');
-    const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
-    const redirectUri = `${base}${req.path}`;
+    const redirectUri = await resolveWithingsRedirectUri(req, userId, req.path);
 
     const response = await fetchWithTimeout('https://wbsapi.withings.net/v2/oauth2', {
       method: 'POST',

@@ -1,7 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { t } from '../utils/i18n';
 
-export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing, frequentMeals, onRepeatMeal }) {
+// mealsUnknown: the day's data (/api/dashboard) failed to load, so an empty `meals` array
+// means "we do not know", not "the user ate nothing". Without this distinction a 500 from
+// the backend rendered as the confident claim "Brak wprowadzonych posiłków na ten dzień".
+export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing, frequentMeals, onRepeatMeal, mealsUnknown = false }) {
   const [mealText, setMealText] = useState('');
   const [imageSrc, setImageSrc] = useState(null);
   const [isCompressing, setIsCompressing] = useState(false);
@@ -299,7 +302,11 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
         <h3 className="card-title">{t("📋 Dzisiejsze posiłki")}</h3>
         
         {meals.length === 0 ? (
-          <p className="empty-state">{t("Brak wprowadzonych posiłków na ten dzień. Wpisz coś powyżej lub dodaj zdjęcie!")}</p>
+          mealsUnknown ? (
+            <p className="empty-state">{t("Nie udało się wczytać posiłków z tego dnia — to nie znaczy, że ich nie ma. Odśwież stronę lub spróbuj ponownie za chwilę.")}</p>
+          ) : (
+            <p className="empty-state">{t("Brak wprowadzonych posiłków na ten dzień. Wpisz coś powyżej lub dodaj zdjęcie!")}</p>
+          )
         ) : (
           <div className="meals-list">
             {meals.map((meal) => (

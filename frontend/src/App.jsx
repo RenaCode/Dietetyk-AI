@@ -5,13 +5,18 @@ import ActivityTracker from './components/ActivityTracker';
 import Settings from './components/Settings';
 import AdminPanel from './components/AdminPanel';
 import Trends from './components/Trends';
+import SummaryUnavailable from './components/SummaryUnavailable';
 import { t, setLanguage, getLanguage } from './utils/i18n';
+import { getWarsawDateString } from './utils/dates';
 
-// Helper that returns today's date in YYYY-MM-DD format
+// Today's date in YYYY-MM-DD, in the timezone the BACKEND uses (Europe/Warsaw).
+//
+// This used to be computed from getTimezoneOffset(), i.e. the browser's timezone, which
+// disagrees with the backend for anyone whose device is not on Polish time: at 20:00 on
+// 22.09 in New York the backend's day is already 23.09, so a meal saved from here landed
+// on the wrong server-side day and never entered "today's" balance. See utils/dates.js.
 function getLocalDateString() {
-  const d = new Date();
-  const tzOffset = d.getTimezoneOffset() * 60000;
-  return new Date(d.getTime() - tzOffset).toISOString().slice(0, 10);
+  return getWarsawDateString();
 }
 
 // Footer - shared by the login screen and the main application. The content (version
@@ -116,24 +121,16 @@ export default function App() {
   const [registerConfirmPassword, setRegisterConfirmPassword] = useState('');
   const [isCheckingToken, setIsCheckingToken] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false); // F-S9: guard against a double registration submit
+// `summary: null` means "we do not know this user's numbers yet" and is deliberately NOT
+// a filled-in object. It used to be seeded with literals (target_calories: 2500,
+// bmr: 1800, calories_burned_total: 1800, net_calories: -1800) and fetchDashboardData
+// assigned to this state only inside the `res.ok` branch - so a 500 from the backend, a
+// Gemini timeout in /api/dashboard or a dropped connection left those literals rendered
+// next to the unit "kcal", and every launch showed them for the first second. A user on a
+// reduction diet was told they had a 1800 kcal deficit that nobody had measured.
+// App renders <SummaryUnavailable/> instead of the dashboard while this is null.
   const [dashboardData, setDashboardData] = useState({
-    summary: {
-      target_calories: 2500,
-      target_protein: 150,
-      target_carbs: 250,
-      target_fat: 80,
-      bmr: 1800,
-      calories_eaten: 0,
-      calories_burned_active: 0,
-      calories_burned_total: 1800,
-      net_calories: -1800,
-      eaten_protein: 0,
-      eaten_carbs: 0,
-      eaten_fat: 0,
-      steps: 0,
-      workouts: [],
-      last_sync: null
-    },
+    summary: null,
     meals: [],
     aiAdvice: t('Ładowanie porad dietetyka...')
   });
@@ -150,9 +147,25 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [userProfile, setUserProfile] = useState({ username: '', avatar_base64: '' });
-// A "is this still the current request" flag - see the comment in the useEffect below
-// (protection against a race condition when the date or session changes rapidly).
-  const isCurrentRequestRef = useRef(true);
+// Sequence number of the newest /api/dashboard request - see the comment in the useEffect
+// below (protection against a race condition when the date or session changes rapidly).
+//
+// This used to be a single shared boolean (`isCurrentRequestRef`), which could not tell
+// two requests apart and therefore never rejected anything: the effect's cleanup
+// (`current = false`) and the next effect's body (`current = true`) run inside the SAME
+// synchronous React commit, so by the time ANY response resolved the flag was already
+// back to true. A response for 21.09 arriving after the response for 22.09 sailed straight
+// through the guard and overwrote the newer day - the date picker said 22.09 while the
+// calories, workouts and meals came from 21.09, with no error shown.
+// A counter compares the response against the request that actually started last, the same
+// way ActivityTracker.jsx already does it for measurements (measurementsRequestRef).
+  const dashboardRequestSeqRef = useRef(0);
+// Whether the LAST attempt to read /api/dashboard actually failed, as opposed to simply
+// not having finished. On the very first render isLoading is still false (the effect that
+// starts the fetch has not run yet), so keying the placeholder off isLoading alone would
+// flash "Nie udało się wczytać danych dnia" for one frame on every launch - claiming a
+// failure that had not happened. Waiting and failing are two different states here too.
+  const [dashboardLoadFailed, setDashboardLoadFailed] = useState(false);
 
 // The set of meal IDs that already have a delete request in flight - see the comment in
 // handleDeleteMeal (protection against a double click sending a duplicate DELETE).
@@ -162,16 +175,19 @@ export default function App() {
   useEffect(() => {
 // Race-condition guard: if the user changes the date quickly, the response to the previous
 // (already stale) dashboard request could arrive later than the response for the new date
-// and overwrite it with the wrong data. isCurrent, set to false in the effect's cleanup, is
-// checked in fetchDashboardData before setDashboardData so a late response is ignored.
-    isCurrentRequestRef.current = true;
+// and overwrite it with the wrong data. Every call to fetchDashboardData takes the next
+// sequence number and only writes state if it is still the newest one.
     if (sessionToken) {
       fetchDashboardData();
       fetchSyncToken();
       fetchUserProfile();
     }
     return () => {
-      isCurrentRequestRef.current = false;
+// Bumping the counter on cleanup invalidates anything still in flight even when the new
+// effect run does not start a fetch of its own (signing out clears sessionToken and
+// fetchDashboardData returns early) - otherwise the last in-flight response would still
+// match the counter and land after the sign-out.
+      dashboardRequestSeqRef.current += 1;
     };
   }, [selectedDate, sessionToken]);
 
@@ -428,7 +444,13 @@ export default function App() {
 
   const fetchDashboardData = async () => {
     if (!sessionToken) return;
+// Claim a sequence number BEFORE the fetch starts; any later call (a date change, the
+// hourly interval, onRefresh after saving supplements, handleAddMeal, onGoalsUpdate from
+// ActivityTracker) claims a higher one and thereby invalidates this request.
+    dashboardRequestSeqRef.current += 1;
+    const requestId = dashboardRequestSeqRef.current;
     setIsLoading(true);
+    setDashboardLoadFailed(false);
     setErrorMessage('');
     try {
       const res = await fetch(`/api/dashboard?date=${selectedDate}`, {
@@ -438,32 +460,40 @@ export default function App() {
       });
       if (res.ok) {
         const data = await res.json();
-// If the date or session changed in the meantime (a new effect has already started and set
-// the flag to false in its cleanup), we ignore this late response so that newer, already
-// displayed data is not overwritten with older data.
-        if (!isCurrentRequestRef.current) return;
+// If a newer request has since started (the date or session changed), we ignore this late
+// response so that newer, already displayed data is not overwritten with older data.
+        if (requestId !== dashboardRequestSeqRef.current) return;
         setDashboardData({
           summary: data.summary,
           meals: data.meals,
           aiAdvice: data.aiAdvice
         });
       } else {
+        if (requestId !== dashboardRequestSeqRef.current) return;
         if (res.status === 401) {
           handleLogout();
           setErrorMessage(t('Sesja wygasła. Zaloguj się ponownie.'));
         } else {
           setErrorMessage(t('Nie udało się pobrać danych z serwera backend.'));
         }
+// Drop whatever summary is on screen. Keeping the previous day's summary under a new date
+// (or, before this fix, the hard-coded 2500 kcal / 1800 BMR defaults) means the dashboard
+// keeps asserting metabolic numbers that this failed read never produced.
+        setDashboardData(prev => ({ ...prev, summary: null, meals: [] }));
+        setDashboardLoadFailed(true);
       }
     } catch (err) {
       console.error(err);
+      if (requestId !== dashboardRequestSeqRef.current) return;
       setErrorMessage(t('Błąd połączenia z serwerem. Upewnij się, że backend działa.'));
+      setDashboardData(prev => ({ ...prev, summary: null, meals: [] }));
+      setDashboardLoadFailed(true);
     } finally {
-// FIX (audit round 17): `setIsLoading(false)` previously ran regardless of
-// `isCurrentRequestRef.current` - a late response from an already stale request (after a
-// rapid date change, for instance) could switch off the loading spinner of a newer request
-// that was still in flight. Same condition as for `setDashboardData` above.
-      if (isCurrentRequestRef.current) {
+// FIX (audit round 17): `setIsLoading(false)` previously ran unconditionally - a late
+// response from an already stale request (after a rapid date change, for instance) could
+// switch off the loading spinner of a newer request that was still in flight. Same
+// condition as for `setDashboardData` above.
+      if (requestId === dashboardRequestSeqRef.current) {
         setIsLoading(false);
       }
     }
@@ -1309,7 +1339,13 @@ export default function App() {
       <main>
         {currentTab === 'dashboard' && (
           <div className="premium-tab-content">
-            <Dashboard summary={dashboardData.summary} aiAdvice={dashboardData.aiAdvice} sessionToken={sessionToken} selectedDate={selectedDate} onNavigate={setCurrentTab} onRefresh={fetchDashboardData} onLogout={handleLogout} userProfile={userProfile} language={appLang} />
+            {/* Without a successful read of the day summary there are no numbers to show.
+                Dashboard reads summary.* in hundreds of places, so the guard lives here,
+                at the single point where the component is mounted - that way no code path
+                inside it can reach for a value the backend never sent. */}
+            {dashboardData.summary
+              ? <Dashboard summary={dashboardData.summary} aiAdvice={dashboardData.aiAdvice} sessionToken={sessionToken} selectedDate={selectedDate} onNavigate={setCurrentTab} onRefresh={fetchDashboardData} onLogout={handleLogout} userProfile={userProfile} language={appLang} />
+              : <SummaryUnavailable hasFailed={dashboardLoadFailed} onRetry={fetchDashboardData} />}
           </div>
         )}
 
@@ -1317,6 +1353,7 @@ export default function App() {
           <div className="premium-tab-content">
             <MealLogger
               meals={dashboardData.meals}
+              mealsUnknown={dashboardData.summary === null}
               onAddMeal={handleAddMeal}
               onDeleteMeal={handleDeleteMeal}
               isAnalyzing={isAnalyzing}
@@ -1329,7 +1366,11 @@ export default function App() {
 
         {currentTab === 'activity' && (
           <div className="premium-tab-content">
-            <ActivityTracker summary={dashboardData.summary} userProfile={userProfile} sessionToken={sessionToken} onGoalsUpdate={fetchDashboardData} onLogout={handleLogout} language={appLang} />
+            {/* Same guard as for Dashboard - ActivityTracker reads summary.last_sync in an
+                effect dependency array and renders steps/calories from summary.*. */}
+            {dashboardData.summary
+              ? <ActivityTracker summary={dashboardData.summary} userProfile={userProfile} sessionToken={sessionToken} onGoalsUpdate={fetchDashboardData} onLogout={handleLogout} language={appLang} />
+              : <SummaryUnavailable hasFailed={dashboardLoadFailed} onRetry={fetchDashboardData} />}
           </div>
         )}
 

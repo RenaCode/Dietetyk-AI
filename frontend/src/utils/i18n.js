@@ -625,6 +625,22 @@ const TRANSLATIONS = {
   "czw": "Thu",
   "pt": "Fri",
   "sob": "Sat",
+
+  // Failed-read states (audit 2026-09-23). These exist so the interface can say "we do not
+  // know" instead of substituting a zero or a default - a health app must never present an
+  // unmeasured number as a measurement.
+  "Brak danych": "No data",
+  "Spróbuj ponownie": "Try again",
+  "Nie udało się wczytać danych dnia": "Could not load this day's data",
+  "Nie pokazujemy tu żadnych liczb, bo nie znamy Twoich dzisiejszych wartości — zamiast zgadywać, poczekaj i spróbuj ponownie.": "No numbers are shown here because we do not know your values for this day - rather than guess, wait a moment and try again.",
+  "Nie udało się policzyć analiz dla tego dnia. Karty poniżej mogą być puste — to błąd odczytu, a nie brak Twoich danych.": "The analyses for this day could not be computed. The cards below may be empty - that is a read failure, not missing data of yours.",
+  "Nie udało się wczytać historii pomiarów": "Could not load your measurement history",
+  "To błąd odczytu z serwera, a nie brak Twoich danych — Twoje integracje najpewniej działają poprawnie.": "This is a server read failure, not missing data of yours - your integrations are most likely working fine.",
+  "Nie udało się wczytać historii pomiarów — to błąd odczytu, nie brak danych.": "Could not load your measurement history - a read failure, not missing data.",
+  "Nie udało się wczytać historii — to błąd odczytu, nie brak Twoich danych.": "Could not load the history - a read failure, not missing data of yours.",
+  "Nie udało się wczytać posiłków z tego dnia — to nie znaczy, że ich nie ma. Odśwież stronę lub spróbuj ponownie za chwilę.": "Could not load this day's meals - that does not mean there are none. Reload the page or try again shortly.",
+  "Prognoza niedostępna — nie udało się wczytać historii pomiarów.": "Forecast unavailable - the measurement history could not be loaded.",
+  "jeden pomiar, trend pojawi się po kolejnym ważeniu": "one measurement; a trend appears after your next weigh-in",
 };
 
 let currentLang = localStorage.getItem("language") || "pl";

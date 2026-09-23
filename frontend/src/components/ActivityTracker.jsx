@@ -4,6 +4,13 @@ import { t } from '../utils/i18n';
 export default function ActivityTracker({ summary = {}, userProfile, sessionToken, onGoalsUpdate, onLogout }) {
   const [historyData, setHistoryData] = useState([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+// Set when /api/health/history could not be read. Without it a 503 left historyData as []
+// and all four charts printed "Brak danych historycznych..." - a statement about the
+// user's data made on the basis of a read that never returned. The weight forecast
+// disappeared at the same time without even the "Za mało danych do prognozy" note (that
+// note is itself gated on historyData.length > 0), so the user lost the section with no
+// explanation at all.
+  const [historyError, setHistoryError] = useState(false);
 
   // Body circumference measurement state
   const [measurementsData, setMeasurementsData] = useState([]);
@@ -106,12 +113,20 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
         const res = await fetch('/api/health/history', {
           headers: { 'Authorization': `Bearer ${sessionToken}` }
         });
+        if (cancelled) return;
         if (res.ok) {
           const data = await res.json();
-          if (!cancelled) setHistoryData(data);
+          if (!cancelled) { setHistoryData(data); setHistoryError(false); }
+        } else if (res.status === 401) {
+        // 401 was not handled here at all: the tab simply stopped refreshing while the rest
+        // of the app signs the user out on an expired session.
+          if (onLogout) onLogout();
+        } else {
+          setHistoryError(true);
         }
       } catch (err) {
         console.error('Failed to fetch the health history:', err);
+        if (!cancelled) setHistoryError(true);
       } finally {
         if (!cancelled) setIsLoadingHistory(false);
       }
@@ -270,7 +285,9 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
     if (validData.length === 0) {
       return (
         <div style={{ height: '180px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: 'var(--text-dim)', fontSize: '0.85rem' }}>
-          Brak danych historycznych dla: {labelY}
+          {historyError
+            ? t('Nie udało się wczytać historii — to błąd odczytu, nie brak Twoich danych.')
+            : `Brak danych historycznych dla: ${labelY}`}
         </div>
       );
     }
@@ -330,7 +347,9 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
     if (validData.length === 0) {
       return (
         <div style={{ height: '180px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: 'var(--text-dim)', fontSize: '0.85rem' }}>
-          Brak danych historycznych do wyrenderowania wykresu.
+          {historyError
+            ? t('Nie udało się wczytać historii — to błąd odczytu, nie brak Twoich danych.')
+            : 'Brak danych historycznych do wyrenderowania wykresu.'}
         </div>
       );
     }
@@ -437,7 +456,9 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
     if (validData.length === 0) {
       return (
         <div style={{ height: '180px', display: 'flex', justifyContent: 'center', alignItems: 'center', color: 'var(--text-dim)', fontSize: '0.85rem' }}>
-          Brak danych historycznych do wyrenderowania wykresu.
+          {historyError
+            ? t('Nie udało się wczytać historii — to błąd odczytu, nie brak Twoich danych.')
+            : 'Brak danych historycznych do wyrenderowania wykresu.'}
         </div>
       );
     }
@@ -695,7 +716,10 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                   </div>
                 </div>
                 <strong style={{ fontSize: '1.1rem', color: '#fff' }}>
-                  {summary.steps != null ? summary.steps.toLocaleString('pl-PL') : '0'}
+                  {/* '0' here claimed the user had taken no steps whenever the field was
+                      simply absent (no sync yet). Every neighbouring field in this card
+                      already uses '--' for "unknown" - see the rows further down. */}
+                  {summary.steps != null ? summary.steps.toLocaleString('pl-PL') : '--'}
                 </strong>
               </div>
 
@@ -708,7 +732,7 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
                   </div>
                 </div>
                 <strong style={{ fontSize: '1.1rem', color: 'var(--color-secondary)' }}>
-                  {summary.calories_burned_active != null ? `${summary.calories_burned_active} kcal` : '0 kcal'}
+                  {summary.calories_burned_active != null ? `${summary.calories_burned_active} kcal` : '--'}
                 </strong>
               </div>
 
@@ -917,9 +941,16 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
               )}
             </div>
           )}
-          {!isLoadingHistory && !weightForecast && historyData.length > 0 && (
+          {/* The "za mało danych" note is gated on historyData.length > 0, so a failed read
+              used to remove the forecast AND its explanation in one go. */}
+          {!isLoadingHistory && !weightForecast && historyData.length > 0 && !historyError && (
             <p style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.3)', marginTop: '10px', textAlign: 'center' }}>
               Za mało danych do prognozy trendu wagi (min. 5 pomiarów).
+            </p>
+          )}
+          {!isLoadingHistory && historyError && (
+            <p style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.3)', marginTop: '10px', textAlign: 'center' }}>
+              {t('Prognoza niedostępna — nie udało się wczytać historii pomiarów.')}
             </p>
           )}
         </div>

@@ -3,6 +3,7 @@ const { getLocalDateString, getWarsawWallClock } = require('./utils/dates');
 const { syncAllOura, syncAllWithings, syncAllGoogleFit } = require('./services/sync');
 const { sendWeeklySummaryForUser, sendDailySummaryForUser, sendMonthlySummaryForUser } = require('./services/summaries');
 const { sendWeeklyAdminReport } = require('./services/adminReport');
+const logger = require('./services/logger');
 
 async function checkAndSendAutomatedSummaries() {
   try {
@@ -147,11 +148,32 @@ let lastSyncedHourKey = null;
 // hourKey). It does NOT protect against overlapping runs when syncing many users -
 // processed SEQUENTIALLY, see syncAllOura/syncAllWithings/syncAllGoogleFit in sync.js -
 // takes longer than the remainder of the clock hour. Then hourKey changes, the previous
-// condition lets a new call through, and two full runs proceed concurrently: hitting the
-// same external APIs and database rows for the same users, and potentially sending
-// summary emails TWICE. The `isSyncRunning` flag is a second, independent guard against
-// exactly that overlap.
+// condition lets a new call through, and two full runs proceed concurrently, hitting the
+// same external APIs and database rows for the same users. The `isSyncRunning` flag is a
+// second, independent guard against exactly that overlap. (Summary emails used to be
+// covered by these two guards as well; they have their own guard now - see
+// isSummaryCheckRunning below.)
 let isSyncRunning = false;
+let syncStartedAtMs = null;
+
+// How long a healthy external sync may hold `isSyncRunning` before we treat the flag as
+// stuck and release it. A run is a handful of sequential HTTP calls per user, each bounded
+// by fetchWithTimeout (15s by default, and that timeout now covers reading the response
+// BODY as well - see utils/fetchWithTimeout.js, which is what used to let a run hang
+// forever). 30 minutes is far outside anything healthy and inside the one-hour cadence.
+//
+// Releasing the flag can in principle let a second run start while a first is somehow still
+// alive. That was unacceptable while the summary sends lived behind this flag - two runs
+// meant two emails - but they no longer do (see below), and the remaining work is upserts
+// into health_metrics, which are idempotent. A standstill until the next pod restart is the
+// worse of the two failures.
+const SYNC_STUCK_AFTER_MS = 30 * 60 * 1000;
+
+// Summaries get their own re-entrancy guard now that they run on every 5-minute tick rather
+// than once an hour. `last_*_summary_sent` is written AFTER the mail goes out, so two
+// overlapping checks - a send slower than the tick interval - would each see "not sent yet"
+// and each send.
+let isSummaryCheckRunning = false;
 
 async function runHourlySyncIfDue() {
   const now = new Date();
@@ -162,46 +184,103 @@ async function runHourlySyncIfDue() {
   const warsawHour = getWarsawWallClock(now).getUTCHours();
   const hourKey = `${getLocalDateString()}T${warsawHour}`;
 
-  if (hourKey === lastSyncedHourKey) {
-    return; // this hour's tick has already run
+  // THE ONCE-PER-HOUR GATE PROTECTS THE EXTERNAL SYNCS, NOTHING ELSE (audit 2026-09-23).
+  //
+  // The 05:00-22:00 window and the hourKey gate exist for Oura/Withings/Google Fit: there is
+  // nothing to fetch overnight, and no reason to burn those API quotas every five minutes.
+  // The summary check used to sit behind both of them, and behind the hourKey gate in
+  // particular that is fatal, because checkAndSendAutomatedSummaries() decides on
+  // `currentTimeStr >= scheduledTime`. The gate lets through only the FIRST tick of each
+  // clock hour, so the user's configured time was compared exactly once an hour, at whatever
+  // minute the process happened to start on. A summary set for 23:30 on a pod whose ticks
+  // land on :00/:05/:10 was tested at 23:00 ('23:00' >= '23:30' is false) and never again:
+  // the 23:35 and 23:55 ticks were dropped by the gate, and after midnight todayStr changes
+  // while every later comparison that day ('00:05' >= '23:30', '05:05' >= '23:30', ...) is
+  // false as well. The mail simply never went, and the log showed a perfectly ordinary
+  // "Checking summary schedules" line. An earlier fix removed the window from this path;
+  // the gate was left in place and kept the same hole open for a narrower set of minutes.
+  //
+  // So: the gate and the window now wrap ONLY syncAll*. The summary check and the admin
+  // report run on every tick - they are idempotent through the `last_*_summary_sent` /
+  // `last_admin_report_sent` keys, which is what makes running them 12x more often free.
+  if (hourKey !== lastSyncedHourKey && isWithinSyncWindow(now)) {
+    if (isSyncRunning && syncStartedAtMs !== null && (Date.now() - syncStartedAtMs) > SYNC_STUCK_AFTER_MS) {
+      console.error(
+        `[SCHEDULER ERROR] The external sync has been marked as running for ${Math.round((Date.now() - syncStartedAtMs) / 60000)} minutes ` +
+        '- far beyond any healthy run. Releasing the guard so syncing can resume; see SYNC_STUCK_AFTER_MS.'
+      );
+      isSyncRunning = false;
+      syncStartedAtMs = null;
+    }
+
+    if (isSyncRunning) {
+      console.warn('[SCHEDULER] The previous sync run is still in progress - skipping this tick to avoid overlapping runs.');
+    } else {
+      lastSyncedHourKey = hourKey;
+      isSyncRunning = true;
+      syncStartedAtMs = Date.now();
+      try {
+        console.log(`[SCHEDULER] Starting the hourly data sync (hour ${warsawHour}:00)...`);
+        await syncAllOura();
+        await syncAllWithings();
+        await syncAllGoogleFit();
+      } catch (err) {
+        console.error('[SCHEDULER ERROR] Hourly sync failed:', err);
+      } finally {
+        isSyncRunning = false;
+        syncStartedAtMs = null;
+      }
+    }
   }
 
-  if (isSyncRunning) {
-    console.warn('[SCHEDULER] The previous sync run is still in progress - skipping this tick to avoid overlapping runs.');
+  // Summaries run on EVERY tick, and deliberately outside the try/finally above: a failing
+  // or stuck external sync must not be able to take the mail with it.
+  if (isSummaryCheckRunning) {
+    console.warn('[SCHEDULER] The previous summary check is still running - skipping this tick.');
     return;
   }
-
-  lastSyncedHourKey = hourKey;
-  isSyncRunning = true;
+  isSummaryCheckRunning = true;
   try {
-    // The 05:00-22:00 window belongs to the EXTERNAL syncs only (Oura/Withings/Google Fit):
-    // there is nothing to fetch overnight and no reason to hold those API quotas open.
-    //
-    // The summary check must not share that window, and used to. The whole function returned
-    // early outside 05:00-22:00, so checkAndSendAutomatedSummaries never ran at 23:xx - and
-    // its own condition is `currentTimeStr >= scheduledTime` on a per-day idempotency key, so
-    // the send was not deferred to the next morning either: at 05:00 the next day
-    // '05:00' >= '23:30' is false, and every later tick that day is false as well. A user who
-    // picked any time between 23:00 and 23:59 in Settings (a plain <input type="time">, so
-    // every minute of the day is selectable) simply never received a daily, weekly or monthly
-    // summary, with nothing in the logs to say so. Times from 00:00 to 04:59 were not lost but
-    // were silently deferred to the 05:00 tick; they now fire at the hour the user chose.
-    if (isWithinSyncWindow(now)) {
-      console.log(`[SCHEDULER] Uruchamianie godzinowej synchronizacji danych (godzina ${warsawHour}:00)...`);
-      await syncAllOura();
-      await syncAllWithings();
-      await syncAllGoogleFit();
-    } else {
-      console.log(`[SCHEDULER] Outside the ${SYNC_WINDOW_START_HOUR}:00-${SYNC_WINDOW_END_HOUR}:00 sync window (hour ${warsawHour}) - skipping the external syncs, still checking scheduled summaries.`);
-    }
     await checkAndSendAutomatedSummaries();
     await runWeeklyAdminReportIfDue();
-    console.log('[SCHEDULER] Hourly tick finished.');
   } catch (err) {
-    console.error('[SCHEDULER ERROR] Hourly sync failed:', err);
+    console.error('[SCHEDULER ERROR] The summary check failed:', err);
   } finally {
-    isSyncRunning = false;
+    isSummaryCheckRunning = false;
   }
+}
+
+// Takes a database backup and runs the irreversible cleanups ONLY when that backup exists
+// and verified. Called from server.js at startup and once every 24 hours.
+//
+// The order used to be the other way round - cleanupOldImages() (blanks meal photos older
+// than 14 days, then VACUUMs) and cleanupOldLogs() (deletes app_logs rows) ran first, and
+// backupDatabase() reported failure by printing `[BACKUP ERROR]` and returning, with nobody
+// looking. A `./data` volume filling up is enough to make `VACUUM INTO` fail every night
+// while the cleanup keeps deleting: after a fortnight the freshest usable backup predates
+// the failure, and the photos deleted in between exist nowhere. A missing backup has to STOP
+// the deletion, not annotate it.
+//
+// A failed backup is escalated through logger.error, which writes to app_logs and therefore
+// reaches the weekly administrator report - unlike console.error, which reaches the container
+// log and stops there. Returns { ok, cleaned } so a test can see which branch was taken.
+async function runBackupThenCleanup(trigger) {
+  console.log(`[CRON] Database backup (${trigger})...`);
+  const backup = await db.backupDatabase();
+
+  if (!backup || !backup.ok) {
+    const reason = backup && backup.reason ? backup.reason : 'unknown reason';
+    logger.error(
+      `Database backup failed (${reason}) - SKIPPING the cleanup of old photos and logs. Nothing has been deleted; the data stays unprotected until a backup succeeds.`,
+      'SYSTEM'
+    );
+    return { ok: false, cleaned: false };
+  }
+
+  console.log('[CRON] Running the periodic cleanup of old photos and logs...');
+  await db.cleanupOldImages();
+  await db.cleanupOldLogs();
+  return { ok: true, cleaned: true };
 }
 
 async function runWeeklyAdminReportIfDue() {
@@ -245,5 +324,6 @@ module.exports = {
   checkAndSendAutomatedSummaries,
   isWithinSyncWindow,
   runHourlySyncIfDue,
+  runBackupThenCleanup,
   runWeeklyAdminReportIfDue
 };

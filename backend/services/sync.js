@@ -2,9 +2,12 @@ const db = require('../db');
 const { formatDateString, timestampToDateString, getWarsawDayStartMillis } = require('../utils/dates');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const {
+  ACTIVITY_METRIC_COLUMNS,
   getActivitySourceRank,
   preserveHigherPriority,
-  preserveSourceLabel
+  preserveSourceLabel,
+  activitySourceColumns,
+  activitySourceValues
 } = require('../utils/activitySources');
 
 const { getOrRefreshToken } = require('./oauthHelpers');
@@ -14,11 +17,14 @@ const GOOGLE_FIT_RANK = getActivitySourceRank('google_fit');
 
 // Columns whose non-zero value means "this source really did provide activity data for
 // that day" - they decide whether the activity_source label stays with the existing,
-// higher-ranked source.
-const ACTIVITY_LABEL_COLUMNS = [
-  'steps', 'active_calories', 'total_calories_burned', 'active_minutes', 'distance_meters'
-];
+// higher-ranked source. The list itself lives in utils/activitySources.js so that this
+// file, routes/appleHealth.js and the db.js migration cannot drift apart.
+const ACTIVITY_LABEL_COLUMNS = ACTIVITY_METRIC_COLUMNS;
 const GOOGLE_FIT_LABEL_COLUMNS = ['steps', 'active_calories', 'distance_meters'];
+
+// The `<column>_source` companions that go into the INSERT (see activitySourceColumns).
+const OURA_SOURCE_COLUMNS = activitySourceColumns(ACTIVITY_LABEL_COLUMNS);
+const GOOGLE_FIT_SOURCE_COLUMNS = activitySourceColumns(GOOGLE_FIT_LABEL_COLUMNS);
 
 async function syncOura(userId) {
   const accessToken = await getOrRefreshToken(userId, 'oura');
@@ -137,6 +143,13 @@ async function syncOura(userId) {
         hrv: null,
         rhr: null,
         temperature_deviation: null,
+        // Explicitly false rather than left undefined: has_long_sleep is otherwise set only
+        // inside the loop over sleepByDay, so for a date the /sleep endpoint returned
+        // nothing for it stayed undefined - and `!undefined` reads the same as "the ring
+        // recorded naps only". Two different states, one behaviour. Initialising it here
+        // makes "no sleep data at all" a value somebody can see in a debugger and reason
+        // about, rather than a hole in the object.
+        has_long_sleep: false,
         active_minutes: null,
         respiratory_rate: null,
         spo2_percentage: null,
@@ -282,14 +295,26 @@ async function syncOura(userId) {
         if (existing && existing.sleep_duration !== null && !metrics.has_long_sleep) {
         // If the database already holds a sleep duration and Oura has no main sleep
         // (long_sleep) for that day - only naps, or no sleep data at all - we leave the
-        // existing sleep duration and the derived metrics alone.
+        // existing sleep duration and the values READ OFF THE SLEEP RECORD alone
+        // (sleep_*, plus rhr/hrv, which come from primaryRecord.lowest_heart_rate /
+        // average_hrv above and would otherwise be replaced by a nap's figures).
+        //
+        // readiness_score is deliberately NOT in this list any more (audit 2026-09-23). It
+        // comes from a different endpoint entirely - /v2/usercollection/daily_readiness -
+        // and has nothing to do with whether the ring recorded a main sleep. Overwriting
+        // the freshly fetched score with `existing.readiness_score` meant this: a user with
+        // both Oura and an Apple Watch gets sleep_duration for day D written by the Apple
+        // webhook overnight, the ring logs that night as naps (or was off the finger), Oura
+        // still publishes a readiness score for D - and every sync replaced that score with
+        // the NULL already in the row, which COALESCE(excluded.readiness_score, ...) then
+        // made permanent. The readiness card and every insight derived from it lost the day
+        // for good, and a resync could not bring it back.
           metrics.sleep_duration = existing.sleep_duration;
           metrics.sleep_score = existing.sleep_score;
           metrics.sleep_deep = existing.sleep_deep;
           metrics.sleep_rem = existing.sleep_rem;
           metrics.rhr = existing.rhr;
           metrics.hrv = existing.hrv;
-          metrics.readiness_score = existing.readiness_score;
         }
 
         // PRIORITY: see utils/activitySources.js - the hierarchy apple > google_fit > oura
@@ -325,9 +350,9 @@ async function syncOura(userId) {
             readiness_score, hrv, rhr, temperature_deviation, active_minutes,
             respiratory_rate, spo2_percentage, distance_meters, sedentary_minutes,
             low_activity_minutes, stress_high_minutes, stress_recovery_minutes,
-            stress_summary, activity_source, last_sync
+            stress_summary, activity_source, ${OURA_SOURCE_COLUMNS.join(', ')}, last_sync
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${OURA_SOURCE_COLUMNS.map(() => '?').join(', ')}, ?)
           ON CONFLICT(user_id, date) DO UPDATE SET
             ${preserveHigherPriority('steps', OURA_RANK)},
             ${preserveHigherPriority('active_calories', OURA_RANK)},
@@ -349,10 +374,10 @@ async function syncOura(userId) {
             stress_high_minutes = COALESCE(excluded.stress_high_minutes, stress_high_minutes),
             stress_recovery_minutes = COALESCE(excluded.stress_recovery_minutes, stress_recovery_minutes),
             stress_summary = COALESCE(excluded.stress_summary, stress_summary),
-            -- Runda 12 (audyt): distance_meters MUSI być na liście kolumn decydujących
-            -- o zachowaniu etykiety - bez tego dni, w których wyżej notowane źródło
-            -- dostarczyło WYŁĄCZNIE dystans (bez kroków/kalorii/minut w tym imporcie),
-            -- traciły ochronę i etykieta przechodziła na źródło niższego rzędu.
+            -- Round 12 (audit): distance_meters MUST be on the list of columns that
+            -- decide whether the label is kept - without it, days where a higher-ranked
+            -- source supplied ONLY distance (no steps/calories/minutes in that import)
+            -- lost their protection and the label passed to a lower-ranked source.
             ${preserveSourceLabel(OURA_RANK, ACTIVITY_LABEL_COLUMNS)},
             last_sync = excluded.last_sync
         `, [
@@ -372,6 +397,14 @@ async function syncOura(userId) {
           metrics.distance_meters, metrics.sedentary_minutes, metrics.low_activity_minutes,
           metrics.stress_high_minutes, metrics.stress_recovery_minutes, metrics.stress_summary,
           activitySource,
+          // Per-column provenance, in ACTIVITY_LABEL_COLUMNS order: 'oura' only for the
+          // columns this sync really brought a value for, so Oura cannot end up protecting
+          // a column that Google Fit filled in (see utils/activitySources.js).
+          ...activitySourceValues(
+            [metrics.steps, metrics.active_calories, metrics.total_calories,
+              metrics.active_minutes, metrics.distance_meters],
+            activitySource
+          ),
           lastSyncTime
         ]);
       }
@@ -560,9 +593,13 @@ async function syncGoogleFit(userId) {
         // utils/activitySources.js: apple > google_fit > oura. Google Fit ranks above Oura
         // because, like Apple Health, it reports continuously from the phone, whereas Oura
         // only finalises a day the following morning.
+        // The three `<column>_source` values are literals rather than bound parameters
+        // because, unlike Oura and Apple, this branch only runs when all three figures are
+        // real numbers (see the `steps > 0 || calories > 0 || distance > 0` guard above) -
+        // Google Fit never writes a partial day here, so every column it inserts is its own.
         await db.run(`
-          INSERT INTO health_metrics (user_id, date, steps, active_calories, distance_meters, activity_source, last_sync)
-          VALUES (?, ?, ?, ?, ?, 'google_fit', ?)
+          INSERT INTO health_metrics (user_id, date, steps, active_calories, distance_meters, activity_source, ${GOOGLE_FIT_SOURCE_COLUMNS.join(', ')}, last_sync)
+          VALUES (?, ?, ?, ?, ?, 'google_fit', ${GOOGLE_FIT_SOURCE_COLUMNS.map(() => "'google_fit'").join(', ')}, ?)
           ON CONFLICT(user_id, date) DO UPDATE SET
             ${preserveHigherPriority('steps', GOOGLE_FIT_RANK)},
             ${preserveHigherPriority('active_calories', GOOGLE_FIT_RANK)},

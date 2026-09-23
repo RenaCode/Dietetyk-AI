@@ -171,11 +171,21 @@ router.post('/api/water/reset', requireAuth, async (req, res) => {
   const { date } = req.body;
   if (!date) return res.status(400).json({ error: 'Data jest wymagana.' });
   try {
+    // water_ml_apple records how much of water_ml the Apple Health webhook contributed (see
+    // buildHealthMetricsUpsertSql in routes/appleHealth.js). Resetting the counter has to
+    // move that marker up to the day's current sample total as well - the webhook adds
+    // `newTotal - water_ml_apple`, so leaving a stale or zero marker behind would make the
+    // very next Apple sync re-add every millilitre the user has just cleared.
+    const appleWater = await db.get(
+      'SELECT SUM(qty) AS total FROM apple_health_water_samples WHERE user_id = ? AND date = ?',
+      [req.user.id, date]
+    );
+    const appleShare = appleWater && appleWater.total !== null ? Math.round(appleWater.total) : 0;
     await db.run(`
-      INSERT INTO health_metrics (user_id, date, water_ml)
-      VALUES (?, ?, 0)
-      ON CONFLICT(user_id, date) DO UPDATE SET water_ml = 0
-    `, [req.user.id, date]);
+      INSERT INTO health_metrics (user_id, date, water_ml, water_ml_apple)
+      VALUES (?, ?, 0, ?)
+      ON CONFLICT(user_id, date) DO UPDATE SET water_ml = 0, water_ml_apple = excluded.water_ml_apple
+    `, [req.user.id, date, appleShare]);
     await invalidateAiExplanationCache(req.user.id, date);
     res.json({ success: true, water_ml: 0 });
   } catch (err) {

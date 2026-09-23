@@ -3,6 +3,7 @@ import { getTemperatureStatus } from '../utils/health';
 import { formatHoursMins } from '../utils/format';
 import { t } from '../utils/i18n';
 import { useInsights } from '../utils/useInsights';
+import { getWarsawDateString } from '../utils/dates';
 
 // Insights are fetched with ONE batched request (/api/dashboard/insights).
 // Previously each of them had its own useEffect and its own fetch - opening the
@@ -275,6 +276,11 @@ const getLast7Days = (endDateStr) => {
 
 export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDate, onNavigate, onRefresh, onLogout, userProfile = {}, language = 'pl' }) {
   const [historyData, setHistoryData] = useState([]);
+// Set when /api/health/history could not be read. Without it a 503 left historyData as []
+// and the body-composition card told the user "Brak danych - zsynchronizuj wagę z
+// Withings" even though the scale was connected and the rows were in the database - a
+// repair instruction for an integration that has nothing wrong with it.
+  const [historyError, setHistoryError] = useState(false);
 // A central session-expiry signal for the ~40 insight useEffects - instead of calling
 // onLogout() directly (which would require adding it to every effect's dep array and risk
 // re-render loops), the effects set a flag and one central useEffect calls onLogout() when
@@ -289,7 +295,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 // the effect in useInsights.
   const {
     data: batchedInsights,
-    isLoading: isLoadingBatchedInsights
+    isLoading: isLoadingBatchedInsights,
+    loadError: insightsLoadError
   } = useInsights(sessionToken, selectedDate, BATCHED_INSIGHT_IDS, setSessionExpired);
   const [historyTrigger, setHistoryTrigger] = useState(0);
 // isLoadingHistory deliberately removed (the state was set but never read in the render -
@@ -823,6 +830,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 
   useEffect(() => {
     let cancelled = false;
+// Clear the previous day's suggestion before re-fetching. This card carries a "Zastosuj"
+// button that writes target_calories to /api/settings, so a suggestion left over from
+// another day would persist a calorie goal computed for a day the user is no longer
+// looking at.
+    setCalorieSuggestion(null);
     const fetchCalorieSuggestion = async () => {
       if (!sessionToken) return;
       try {
@@ -875,12 +887,17 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           headers: { 'Authorization': `Bearer ${sessionToken}` }
         });
         if (!cancelled && res.status === 401) { setSessionExpired(true); return; }
-        if (res.ok && !cancelled) {
+        if (cancelled) return;
+        if (res.ok) {
           const data = await res.json();
           setHistoryData(data);
+          setHistoryError(false);
+        } else {
+          setHistoryError(true);
         }
       } catch (err) {
         console.error('Failed to fetch the history:', err);
+        if (!cancelled) setHistoryError(true);
       }
     };
     fetchHistory();
@@ -898,24 +915,52 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     if (validData.length === 0) {
                 // No real weight or body composition data in the database - we show an honest
                 // "no data" message rather than generating a fake chart.
+                //
+                // An empty list has two causes that must not read the same: the scale has
+                // genuinely never synced, or the read of /api/health/history failed. The
+                // second one used to print the first one's copy, sending the user off to
+                // repair a working Withings integration.
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '10px', marginTop: '10px' }}>
           <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>
             📈 Trend składu ciała
           </div>
           <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.35)', padding: '12px 0', textAlign: 'center' }}>
-            Brak danych - zsynchronizuj wagę z Withings, aby zobaczyć trend
+            {historyError
+              ? t('Nie udało się wczytać historii pomiarów — to błąd odczytu, nie brak danych.')
+              : 'Brak danych - zsynchronizuj wagę z Withings, aby zobaczyć trend'}
           </div>
         </div>
       );
     } else if (validData.length === 1) {
+                // One measurement is not a trend.
+                //
+                // This branch used to COPY that single reading onto the previous day and
+                // draw a two-point line from it, under the heading "📈 Trend składu ciała
+                // (30 dni)". A user who connected a Withings scale and weighed themselves
+                // once saw a flat horizontal line for weight, muscle and body fat across
+                // the whole chart - the app asserting "nothing has changed recently" from
+                // a single data point, and asserting a measurement on a day nobody stood
+                // on the scale. That is the exact opposite of the honest empty state in
+                // the branch above. A point nobody measured must never enter an SVG `d`.
       const single = validData[0];
-      const prevDate = new Date(single.date);
-      prevDate.setDate(prevDate.getDate() - 1);
-      validData = [
-        { ...single, date: prevDate.toISOString().split('T')[0] },
-        single
-      ];
+      const parts = [];
+      if (single.weight !== null && single.weight !== undefined) parts.push(`${(Math.round(single.weight * 10) / 10).toLocaleString('pl-PL')} kg`);
+      if (single.muscle_mass !== null && single.muscle_mass !== undefined) parts.push(`${(Math.round(single.muscle_mass * 10) / 10).toLocaleString('pl-PL')} kg mięśni`);
+      if (single.fat_ratio !== null && single.fat_ratio !== undefined) parts.push(`${(Math.round(single.fat_ratio * 10) / 10).toLocaleString('pl-PL')}% tłuszczu`);
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '10px', marginTop: '10px' }}>
+          <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginBottom: '4px' }}>
+            📈 Trend składu ciała
+          </div>
+          <div style={{ padding: '8px 0', textAlign: 'center' }}>
+            <div style={{ fontSize: '0.95rem', color: '#fff', fontWeight: '700' }}>{parts.join(' · ')}</div>
+            <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.35)', marginTop: '4px' }}>
+              {single.date} — {t('jeden pomiar, trend pojawi się po kolejnym ważeniu')}
+            </div>
+          </div>
+        </div>
+      );
     }
 
     const width = 500;
@@ -1216,11 +1261,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   // NOTE: dateLabel used to be hard-coded to 'dzisiaj' regardless of selectedDate - when
   // browsing the dashboard for another day (the date picker in App.jsx) the workout card
   // incorrectly said "dzisiaj" for workouts from that other day.
-  const todayLocalStr = (() => {
-    const d = new Date();
-    const tzOffset = d.getTimezoneOffset() * 60000;
-    return new Date(d.getTime() - tzOffset).toISOString().slice(0, 10);
-  })();
+  // Computed in Europe/Warsaw, the timezone the backend uses for every date. Derived from
+  // the browser's offset this label rolled over at the wrong moment for anyone abroad: for
+  // a user in New York at 20:00 on 22.09 the backend's day was already 23.09, so workouts
+  // the server had filed under 23.09 were captioned "dzisiaj" on a 22.09 dashboard.
+  const todayLocalStr = getWarsawDateString();
   const activities = (summary.workouts && summary.workouts.length > 0)
     ? summary.workouts.map(w => ({
         type: w.type,
@@ -1432,7 +1477,18 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 
   return (
     <div className="premium-dashboard-container">
-      
+
+      {/* The whole insight batch failed (500, timeout, network). Every card downstream
+          reads `undefined` and falls back to its ordinary "no data" copy, which is
+          indistinguishable from a computation that ran and found nothing - so the failure
+          has to be stated once, out loud, at the top. Without it the user reads a screen
+          full of confident empty states and has no reason to doubt any of them. */}
+      {insightsLoadError && (
+        <div className="alert alert-error" style={{ marginBottom: '16px' }}>
+          ⚠️ {t('Nie udało się policzyć analiz dla tego dnia. Karty poniżej mogą być puste — to błąd odczytu, a nie brak Twoich danych.')}
+        </div>
+      )}
+
       {/* AI RECOVERY HEADER */}
       <div className="dietetyk-ai-banner" style={{ boxShadow: getReadinessColor(), border: getReadinessBorder() }}>
         <div className="premium-title-row">

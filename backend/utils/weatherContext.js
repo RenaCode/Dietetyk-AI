@@ -33,7 +33,45 @@ const GEOCODING_URL = 'https://geocoding-api.open-meteo.com/v1/search';
 // (~1 km) groups users with very similar locations under one cache entry, with no real loss
 // of weather accuracy.
 const CACHE_TTL_MS = 20 * 60 * 1000;
+
+// How old a cached reading may be before it stops being served at all when Open-Meteo is
+// unreachable. The failure branch below used to return `cached.data` with no age check
+// whatsoever - and `cached` is by definition the entry that has ALREADY failed the freshness
+// test above, so during a longer outage the prompt kept asserting "Aktualna pogoda:
+// bezchmurnie, 28 stopni" from an arbitrarily old reading. The "chwilowo niedostepna" branch
+// could never fire while any entry existed for the location. Someone asking in the evening,
+// during a storm, whether to go for a run was advised on the weather of some earlier day,
+// with nothing in the prompt hinting that the data was not current.
+//
+// Two hours is a judgement call, not a meteorological constant: it is roughly how long the
+// temperature and conditions stay close enough for "should I train outside / how much should
+// I drink" to still be answered sensibly. Past it we return nothing, and the caller says so.
+// Inside it we still return the reading, but stamped with the time it was taken - never
+// unlabelled, because this is a health application and "I do not know" beats a confident
+// number from three days ago.
+const STALE_WEATHER_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+// Cap on the number of locations kept. The map had no eviction at all: every distinct
+// rounded coordinate pair any user ever configured stayed for the lifetime of the process.
+// Entries are pruned by age first (anything past STALE_WEATHER_MAX_AGE_MS is useless even as
+// a fallback), and only if that is not enough do we drop the oldest ones.
+const WEATHER_CACHE_MAX_ENTRIES = 200;
+
 const weatherCache = new Map(); // klucz "lat,lon" -> { data, fetchedAt }
+
+function pruneWeatherCache(now) {
+  for (const [key, entry] of weatherCache.entries()) {
+    if (now - entry.fetchedAt > STALE_WEATHER_MAX_AGE_MS) weatherCache.delete(key);
+  }
+  if (weatherCache.size <= WEATHER_CACHE_MAX_ENTRIES) return;
+  // Map preserves insertion order, but an entry that is refreshed keeps its ORIGINAL
+  // position, so insertion order is not recency order - sort by fetchedAt instead of
+  // trusting the iteration order.
+  const byAge = [...weatherCache.entries()].sort((a, b) => a[1].fetchedAt - b[1].fetchedAt);
+  for (const [key] of byAge.slice(0, weatherCache.size - WEATHER_CACHE_MAX_ENTRIES)) {
+    weatherCache.delete(key);
+  }
+}
 // Prevents parallel Open-Meteo requests for THE SAME location when several users query the
 // chat at the same moment with a cold cache.
 const inFlightRequests = new Map(); // klucz "lat,lon" -> Promise
@@ -97,12 +135,16 @@ function normalizeCoords(lat, lon) {
   return { lat: Math.round(latNum * 100) / 100, lon: Math.round(lonNum * 100) / 100 };
 }
 
+// Returns { data, observedAt, stale } or null. The envelope exists so that the caller cannot
+// render a reading without knowing when it was taken - previously this returned the bare
+// data object and a fallback from an outage was indistinguishable from a live fetch.
 async function fetchCurrentWeather(lat, lon) {
   const key = `${lat},${lon}`;
   const now = Date.now();
+  pruneWeatherCache(now);
   const cached = weatherCache.get(key);
   if (cached && (now - cached.fetchedAt) < CACHE_TTL_MS) {
-    return cached.data;
+    return { data: cached.data, observedAt: cached.fetchedAt, stale: false };
   }
   if (inFlightRequests.has(key)) {
     return inFlightRequests.get(key);
@@ -129,15 +171,27 @@ async function fetchCurrentWeather(lat, lon) {
         windKph: typeof current.wind_speed_10m === 'number' ? current.wind_speed_10m : null,
         weatherCode: typeof current.weather_code === 'number' ? current.weather_code : null
       };
-      weatherCache.set(key, { data, fetchedAt: Date.now() });
-      return data;
+      const fetchedAt = Date.now();
+      weatherCache.set(key, { data, fetchedAt });
+      return { data, observedAt: fetchedAt, stale: false };
     } catch (err) {
       console.error('[WEATHER] Failed to fetch weather from Open-Meteo:', err.message);
       // We do not rethrow - missing weather must not break AI advice generation (see the
-      // callers in chat.js, dashboard.js and summaries.js). We return the previously known
-      // data for this location if we have it: a transient Open-Meteo outage should not drop
-      // the weather context from every subsequent chat message.
-      return cached ? cached.data : null;
+      // callers in chat.js, dashboard.js and summaries.js). A brief Open-Meteo hiccup should
+      // not drop the weather context from every subsequent chat message, so the last known
+      // reading is still offered - but only while it is recent enough to mean anything, and
+      // always marked as what it is, so the caller states the observation time in the prompt
+      // instead of passing it off as current. Beyond that age we return nothing and the
+      // prompt says the weather is unavailable.
+      const age = cached ? Date.now() - cached.fetchedAt : Infinity;
+      if (cached && age <= STALE_WEATHER_MAX_AGE_MS) {
+        console.warn(`[WEATHER] Serving a cached reading ${Math.round(age / 60000)} min old for ${key}, marked as stale.`);
+        return { data: cached.data, observedAt: cached.fetchedAt, stale: true };
+      }
+      if (cached) {
+        console.warn(`[WEATHER] Dropping the cached reading for ${key} - ${Math.round(age / 60000)} min old, past the ${STALE_WEATHER_MAX_AGE_MS / 60000} min limit.`);
+      }
+      return null;
     } finally {
       inFlightRequests.delete(key);
     }
@@ -163,22 +217,42 @@ async function getWeatherAndTimeContext(language = 'pl', lat, lon) {
   const timeStr = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
   const dayPart = getDayPart(hour, language);
 
-  const weather = await fetchCurrentWeather(coords.lat, coords.lon);
+  const reading = await fetchCurrentWeather(coords.lat, coords.lon);
+  const weather = reading ? reading.data : null;
   const descriptions = language === 'en' ? WEATHER_CODE_DESCRIPTIONS_EN : WEATHER_CODE_DESCRIPTIONS_PL;
   const weatherDesc = weather && weather.weatherCode !== null
     ? (descriptions[weather.weatherCode] || (language === 'en' ? 'unknown conditions' : 'nieznane warunki'))
     : null;
 
+  // The observation time of a stale reading, on the Warsaw clock - the same clock the
+  // "current date/time" line above uses, so the model can see for itself how far apart the
+  // two are and discount the weather accordingly. A stale reading is never introduced as
+  // "current": it is introduced as a measurement taken at a named time, which is what it is.
+  const observedWall = reading && reading.stale ? getWarsawWallClock(new Date(reading.observedAt)) : null;
+  const observedStr = observedWall
+    ? `${String(observedWall.getUTCHours()).padStart(2, '0')}:${String(observedWall.getUTCMinutes()).padStart(2, '0')}`
+    : null;
+
   if (language === 'en') {
-    const weatherLine = weather
-      ? `Current weather: ${weatherDesc || 'unknown'}, ${weather.temperatureC ?? '?'}°C, humidity ${weather.humidityPct ?? '?'}%, wind ${weather.windKph ?? '?'} km/h${weather.precipitationMm ? `, precipitation ${weather.precipitationMm}mm` : ''}.`
-      : 'Current weather: unavailable right now.';
+    const measurements = weather
+      ? `${weatherDesc || 'unknown'}, ${weather.temperatureC ?? '?'}°C, humidity ${weather.humidityPct ?? '?'}%, wind ${weather.windKph ?? '?'} km/h${weather.precipitationMm ? `, precipitation ${weather.precipitationMm}mm` : ''}.`
+      : null;
+    const weatherLine = !measurements
+      ? 'Current weather: unavailable right now - do not guess what it is like outside, and say so if the question depends on it.'
+      : (observedStr
+        ? `Weather LAST MEASURED at ${observedStr} (the weather service is unreachable, so this is NOT the current weather): ${measurements} Treat it as possibly out of date and say so if the question depends on conditions right now.`
+        : `Current weather: ${measurements}`);
     return `- Current date/time: ${weekday}, ${timeStr} (${dayPart})\n- ${weatherLine} Take this into account where relevant (e.g. extra hydration on hot/humid days, warming meals in cold weather, workout timing relative to time of day) - but only mention it if it's actually relevant to the recommendation.`;
   }
 
-  const weatherLine = weather
-    ? `Aktualna pogoda: ${weatherDesc || 'nieznane'}, ${weather.temperatureC ?? '?'}°C, wilgotność ${weather.humidityPct ?? '?'}%, wiatr ${weather.windKph ?? '?'} km/h${weather.precipitationMm ? `, opady ${weather.precipitationMm}mm` : ''}.`
-    : 'Aktualna pogoda: chwilowo niedostępna.';
+  const measurements = weather
+    ? `${weatherDesc || 'nieznane'}, ${weather.temperatureC ?? '?'}°C, wilgotność ${weather.humidityPct ?? '?'}%, wiatr ${weather.windKph ?? '?'} km/h${weather.precipitationMm ? `, opady ${weather.precipitationMm}mm` : ''}.`
+    : null;
+  const weatherLine = !measurements
+    ? 'Aktualna pogoda: chwilowo niedostępna - nie zgaduj, jaka jest za oknem, i napisz o tym wprost, jeśli pytanie od tego zależy.'
+    : (observedStr
+      ? `Pogoda ZMIERZONA OSTATNIO o ${observedStr} (serwis pogodowy jest niedostępny, więc to NIE jest pogoda bieżąca): ${measurements} Potraktuj ją jako możliwie nieaktualną i zaznacz to, jeśli pytanie dotyczy warunków w tej chwili.`
+      : `Aktualna pogoda: ${measurements}`);
   return `- Aktualna data/czas: ${weekday}, ${timeStr} (${dayPart})\n- ${weatherLine} Uwzględnij to tam, gdzie ma to znaczenie (np. dodatkowe nawodnienie w upał/wysoką wilgotność, rozgrzewające posiłki przy zimnie, dobór pory na trening względem pory dnia) - ale wspomnij o tym tylko, jeśli faktycznie wpływa na rekomendację.`;
 }
 

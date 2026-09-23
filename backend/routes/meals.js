@@ -10,6 +10,7 @@ const { aiRateLimiter } = require('../middleware/rateLimit');
 const {
   sanitizeNumber,
   sanitizeNullableNumber,
+  sanitizeMealText,
   ALLOWED_MEAL_IMAGE_MIME_TYPES,
   MAX_MEAL_IMAGE_BASE64_CHARS
 } = require('../utils/mealSanitize');
@@ -49,8 +50,13 @@ const updateLastMealModifiedAt = async (userId, date) => {
 router.post('/api/meals', aiRateLimiter, async (req, res) => {
   const { rawText, date, image } = req.body;
   const targetDate = date || getLocalDateString();
-  // B-W1: sanitise user input - trim and cap the length
-  const safeRawText = rawText ? rawText.trim().slice(0, 500) : '';
+  // B-W1: sanitise user input - trim, cap the length and defuse the isolation tag.
+  // This value is now the ONLY form of the user's text that leaves this handler. It used to
+  // be built here and then used for the analysis prompt alone, while the untrimmed `rawText`
+  // was what actually got written to meals.raw_text - so the 500-character cap protected the
+  // one prompt it was invented for and nothing else. See sanitizeMealText in
+  // utils/mealSanitize.js for what the unbounded value did to every later prompt.
+  const safeRawText = sanitizeMealText(rawText);
 
   if ((!rawText || rawText.trim() === '') && !image) {
     return res.status(400).json({ error: 'Opis posiłku lub zdjęcie nie może być puste.' });
@@ -157,12 +163,13 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
       } else {
         // Fallback: the AI returned a flat object despite the prompt (an older format) - we
         // treat it as a single meal rather than failing the whole request.
-        mealsToInsert = [{ ...analysis, name: analysis?.name || rawText || 'Posiłek ze zdjęcia' }];
+        mealsToInsert = [{ ...analysis, name: analysis?.name || safeRawText || 'Posiłek ze zdjęcia' }];
       }
     } else {
       // No photo - a meal entered as text only, with no multi-section detection; behaviour is
-      // identical to before (one row, name = the user's text).
-      mealsToInsert = [{ ...analysis, name: rawText }];
+      // identical to before (one row, name = the user's text), except that the name is now the
+      // capped and escaped text rather than the raw request body.
+      mealsToInsert = [{ ...analysis, name: safeRawText }];
     }
 
     // The calorie baseline is computed ONCE per request rather than per meal - with a photo
@@ -172,7 +179,11 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
 
     const insertedMeals = [];
     for (const m of mealsToInsert) {
-      const mealDescription = (imagePart ? (m.name || rawText || 'Posiłek ze zdjęcia') : (m.name || rawText));
+      // `m.name` comes from the Gemini response, but it is derived from the user's own
+      // description (see the precedence rule in utils/mealPrompts.js), so it is user-
+      // controlled text that merely took a detour through the model - it gets exactly the
+      // same treatment as the typed text, including the length cap.
+      const mealDescription = sanitizeMealText(m.name) || safeRawText || (imagePart ? 'Posiłek ze zdjęcia' : '');
 
       // Clamp the values from the AI response to a sensible range before writing to the
       // database (see the comment on sanitizeNumber above).

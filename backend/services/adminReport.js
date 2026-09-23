@@ -1,5 +1,6 @@
 const db = require('../db');
 const { sendMailgunEmail } = require('./mailgun');
+const logger = require('./logger');
 
 // Prosta walidacja formatu adresu e-mail (Runda 17, naprawa z audytu) - przed
 // sending, we filter out addresses that do not even look like an email (a typo saved earlier
@@ -9,6 +10,21 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Generates and sends the weekly security and error report to administrators.
+ *
+ * REJECTS when the report reached nobody. This is the whole contract of the function and it
+ * must not be softened: the caller (scheduler.js) writes `last_admin_report_sent = <today>`
+ * immediately after awaiting this promise, and its `if (lastSentDate !== todayStr)` guard
+ * then blocks every retry until next Monday. So a resolved promise is a promise that the
+ * report was delivered - resolve on a failed send and the marker is set anyway, the log says
+ * "Admin report sent", and nothing tries again for a week.
+ *
+ * That matters because this report is the ONLY channel through which an administrator learns
+ * about the AUTH_LOCKOUT, AUTH_LOGIN_FAILURE and RATE_LIMIT rows piling up in app_logs. The
+ * failure it has to survive is the ordinary one: the Mailgun key expires, or APP_PASSWORD is
+ * rotated without running scripts/reencrypt-secrets.js, so every send throws. Swallowing
+ * those exceptions (which is what this loop used to do) meant a brute-force campaign against
+ * an application holding special-category health data ran for a week with no one told - the
+ * supervision dying together with what it supervises, and reporting success on the way out.
  */
 async function sendWeeklyAdminReport() {
   console.log('[ADMIN REPORT] Starting the log report generation...');
@@ -21,15 +37,19 @@ async function sendWeeklyAdminReport() {
       .filter(Boolean)
       .filter(email => {
         if (!EMAIL_REGEX.test(email)) {
-          console.warn(`[ADMIN REPORT] Pomijam nieprawidłowy adres e-mail administratora: ${email}`);
+          logger.warn(`[ADMIN REPORT] Skipping an invalid administrator email address: ${email}`, 'ADMIN_REPORT');
           return false;
         }
         return true;
       });
 
     if (adminEmails.length === 0) {
-      console.warn('[ADMIN REPORT] No active administrators with a valid email address. Skipping delivery.');
-      return;
+      // Used to `return` quietly, which the scheduler read as success and marked as sent. An
+      // application with no reachable administrator is not a state to pass over in silence:
+      // it means the security report has no recipient at all, which is the same outage as a
+      // dead Mailgun key and must look like one.
+      await logger.error('[ADMIN REPORT] No active administrator with a valid email address - the security report has no recipient.', 'ADMIN_REPORT');
+      throw new Error('Admin report not sent: no active administrator with a valid email address.');
     }
 
     // 2. Fetch overall statistics (log counts by level over the last 7 days)
@@ -79,7 +99,11 @@ async function sendWeeklyAdminReport() {
     // 6. Wygeneruj szablon HTML
     const html = generateReportHtml(stats, topErrors, topSecurity, recentLogs);
 
-    // 7. Send the email to each admin
+    // 7. Send the email to each admin.
+    // One administrator's address failing (a typo, a suppressed recipient) must not stop the
+    // others from getting the report, so the loop still continues past a single failure - but
+    // the outcome is counted, and a run that reached nobody throws below.
+    let sentCount = 0;
     for (const email of adminEmails) {
       try {
         await sendMailgunEmail({
@@ -87,13 +111,23 @@ async function sendWeeklyAdminReport() {
           subject: `Dietetyk AI - Cotygodniowy Raport Logów i Bezpieczeństwa`,
           html: html
         });
-        console.log(`[ADMIN REPORT] Raport wysłany pomyślnie na adres: ${email}`);
+        sentCount += 1;
+        console.log(`[ADMIN REPORT] Report delivered to: ${email}`);
       } catch (sendErr) {
-        console.error(`[ADMIN REPORT ERROR] Błąd podczas wysyłania e-maila do ${email}:`, sendErr.message);
+        // logger.error, not console.error: a console line lives only in the container's
+        // stdout, which nobody reads and which no later report can quote. Written through the
+        // logger it lands in app_logs, so the next report that DOES go out carries the record
+        // of the week this one did not.
+        await logger.error(`[ADMIN REPORT] Failed to send the security report to an administrator: ${email}`, 'ADMIN_REPORT', sendErr);
       }
     }
+
+    if (sentCount === 0) {
+      throw new Error(`Admin report not sent: all ${adminEmails.length} deliveries failed.`);
+    }
   } catch (err) {
-    console.error('[ADMIN REPORT ERROR] Failed to generate the log report:', err.message);
+    // Rethrown, never absorbed: the caller sets the "sent this week" marker on resolution.
+    console.error('[ADMIN REPORT ERROR] The weekly log and security report was NOT delivered:', err.message);
     throw err;
   }
 }

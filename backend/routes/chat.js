@@ -3,7 +3,8 @@ const router = express.Router();
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { aiRateLimiter } = require('../middleware/rateLimit');
-const { getLocalDateString } = require('../utils/dates');
+const { shiftDate, resolveQueryDate } = require('../utils/dates');
+const { escapeUserInputTag } = require('../utils/mealSanitize');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
 const { generateContentWithFallback } = require('../config');
 const { getTargetCalories, getBmr, getTargetWaterMl } = require('../utils/defaultSettings');
@@ -27,7 +28,16 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
     return res.status(400).json({ error: `Wiadomość jest zbyt długa (maks. ${MAX_CHAT_MESSAGE_LENGTH} znaków).` });
   }
 
-  const queryDate = date || getLocalDateString();
+  // The date arrives straight from req.body and was used unvalidated. Anything that is not
+  // YYYY-MM-DD made `new Date(queryDate)` an Invalid Date, so the history-window arithmetic
+  // below threw a RangeError out of toISOString() and the catch at the bottom of this handler
+  // turned it into a 500 telling the user the AI had failed - when the input was simply
+  // malformed, and no amount of retrying would have helped.
+  //
+  // resolveQueryDate takes the RAW VALUE rather than `req`, because routes/dashboard.js reads
+  // it from req.query.date and this handler from req.body.date; see the note on it in
+  // utils/dates.js. It falls back to today, exactly as an absent field does.
+  const queryDate = resolveQueryDate(date);
 
   try {
     // Fetch the user's targets
@@ -103,8 +113,10 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
     // about a longer period (see messageNeedsLongHistory above).
     const useExtendedHistory = messageNeedsLongHistory(message);
     const lookbackDays = useExtendedHistory ? CHAT_EXTENDED_LOOKBACK_DAYS : CHAT_DEFAULT_LOOKBACK_DAYS;
-    const pastDateLimit = new Date(new Date(queryDate).getTime() - lookbackDays * 24 * 60 * 60 * 1000);
-    const pastDateStr = pastDateLimit.toISOString().slice(0, 10);
+    // shiftDate rather than millisecond subtraction: identical result (both sides were UTC,
+    // so the old form was correct by luck rather than by construction) and one less place
+    // doing date arithmetic by hand, which is the rule in CLAUDE.md.
+    const pastDateStr = shiftDate(queryDate, -lookbackDays);
 
     const historyMetrics = await db.all(`
       SELECT date, steps, active_calories, weight, sleep_score, sleep_duration, readiness_score
@@ -209,8 +221,9 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
           const roleName = h.sender === 'user' ? 'Użytkownik' : 'Dietetyk AI';
     // Trim long messages in the history to 500 characters as an additional safeguard
           const text = h.text.length > 500 ? h.text.slice(0, 500) + '...' : h.text;
-    // B-W2: wrapping user messages in user_input prevents prompt injection
-          return h.sender === 'user' ? `${roleName}: <user_input>${text}</user_input>` : `${roleName}: ${text}`;
+    // B-W2: wrapping user messages in user_input prevents prompt injection - but only while
+    // the text cannot close the tag itself, which is what escapeUserInputTag guarantees.
+          return h.sender === 'user' ? `${roleName}: <user_input>${escapeUserInputTag(text)}</user_input>` : `${roleName}: ${text}`;
         }).join('\n') + '\n';
       }
     }
@@ -290,7 +303,7 @@ ${weatherTimeContext}
 ${weeklyTrendSummary}
 ${dayEventsContext}
 ${historyContext}
-User's Question: <user_input>${message}</user_input>
+User's Question: <user_input>${escapeUserInputTag(message)}</user_input>
 
 Reply concisely, factually, and practically in English (maximum 3-4 short paragraphs). Focus on direct recommendations relating to the user's health metrics above. Refer to session history or trends from the history summary above if relevant to the question. If the user described their body goal, align recommendations to this goal where appropriate—but do not bring it up if the question is unrelated. You may use markdown formatting (bullet lists, bold text). The response should be professional, supportive, and motivating.
 `;
@@ -337,7 +350,7 @@ ${weatherTimeContext}
 ${weeklyTrendSummary}
 ${dayEventsContext}
 ${historyContext}
-Pytanie użytkownika: <user_input>${message}</user_input>
+Pytanie użytkownika: <user_input>${escapeUserInputTag(message)}</user_input>
 
 Odpowiedz zwięźle, merytorycznie i praktycznie w języku polskim (maksymalnie 3-4 krótkie akapity). Skup się na bezpośrednich zaleceniach odnoszących się do powyższych danych zdrowotnych użytkownika. Nawiąż do historii rozmowy lub trendów z powyższego podsumowania historii, jeśli to istotne i odpowiada na pytanie. Jeśli użytkownik opisał swój cel sylwetki, odnoś rekomendacje do tego celu tam, gdzie to ma sens dla zadanego pytania - ale nie wspominaj o nim, jeśli pytanie go nie dotyczy. Możesz używać formatowania markdown (listy wypunktowane, pogrubienia). Odpowiedź powinna być profesjonalna, życzliwa i motywująca.
 `;

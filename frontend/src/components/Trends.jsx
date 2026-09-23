@@ -1,10 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { formatHoursMins } from '../utils/format';
 import { t } from '../utils/i18n';
+import { getWarsawDateString } from '../utils/dates';
+import { resolveCurrentMetricValue, barHeight } from '../utils/chart';
 
 export default function Trends({ selectedDate, sessionToken, onLogout }) {
   const [historyData, setHistoryData] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+// Set when /api/health/history could not be read. Until this existed the component had no
+// error state at all: for anything other than 200 or 401 (a 502 from a backend restart,
+// say) historyData stayed [], isLoading went back to false, and the tab rendered eight
+// empty charts, headers of "--" and the instruction "Brak danych - zsynchronizuj
+// ciśnieniomierz Withings". The user was told to repair an integration that was working,
+// and the hourly setInterval retried silently, so the screen could look like that for
+// hours.
+  const [loadError, setLoadError] = useState(false);
+// Bumped by the "Spróbuj ponownie" button in the error state, so the user does not have to
+// wait out the hourly interval after a transient backend failure.
+  const [historyTrigger, setHistoryTrigger] = useState(0);
   // Shared state for the tooltip shown when hovering or clicking a bar or point on a chart.
   // Identified by the metric key (chartKey) plus the day index, so only the right chart and
   // the right bar/point shows its tooltip.
@@ -31,16 +44,21 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
         if (cancelled) return;
         if (res.ok) {
           const data = await res.json();
-          if (!cancelled) setHistoryData(data);
+          if (!cancelled) { setHistoryData(data); setLoadError(false); }
         } else if (res.status === 401) {
           // Expired session - without this Trends simply stopped refreshing silently (the
           // hourly interval kept running, but every fetch returned 401), while the rest of the
           // app (App.jsx) consistently signs the user out and shows a message.
           // "Sesja wygasła" w tej sytuacji.
           if (onLogout) onLogout();
+        } else {
+          if (!cancelled) setLoadError(true);
         }
       } catch (err) {
-        if (!cancelled) console.error('Failed to fetch the health history:', err);
+        if (!cancelled) {
+          console.error('Failed to fetch the health history:', err);
+          setLoadError(true);
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -54,7 +72,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [sessionToken, selectedDate]);
+  }, [sessionToken, selectedDate, historyTrigger]);
 
   // Safe date conversion with no timezone shift - new Date(selectedDate) parses 'YYYY-MM-DD'
   // as UTC, so in timezones west of UTC d.setDate() could yield a day shifted by -1 after
@@ -68,8 +86,15 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
   );
 
   // toISOString() converts to UTC, which by itself could again shift the day by -1 in
-  // timezones west of UTC - we compensate for the offset before converting,
-  // analogicznie do getLocalDateString() w App.jsx.
+  // timezones west of UTC - we compensate for the offset before converting.
+  //
+  // NOTE: this deliberately does NOT go through getWarsawDateString(). It never formats
+  // "now"; it only serialises the local-midnight Date objects produced by the calendar
+  // arithmetic above (selectedDateObj +/- N days). Those carry a calendar day, not an
+  // instant - pushing local midnight through Europe/Warsaw would shift the day back by one
+  // for every user east of Warsaw (Tokyo midnight is 17:00 the previous day in Warsaw).
+  // The only "today" in this component is isSelectedDateToday below, and that one does use
+  // the shared Warsaw helper.
   const toDateStr = (date) => {
     const tzOffset = date.getTimezoneOffset() * 60000;
     return new Date(date.getTime() - tzOffset).toISOString().slice(0, 10);
@@ -195,19 +220,29 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
     });
   };
 
+  // Is the selected day today? Computed in Europe/Warsaw, the timezone the backend writes
+  // health_metrics rows in - deciding this from the browser's clock would make "today"
+  // roll over at the wrong moment for anyone abroad (see utils/dates.js).
+  const isSelectedDateToday = selectedDate === getWarsawDateString();
+
   // Computes the statistics for a given metric.
-  // noFallbackToday: for daily counters (steps, calories, sleep) that reset each day, we do
-  // NOT substitute values from previous days when today's entry does not exist in the
-  // database yet (that is, before the first sync of the day arrives) - otherwise the chart
-  // would show yesterday's steps and calories as today's.
-  const calculateStats = (key, noFallbackToday = false) => {
+  // isDailyCounter: metrics that reset each day (steps, calories, sleep duration). For
+  // TODAY, before the first sync of the day lands, the counter genuinely stands at 0 and we
+  // must not carry an earlier day's value forward. For any OTHER day a missing row means we
+  // have no reading - resolveCurrentMetricValue returns null there, which is what makes the
+  // '--' / 'Brak danych' guards below actually reachable. See utils/chart.js for the full
+  // failure story (the chart used to claim 0 hours of sleep for a past day the ring had
+  // spent flat on a charger).
+  const calculateStats = (key, isDailyCounter = false) => {
     const currValues = getMetricData(currentWeekDays, key).filter(v => v !== null && v !== undefined);
     const prevValues = getMetricData(prevWeekDays, key).filter(v => v !== null && v !== undefined);
 
     const currValueRaw = historyData.find(r => r.date === selectedDate)?.[key];
-    const currValue = currValueRaw !== undefined && currValueRaw !== null
-      ? currValueRaw
-      : (noFallbackToday ? 0 : (currValues.length > 0 ? currValues[currValues.length - 1] : null));
+    const currValue = resolveCurrentMetricValue(currValueRaw, {
+      isDailyCounter,
+      isSelectedDateToday,
+      priorValues: currValues
+    });
 
     const currAvg = currValues.length > 0 ? currValues.reduce((a, b) => a + b, 0) / currValues.length : 0;
     const prevAvg = prevValues.length > 0 ? prevValues.reduce((a, b) => a + b, 0) / prevValues.length : 0;
@@ -301,8 +336,14 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
 
         {/* Bars */}
             {currentWeekDays.map((day, idx) => {
-              const val = currentWeekVals[idx] || 0;
-              const h = (val / maxVal) * (svgHeight - topMargin - 15);
+        // `|| 0` used to collapse null/undefined into 0 here too, so a day with no row in
+        // the database drew the same 2px stub as a day that genuinely measured zero. The
+        // bar height IS a statement about the user's body - it must not be drawn from a
+        // value nobody measured.
+              const rawVal = currentWeekVals[idx];
+              const hasValue = rawVal !== null && rawVal !== undefined;
+              const val = hasValue ? rawVal : 0;
+              const h = barHeight(rawVal, maxVal, svgHeight - topMargin - 15) ?? 0;
               const x = leftMargin + idx * (barWidth + gap);
               const y = svgHeight - topMargin - h;
               const isActive = hoverInfo && hoverInfo.chartKey === key && hoverInfo.idx === idx;
@@ -323,7 +364,23 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
                 >
               {/* An invisible, wider hit area - makes a narrow bar easier to click or hover */}
                   <rect x={x - gap / 2} y={0} width={barWidth + gap} height={svgHeight} fill="transparent" />
-              {/* Bar with rounded top corners */}
+              {/* No reading for this day: an empty dashed slot, visibly different from the
+                  flat stub that a measured zero draws. */}
+                  {!hasValue ? (
+                    <rect
+                      x={x}
+                      y={topMargin}
+                      width={barWidth}
+                      height={svgHeight - topMargin - 15}
+                      rx="2"
+                      ry="2"
+                      fill="none"
+                      stroke={isActive ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.12)'}
+                      strokeWidth="1"
+                      strokeDasharray="2,2"
+                    />
+                  ) : (
+              /* Bar with rounded top corners */
                   <rect
                     x={x}
                     y={y}
@@ -333,6 +390,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
                     ry="2"
                     fill={val > 0 ? (isActive ? '#a3e6ff' : '#ffffff') : 'rgba(255,255,255,0.08)'}
                   />
+                  )}
                   {/* Etykieta dnia tygodnia */}
                   {(() => {
                     const shouldShowLabel = 
@@ -362,11 +420,15 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
           {hoverInfo && hoverInfo.chartKey === key && (() => {
             const idx = hoverInfo.idx;
             const day = currentWeekDays[idx];
-            const val = currentWeekVals[idx] || 0;
-            const h = (val / maxVal) * (svgHeight - topMargin - 15);
+            const rawVal = currentWeekVals[idx];
+            const hasValue = rawVal !== null && rawVal !== undefined;
+        // Hovering a day with no reading used to confirm the fabricated bar in words
+        // ("0h 0m h"). The bubble now says so explicitly instead.
+            const h = barHeight(rawVal, maxVal, svgHeight - topMargin - 15) ?? 0;
             const x = leftMargin + idx * (barWidth + gap) + barWidth / 2;
             const y = svgHeight - topMargin - h;
-            return renderTooltip(key, idx, x, y, `${formatFn(val)} ${unit}`, day, svgWidth, null, svgHeight);
+            const label = hasValue ? `${formatFn(rawVal)} ${unit}` : t('Brak danych');
+            return renderTooltip(key, idx, x, y, label, day, svgWidth, null, svgHeight);
           })()}
         </div>
       </div>
@@ -973,6 +1035,43 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
       </span>
     );
   };
+
+// A failed read of the history must not render as a complete, confident "no data" screen.
+  if (loadError && historyData.length === 0) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+        <div className="premium-title-row" style={{ padding: '0 4px' }}>
+          <h2 style={{ margin: 0, fontSize: '1.4rem', color: '#fff' }}>Twoje wykresy</h2>
+        </div>
+        <div className="premium-card" style={{ textAlign: 'center', padding: '32px 20px', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center' }}>
+          <div style={{ fontSize: '1.6rem' }}>📡</div>
+          <div style={{ fontSize: '1rem', color: '#fff', fontWeight: '600' }}>
+            {t('Nie udało się wczytać historii pomiarów')}
+          </div>
+          <div style={{ fontSize: '0.85rem', color: 'var(--text-dim)', maxWidth: '440px' }}>
+            {t('To błąd odczytu z serwera, a nie brak Twoich danych — Twoje integracje najpewniej działają poprawnie.')}
+          </div>
+          <button
+            type="button"
+            onClick={() => { setLoadError(false); setHistoryTrigger(v => v + 1); }}
+            style={{
+              marginTop: '8px',
+              background: 'rgba(255,255,255,0.08)',
+              border: '1px solid var(--border-glass)',
+              borderRadius: '8px',
+              color: '#fff',
+              padding: '8px 18px',
+              fontSize: '0.85rem',
+              fontWeight: '600',
+              cursor: 'pointer'
+            }}
+          >
+            {t('Spróbuj ponownie')}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading && historyData.length === 0) {
     return (

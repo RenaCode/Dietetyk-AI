@@ -235,6 +235,27 @@ async function testHistoricalDayIsFullDay() {
   console.log('✅ Historical dates are distinguished from the live state.');
 }
 
+async function testMalformedDateFallsBackToToday() {
+  console.log('\n--- TEST 5b: a ?date= that is not a real calendar date falls back to today ---');
+  await clearMetrics();
+  const today = todayWarsaw();
+  await seedBaseline(today);
+  await setMetrics(today, {
+    sleep_score: 80, sleep_duration: 7.5, readiness_score: 80,
+    active_calories: 500, active_minutes: 45, steps: 9000
+  });
+
+  // "2026-13-45" is the interesting one: it matches the YYYY-MM-DD shape, so a regex-only
+  // guard passes it through, and Date.UTC then rolls month 13 day 45 over into February 2027.
+  // Nothing throws - every insight simply queries a window around a date the user never asked
+  // for and answers "no data", which reads as missing data rather than as a bad request.
+  for (const badDate of ['abc', '2026-13-45', '2026-02-30', '23.09.2026']) {
+    const { body } = await getJson(`/api/dashboard/energy-battery?date=${encodeURIComponent(badDate)}`);
+    assert.strictEqual(body.date, today, `?date=${badDate} must fall back to today's date.`);
+  }
+  console.log('✅ Malformed and impossible dates fall back to today instead of silently shifting the window.');
+}
+
 async function testBatchReturnsSameAsIndividual() {
   console.log('\n--- TEST 6: the batch returns the same as individual requests ---');
   await clearMetrics();
@@ -354,6 +375,7 @@ async function main() {
     await testSleepDebtDragsBatteryDown();
     await testHardDayDrainsMoreThanEasyDay();
     await testHistoricalDayIsFullDay();
+    await testMalformedDateFallsBackToToday();
     await testBatchReturnsSameAsIndividual();
     await testBatchIsolatesUnknownIds();
     await testBatchRejectsEmptyAndOversizedRequests();

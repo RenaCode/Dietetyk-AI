@@ -7,9 +7,12 @@ const { authenticator } = require('otplib');
 const QRCode = require('qrcode');
 const { sendWeeklySummaryForUser, sendDailySummaryForUser, sendMonthlySummaryForUser } = require('../services/summaries');
 const { buildHealthReportPdf } = require('../services/pdfReport');
-const { createShareLink, listSharesForUser, revokeShare, VALIDITY_OPTIONS_HOURS } = require('../services/sharedReports');
+const { createShareLink, listSharesForUser, revokeShare, revokeAllSharesForUser, VALIDITY_OPTIONS_HOURS } = require('../services/sharedReports');
 const { getAppConfig } = require('../services/oauthHelpers');
-const { summaryEmailLimiter } = require('../middleware/rateLimit');
+const { summaryEmailLimiter, pdfRateLimiter } = require('../middleware/rateLimit');
+const { revokeUserSessions } = require('../middleware/auth');
+const loginAttempts = require('../services/loginAttempts');
+const logger = require('../services/logger');
 const { USER_SECRET_SETTING_KEYS, maskSecretValue, isMaskedSecretWrite } = require('../utils/secretKeys');
 const { encrypt } = require('../utils/encryption');
 const { geocodeLocation } = require('../utils/weatherContext');
@@ -44,6 +47,44 @@ const MAX_AVATAR_BASE64_LENGTH = 3 * 1024 * 1024;
 // the external Open-Meteo geocoder, so bound its size rather than passing an arbitrarily
 // long string through (see GET /api/settings/geocode-location below).
 const MAX_LOCATION_QUERY_LENGTH = 100;
+
+// Brute-force key for the password re-checks in this file, namespaced the same way as
+// `twoFactorAttemptKey` in routes/auth.js so it cannot collide with the login keys.
+//
+// Three endpoints here compare a password: disable-2fa, change-password and account
+// deletion. None of them counted attempts, so the 5-try lockout that guards /api/login
+// (services/loginAttempts.js) simply did not exist on this side of the wall. Someone holding
+// only a session token - the exact situation these password prompts are meant to survive -
+// could sit on POST /api/user/disable-2fa and guess for ever: the sole brake was the global
+// apiRateLimiter, which in this cluster is one shared bucket for the whole internet (see
+// server.js), i.e. roughly 170k guesses a day with not one AUTH_LOCKOUT row in app_logs and
+// therefore nothing in the weekly security report either. A hit switches off the second
+// factor or deletes every health record the account holds.
+//
+// Keyed by user id, not by the submitted value and not by IP alone, for the same reason
+// `twoFactorAttemptKey` is: the id is the stable thing across retries. The IP still forms
+// part of the key through loginAttempts.buildKey.
+const passwordCheckAttemptKey = (userId) => `pwcheck_user:${userId}`;
+
+// Shared guard for those three endpoints. Returns a response body to send with 429 when the
+// account is locked, or null when the caller may go ahead and compare the password.
+async function passwordCheckLockout(req) {
+  const lockedMs = await loginAttempts.isLocked(req.ip, passwordCheckAttemptKey(req.user.id));
+  if (lockedMs > 0) {
+    return { error: `Za dużo nieudanych prób podania hasła. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.` };
+  }
+  return null;
+}
+
+async function recordPasswordCheckFailure(req, action) {
+  await loginAttempts.recordFailure(req.ip, passwordCheckAttemptKey(req.user.id));
+  logger.security(
+    `Wrong password supplied for an account operation: ${action} (UID: ${req.user.id})`,
+    'AUTH_PASSWORD_FAILURE',
+    { userId: req.user.id, action },
+    req.ip
+  );
+}
 
 router.get('/api/settings', async (req, res) => {
   try {
@@ -88,11 +129,77 @@ router.get('/api/settings', async (req, res) => {
 // empty or unset at that moment.
 const CREDENTIAL_KEYS = ['oura_client_id', 'oura_client_secret', 'withings_client_id', 'withings_client_secret'];
 
+// The settings keys a user is allowed to write through this endpoint.
+//
+// Unlike POST /api/admin/config, which has had an explicit allowlist from the start
+// (routes/admin.js), this loop stored WHATEVER arrived: any key name, any value, up to the
+// 20 MB express.json limit that server.js raised for the Apple Health webhook - repeatable
+// 120 times a minute. That is an unbounded write primitive into the settings table for every
+// logged-in user, and this database runs with journal_mode=TRUNCATE, which makes each of
+// those writes expensive (see the note at the top of db.js).
+//
+// The list is the union of what the interface actually saves: the targets form and the
+// integration credentials in Settings.jsx, the activity goals in ActivityTracker.jsx, the
+// calorie suggestion in Dashboard.jsx and the language switch in App.jsx.
+const ALLOWED_SETTING_KEYS = [
+  // Nutrition targets (Settings.jsx)
+  'target_calories', 'target_protein', 'target_carbs', 'target_fat', 'bmr',
+  'target_water_ml', 'height_cm', 'target_weight_kg', 'target_body_fat_pct',
+  // Activity goals (ActivityTracker.jsx)
+  'target_steps', 'target_active_calories', 'target_active_minutes', 'target_sleep_duration',
+  // Interface
+  'language',
+  // Weather context for the AI prompts (utils/weatherContext.js)
+  'weather_lat', 'weather_lon', 'weather_location_label',
+  // Per-user integration credentials
+  'oura_client_id', 'oura_client_secret', 'withings_client_id', 'withings_client_secret',
+  'gemini_api_key',
+  // Optional override of the Withings callback address - there IS a field for it in
+  // Settings.jsx ("Withings Custom Redirect URI"), for accounts whose Withings Developer
+  // portal entry points at another domain. routes/integrations.js now uses the same value
+  // for the authorisation and for the code exchange.
+  'withings_redirect_uri',
+  // Summary schedule. Written by POST /api/user/profile, but GET /api/settings returns them
+  // and Settings.jsx posts back everything it received, so they belong here too - otherwise
+  // every save of the settings form would log them as unknown keys.
+  'weekly_summary_enabled', 'weekly_summary_day', 'weekly_summary_time',
+  'monthly_summary_enabled', 'monthly_summary_day', 'monthly_summary_time'
+];
+
+// Keys that legitimately live in the settings table but are written by the BACKEND only, and
+// come back through GET /api/settings purely because that endpoint returns the whole row set.
+// The frontend echoes them on save; they are skipped without a word, because warning about
+// them would fire on every ordinary settings save and train everyone to ignore the warning
+// that matters.
+const BACKEND_OWNED_SETTING_KEYS = ['training_plan_insight_json', 'training_plan_insight_at'];
+
+// Per-value size cap. Every allowlisted key above holds a number, a short label or an API
+// key; the longest honest value is a geocoded location label. 4 KB leaves room for a key
+// format nobody has invented yet and still stops a single request from writing megabytes.
+const MAX_SETTING_VALUE_LENGTH = 4096;
+
 router.post('/api/settings', async (req, res) => {
   const settings = req.body; // keys and values
+  // Unknown keys are SKIPPED, not rejected with a 400. A 400 would make one unrecognised
+  // field - a key added to the frontend before this list, say - fail the whole save, leaving
+  // the user unable to change anything at all until the list catches up. Skipping keeps the
+  // rest of the form working; the log line is what makes the omission findable, and it goes
+  // through `logger` so it lands in app_logs and the weekly admin report rather than only in
+  // the container's stdout.
+  const ignoredKeys = [];
   try {
     for (const [key, val] of Object.entries(settings)) {
       if (key === 'sync_token') continue; // Pole tylko do odczytu
+      if (BACKEND_OWNED_SETTING_KEYS.includes(key)) continue;
+      if (!ALLOWED_SETTING_KEYS.includes(key)) {
+        ignoredKeys.push(key);
+        continue;
+      }
+      if (val !== null && val !== undefined && String(val).length > MAX_SETTING_VALUE_LENGTH) {
+        // Loud here, unlike an unknown key: no allowlisted setting can honestly be this
+        // long, so a value this size is either a bug or an attempt to inflate the database.
+        return res.status(400).json({ error: `Wartość ustawienia "${key}" jest zbyt długa.` });
+      }
       if (isMaskedSecretWrite(key, val, USER_SECRET_SETTING_KEYS)) {
         continue; // skip updating a secret when the mask was sent back
       }
@@ -109,7 +216,16 @@ router.post('/api/settings', async (req, res) => {
         ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
       `, [req.user.id, key, storedValue]);
     }
-    res.json({ success: true, message: 'Ustawienia zostały zaktualizowane.' });
+    if (ignoredKeys.length > 0) {
+      logger.warn(
+        `POST /api/settings ignored ${ignoredKeys.length} key(s) outside the allowlist: ${ignoredKeys.slice(0, 20).join(', ')}`,
+        'SETTINGS',
+        { userId: req.user.id, ignoredCount: ignoredKeys.length },
+        req.ip,
+        req.user.id
+      );
+    }
+    res.json({ success: true, message: 'Ustawienia zostały zaktualizowane.', ignoredKeys });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Błąd zapisu ustawień.' });
@@ -217,6 +333,28 @@ router.post('/api/user/profile', async (req, res) => {
       // for summaries, so an obviously invalid value should not reach the database.
     if (email !== undefined && email !== '' && !EMAIL_REGEX.test(email)) {
       return res.status(400).json({ error: 'Niepoprawny format adresu e-mail.' });
+    }
+
+    // The address must not already belong to somebody else - the same check `syncToken` a few
+    // lines above has had all along, and for a sharper reason.
+    //
+    // /api/login resolves an account with `WHERE username = ? OR email = ?`. With two rows
+    // carrying the same address, which one that returns is decided by the query plan
+    // (username is indexed, email is not), not by intent. So setting one's own email to the
+    // victim's address is enough to make the victim's correct password come back 401, and
+    // after five tries their key `ip::<address>` is locked for 15 minutes
+    // (services/loginAttempts.js) - a lockout of a health-data account performed by any
+    // account holder, leaving nothing in the logs that points at who did it.
+    //
+    // DEPENDENCY: this closes the endpoint, not the hole. `users.email` still has no UNIQUE
+    // constraint (db.js), so any other write path - or a duplicate already sitting in the
+    // table - can recreate the situation. The migration belongs to db.js and must de-duplicate
+    // existing rows before adding the constraint.
+    if (email !== undefined && email !== '' && email !== null) {
+      const emailOwner = await db.get(`SELECT id FROM users WHERE email = ? AND id != ?`, [email, req.user.id]);
+      if (emailOwner) {
+        return res.status(400).json({ error: 'Ten adres e-mail jest już przypisany do innego konta.' });
+      }
     }
 
     if (avatar !== undefined && avatar !== null && avatar.length > MAX_AVATAR_BASE64_LENGTH) {
@@ -472,6 +610,9 @@ router.post('/api/user/disable-2fa', async (req, res) => {
     return res.status(400).json({ error: 'Wymagane jest podanie aktualnego hasła, aby wyłączyć 2FA.' });
   }
   try {
+    const locked = await passwordCheckLockout(req);
+    if (locked) return res.status(429).json(locked);
+
     const user = await db.get(`SELECT password_hash FROM users WHERE id = ?`, [req.user.id]);
     if (!user) {
       return res.status(404).json({ error: 'Użytkownik nie istnieje.' });
@@ -479,11 +620,30 @@ router.post('/api/user/disable-2fa', async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
+      await recordPasswordCheckFailure(req, 'disable-2fa');
       return res.status(400).json({ error: 'Niepoprawne hasło.' });
     }
 
+    await loginAttempts.recordSuccess(req.ip, passwordCheckAttemptKey(req.user.id));
     await db.run(`UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?`, [req.user.id]);
-    res.json({ success: true, message: 'Dwuetapowa weryfikacja (2FA) została wyłączona.' });
+
+    // Turning the second factor off lowers the protection on every session that exists, so
+    // the sessions that exist do not get to keep running. Consider the case this endpoint was
+    // written for: a stolen token and a guessed password. Without this the attacker's session
+    // AND the victim's sessions both survive the change, and the account is now 2FA-less for
+    // all of them. The user's own session is kept (they are standing in the settings screen);
+    // everything else has to authenticate again.
+    //
+    // Share links are deliberately NOT revoked here, unlike on a password change: disabling
+    // 2FA does not mean "my credentials leaked", and quietly breaking a report the user sent
+    // to their doctor would be a surprise with no security gain - the password that guards
+    // this endpoint has not changed hands.
+    const revoked = await revokeUserSessions(req.user.id, req.sessionToken);
+    if (revoked > 0) {
+      logger.security(`2FA disabled: revoked ${revoked} other session(s) (UID: ${req.user.id})`, 'AUTH_SESSION_REVOKE', { userId: req.user.id, revoked }, req.ip, req.user.id);
+    }
+
+    res.json({ success: true, message: 'Dwuetapowa weryfikacja (2FA) została wyłączona.', revokedSessions: revoked });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Błąd dezaktywacji 2FA.' });
@@ -517,6 +677,9 @@ router.post('/api/user/change-password', async (req, res) => {
   }
 
   try {
+    const locked = await passwordCheckLockout(req);
+    if (locked) return res.status(429).json(locked);
+
     const user = await db.get(`SELECT password_hash FROM users WHERE id = ?`, [req.user.id]);
     if (!user) {
       return res.status(404).json({ error: 'Użytkownik nie istnieje.' });
@@ -524,15 +687,67 @@ router.post('/api/user/change-password', async (req, res) => {
 
     const isMatch = await bcrypt.compare(currentPassword, user.password_hash);
     if (!isMatch) {
+      await recordPasswordCheckFailure(req, 'change-password');
       return res.status(400).json({ error: 'Obecne hasło jest niepoprawne.' });
     }
 
+    await loginAttempts.recordSuccess(req.ip, passwordCheckAttemptKey(req.user.id));
     const newHash = await bcrypt.hash(newPassword, 10);
     await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, req.user.id]);
-    res.json({ success: true, message: 'Hasło zostało pomyślnie zmienione.' });
+
+    // Everything the old password could reach ends here. Changing a password used to update
+    // one column and nothing else: the attacker's session row was untouched, and because
+    // middleware/auth.js renews any token used within the week, their access was effectively
+    // permanent - the victim had no screen, endpoint or setting that could end it. See
+    // revokeUserSessions in middleware/auth.js and revokeAllSharesForUser in
+    // services/sharedReports.js for the two halves of that access and the reasoning behind
+    // revoking the share links as well.
+    const revokedSessions = await revokeUserSessions(req.user.id, req.sessionToken);
+    const revokedShares = await revokeAllSharesForUser(req.user.id);
+    logger.security(
+      `Password changed: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s) (UID: ${req.user.id})`,
+      'AUTH_PASSWORD_CHANGE',
+      { userId: req.user.id, revokedSessions, revokedShares },
+      req.ip,
+      req.user.id
+    );
+
+    res.json({
+      success: true,
+      message: revokedShares > 0
+        ? 'Hasło zostało pomyślnie zmienione. Pozostałe urządzenia zostały wylogowane, a aktywne linki do raportów unieważnione.'
+        : 'Hasło zostało pomyślnie zmienione. Pozostałe urządzenia zostały wylogowane.',
+      revokedSessions,
+      revokedShares
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Błąd zmiany hasła serwera.' });
+  }
+});
+
+// "Log out all other devices" - the missing lever.
+//
+// Until now the only way out of a session was POST /api/logout, which deletes the token in
+// the caller's own Authorization header (routes/auth.js). Someone who suspected a token had
+// leaked - a laptop left at a client's, a browser extension they no longer trust - had
+// literally no action available to them: not logout, not a password change (which touched
+// nothing but the hash), not disabling and re-enabling 2FA. Only an administrator could do
+// it, through routes/admin.js.
+//
+// Deliberately NOT password-protected. This endpoint only ever REMOVES access, so the worst
+// an attacker holding a session can do with it is log themselves out along with everyone
+// else; requiring a password would instead lock out accounts created through Google sign-in,
+// which have a random hash nobody knows (see routes/auth.js), exactly when they need this
+// most.
+router.post('/api/user/logout-all', async (req, res) => {
+  try {
+    const revoked = await revokeUserSessions(req.user.id, req.sessionToken);
+    logger.security(`Logged out all other devices: ${revoked} session(s) (UID: ${req.user.id})`, 'AUTH_SESSION_REVOKE', { userId: req.user.id, revoked }, req.ip, req.user.id);
+    res.json({ success: true, message: 'Pozostałe urządzenia zostały wylogowane.', revokedSessions: revoked });
+  } catch (err) {
+    console.error('[LOGOUT ALL ERROR]', err);
+    res.status(500).json({ error: 'Błąd wylogowywania pozostałych urządzeń.' });
   }
 });
 
@@ -652,7 +867,7 @@ router.get('/api/user/export', async (req, res) => {
 // body composition, circumferences, supplements) rather than a raw dump of every database
 // row. The days parameter is bounded in
 // buildHealthReportPdf (services/pdfReport.js) do maks. PDF_REPORT_MAX_DAYS dni.
-router.get('/api/user/export-pdf-report', async (req, res) => {
+router.get('/api/user/export-pdf-report', pdfRateLimiter, async (req, res) => {
   try {
     const pdfBuffer = await buildHealthReportPdf(req.user.id, req.query.days);
     const dateStr = new Date().toISOString().slice(0, 10);
@@ -670,7 +885,7 @@ router.get('/api/user/export-pdf-report', async (req, res) => {
 // dietician themselves, the user sends a link the recipient can open without an account in
 // the app (see routes/sharedReport.js, the public
 // endpoint zamontowany w server.js przed requireAuth).
-router.post('/api/user/shared-reports', async (req, res) => {
+router.post('/api/user/shared-reports', pdfRateLimiter, async (req, res) => {
   try {
     const validityKey = Object.prototype.hasOwnProperty.call(VALIDITY_OPTIONS_HOURS, req.body.validityKey)
       ? req.body.validityKey
@@ -683,6 +898,11 @@ router.post('/api/user/shared-reports', async (req, res) => {
 
     res.json({ url, days, expiresAt });
   } catch (err) {
+    // The share cap is a user-correctable condition ("revoke one, then try again"), not a
+    // server fault - answering 500 would tell the user their own action broke something.
+    if (err.code === 'SHARE_LIMIT_REACHED') {
+      return res.status(429).json({ error: 'Masz zbyt wiele aktywnych linków do raportów. Unieważnij któryś z nich, zanim utworzysz nowy.' });
+    }
     console.error('[SHARE LINK CREATE ERROR]', err);
     res.status(500).json({ error: 'Błąd tworzenia linku udostępniania.' });
   }
@@ -727,6 +947,9 @@ router.delete('/api/user/account', async (req, res) => {
   }
 
   try {
+    const locked = await passwordCheckLockout(req);
+    if (locked) return res.status(429).json(locked);
+
     const user = await db.get(`SELECT password_hash, role FROM users WHERE id = ?`, [req.user.id]);
     if (!user) {
       return res.status(404).json({ error: 'Użytkownik nie istnieje.' });
@@ -734,8 +957,11 @@ router.delete('/api/user/account', async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
+      await recordPasswordCheckFailure(req, 'delete-account');
       return res.status(400).json({ error: 'Niepoprawne hasło.' });
     }
+
+    await loginAttempts.recordSuccess(req.ip, passwordCheckAttemptKey(req.user.id));
 
     if (user.role === 'admin') {
       return res.status(403).json({

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
+const { isCalendarDateString } = require('../utils/dates');
 
 // "Day tag" - the user marks a date range with context (illness/holiday/late bedtime) so
 // that selected dashboard insights can exclude those days from
@@ -10,11 +11,25 @@ const { requireAuth } = require('../middleware/auth');
 // free text here would break that logic.
 const VALID_TYPES = ['illness', 'vacation', 'late_sleep'];
 
-// Validates the 'YYYY-MM-DD' format only - we do not check whether the date exists in the
-// calendar (2026-02-30, say). SQLite still compares such values lexicographically
-// correctly for range queries, and full calendar validation is not worth the extra
-// complexity for this form.
-const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+// Calendar validation, not just the shape. This used to be a bare
+// /^\d{4}-\d{2}-\d{2}$/ with a comment arguing that checking whether the date really
+// exists "is not worth the extra complexity for this form", because SQLite compares such
+// values lexicographically correctly for range queries. The first half of that was true
+// and the second half stopped being true:
+//
+//   - the shape test accepts 2026-13-45 and 2026-02-30. Nothing rejects them, so the tag
+//     is stored and simply never matches a real day - a range the user set and that
+//     silently covers nothing;
+//   - worse, these values do not stay inside range queries. Insights read day tags and
+//     feed the dates into calendar arithmetic (shiftDate), where Date.UTC happily rolls
+//     2026-02-30 forward to March 2 - so the excluded window moves without a word;
+//   - "extra complexity" is now one shared import. isCalendarDateString lives in
+//     utils/dates.js, which this backend already depends on everywhere.
+//
+// This was the sixth copy of the same weaker rule found on 2026-09-23 (chat.js,
+// dashboard.js x2, appleHealth.js, mealAnomaly.js and here). The other five were
+// duplicated arithmetic; this one had a reasoned justification that outlived the
+// conditions that made it reasonable - which is the harder kind to notice.
 
 const MAX_NOTE_LENGTH = 500;
 
@@ -41,7 +56,7 @@ router.post('/api/day-events', requireAuth, async (req, res) => {
   if (!VALID_TYPES.includes(type)) {
     return res.status(400).json({ error: `Nieprawidłowy typ zdarzenia. Dozwolone: ${VALID_TYPES.join(', ')}.` });
   }
-  if (!DATE_REGEX.test(start_date) || !DATE_REGEX.test(end_date)) {
+  if (!isCalendarDateString(start_date) || !isCalendarDateString(end_date)) {
     return res.status(400).json({ error: 'Daty muszą być w formacie RRRR-MM-DD.' });
   }
   if (end_date < start_date) {
@@ -85,7 +100,7 @@ router.put('/api/day-events/:id', requireAuth, async (req, res) => {
   if (!VALID_TYPES.includes(type)) {
     return res.status(400).json({ error: `Nieprawidłowy typ zdarzenia. Dozwolone: ${VALID_TYPES.join(', ')}.` });
   }
-  if (!DATE_REGEX.test(start_date) || !DATE_REGEX.test(end_date)) {
+  if (!isCalendarDateString(start_date) || !isCalendarDateString(end_date)) {
     return res.status(400).json({ error: 'Daty muszą być w formacie RRRR-MM-DD.' });
   }
   if (end_date < start_date) {

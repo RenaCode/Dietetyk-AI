@@ -1,7 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { parseHealthAutoExportDate, dateObjToLocalDateString, getWarsawWallClock } = require('../utils/dates');
+const { parseHealthAutoExportDate, dateObjToLocalDateString, getWarsawWallClock, shiftDate } = require('../utils/dates');
+const {
+  ACTIVITY_METRIC_COLUMNS,
+  getActivitySourceRank,
+  preserveHigherPriority,
+  preserveSourceLabel,
+  activitySourceColumns,
+  activitySourceValues
+} = require('../utils/activitySources');
 
 // Webhook receiving data from the "Health Auto Export" iOS app - a bridge between Apple
 // Health and this backend. HealthKit has no public cloud API, so an intermediary running
@@ -24,8 +32,20 @@ const { parseHealthAutoExportDate, dateObjToLocalDateString, getWarsawWallClock 
 // The health_metrics.activity_source column ('apple' | 'google_fit' | 'oura') records who
 // last wrote activity data for a given date. The source hierarchy is defined once for the
 // whole application, in utils/activitySources.js:
-//   - This webhook sits at the top of the hierarchy, so it ALWAYS overwrites activity data
-//     and sets activity_source='apple'. It needs no protective clause.
+//   - This webhook sits at the top of the hierarchy, so its activity values always win.
+//     It used to hand-write `activity_source = 'apple'` unconditionally, on the reasoning
+//     that "Apple is top of the hierarchy, so it needs no protective clause". That is true
+//     of the WRITE and false of everything that comes after it (audit 2026-09-23). The
+//     label was stamped on even when the payload carried no activity at all: a Health Auto
+//     Export automation sending only Dietary Water, or only sleep, or only wrist
+//     temperature, still creates a byDate entry and still reaches this upsert, and the
+//     activity columns are then all NULL, so COALESCE keeps whatever was there. From that
+//     moment the row reads as "owned by apple with real steps in it", and
+//     preserveHigherPriority() in sync.js correctly refuses to let Google Fit or Oura
+//     touch those columns again - for a day Apple will never send activity for. Steps
+//     frozen at the value they happened to have, for good.
+//     So this upsert builds its clauses from the same helpers as every other writer, and
+//     passes activity_source = 'apple' only when the payload actually brought activity.
 //   - syncOura and syncGoogleFit (services/sync.js) build their ON CONFLICT clauses from
 //     that same hierarchy via preserveHigherPriority()/preserveSourceLabel(), so they will
 //     not overwrite a column holding real data from a higher-ranked source. Previously the
@@ -124,13 +144,6 @@ function numOrNull(v) {
   const n = typeof v === 'number' ? v : parseFloat(v);
   return Number.isFinite(n) ? n : null;
 }
-
-const shiftDate = (dateStr, deltaDays) => {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + deltaDays);
-  return dt.toISOString().split('T')[0];
-};
 
 // Classifies a single heart-rate reading into zone 1-5 (Karvonen). Returns null when it
 // cannot be computed: no HRmax, because the user has not set a birth year in their profile, or
@@ -262,6 +275,110 @@ const METRIC_FIELD_MAP = {
   heart_rate_variability_sdnn: { field: 'hrv', convert: (qty) => qty, mode: 'last' }
 };
 
+const APPLE_RANK = getActivitySourceRank('apple');
+
+// APPLE ACTIVITY LABEL: the columns the source hierarchy governs, taken from
+// utils/activitySources.js rather than repeated here. services/sync.js used to keep its own
+// copy of the same list; two writers working from two lists would disagree about who owns a
+// day and the label would flip back and forth between syncs.
+// The values are bound in this order, so the `<column>_source` parameters built from
+// activitySourceValues() line up with them.
+const ACTIVITY_LABEL_COLUMNS = ACTIVITY_METRIC_COLUMNS;
+
+/**
+ * Builds the health_metrics upsert this webhook executes.
+ *
+ * It is a named function (and exported) so tests can run the REAL statement rather than a
+ * reconstruction of it. tests/test-activity-sources.js used to rebuild "the Apple write"
+ * out of preserveHigherPriority()/preserveSourceLabel() - i.e. out of the sync.js pattern -
+ * and passed happily for months while this file hand-wrote `activity_source = 'apple'` and
+ * broke the very rule the test claimed to protect.
+ *
+ * @param {boolean} hasOura whether the user has an Oura ring connected, which decides
+ *   whether Apple sleep data may overwrite Oura's own
+ */
+function buildHealthMetricsUpsertSql(hasOura) {
+  const sleepDurationUpdate = hasOura
+    ? 'sleep_duration = CASE WHEN readiness_score IS NOT NULL THEN sleep_duration ELSE NULLIF(MAX(COALESCE(sleep_duration, 0), COALESCE(excluded.sleep_duration, 0)), 0) END'
+    : 'sleep_duration = NULLIF(MAX(COALESCE(sleep_duration, 0), COALESCE(excluded.sleep_duration, 0)), 0)';
+  const sleepDeepUpdate = hasOura
+    ? 'sleep_deep = CASE WHEN readiness_score IS NOT NULL THEN sleep_deep ELSE NULLIF(MAX(COALESCE(sleep_deep, 0), COALESCE(excluded.sleep_deep, 0)), 0) END'
+    : 'sleep_deep = NULLIF(MAX(COALESCE(sleep_deep, 0), COALESCE(excluded.sleep_deep, 0)), 0)';
+  const sleepRemUpdate = hasOura
+    ? 'sleep_rem = CASE WHEN readiness_score IS NOT NULL THEN sleep_rem ELSE NULLIF(MAX(COALESCE(sleep_rem, 0), COALESCE(excluded.sleep_rem, 0)), 0) END'
+    : 'sleep_rem = NULLIF(MAX(COALESCE(sleep_rem, 0), COALESCE(excluded.sleep_rem, 0)), 0)';
+  const sleepScoreUpdate = hasOura
+    ? 'sleep_score = CASE WHEN readiness_score IS NOT NULL THEN sleep_score ELSE NULLIF(MAX(COALESCE(sleep_score, 0), COALESCE(excluded.sleep_score, 0)), 0) END'
+    : 'sleep_score = NULLIF(MAX(COALESCE(sleep_score, 0), COALESCE(excluded.sleep_score, 0)), 0)';
+
+  const rhrUpdate = hasOura
+    ? 'rhr = CASE WHEN readiness_score IS NOT NULL THEN rhr ELSE COALESCE(excluded.rhr, rhr) END'
+    : 'rhr = COALESCE(excluded.rhr, rhr)';
+  const hrvUpdate = hasOura
+    ? 'hrv = CASE WHEN readiness_score IS NOT NULL THEN hrv ELSE COALESCE(excluded.hrv, hrv) END'
+    : 'hrv = COALESCE(excluded.hrv, hrv)';
+  const readinessScoreUpdate = hasOura
+    ? 'readiness_score = readiness_score'
+    : 'readiness_score = COALESCE(excluded.readiness_score, readiness_score)';
+
+  // WATER: water_ml is a MIXED counter - manual taps from POST /api/water/add plus whatever
+  // Apple Health forwards from the smart bottle. It used to be incremented here
+  // (water_ml = water_ml + excluded.water_ml) with double counting prevented by the
+  // INSERT OR IGNORE into apple_health_water_samples: only samples that were new got added.
+  // Those two writes are in different transactions, hundreds of lines apart, so any failure
+  // of THIS statement (SQLITE_BUSY during the VACUUM in cleanupOldImages, for instance)
+  // lost the water permanently: the sample row was already committed, the retry from Health
+  // Auto Export got changes = 0 for it, and the millilitres were never added to any counter.
+  // Now the webhook passes the day's FULL total recomputed from apple_health_water_samples
+  // and we replace Apple's previous contribution with it, which makes a retry idempotent and
+  // a lost write self-healing. water_ml_apple exists exactly to remember how much of
+  // water_ml came from Apple; without it we could only overwrite the column and would throw
+  // away the user's manual entries.
+  // Subtracting the old share also keeps POST /api/water/reset working the way it always
+  // has: reset zeroes water_ml but records the day's sample total in water_ml_apple, so the
+  // next webhook contributes only the samples that arrived AFTER the reset instead of
+  // resurrecting the whole day (see routes/health.js).
+  // MAX(0, ...) wraps the final result purely as a floor; with samples only ever
+  // accumulating, the expression cannot go negative on its own.
+  const waterUpdate = `
+          water_ml = CASE WHEN excluded.water_ml_apple IS NOT NULL
+            THEN MAX(0, COALESCE(water_ml, 0) - COALESCE(water_ml_apple, 0) + excluded.water_ml_apple)
+            ELSE water_ml END,
+          water_ml_apple = COALESCE(excluded.water_ml_apple, water_ml_apple)`;
+
+  // The `<column>_source` columns have to be in the INSERT too, not just in the conflict
+  // clause: a date the webhook is the first to write has no conflict to resolve, and a row
+  // left with NULL provenance is unowned - Google Fit's next hourly sync would overwrite
+  // Apple's step count an hour after it landed.
+  const sourceColumns = activitySourceColumns(ACTIVITY_LABEL_COLUMNS);
+
+  return `
+        INSERT INTO health_metrics (
+          user_id, date, steps, active_calories, total_calories_burned, active_minutes, wrist_temperature,
+          distance_meters, water_ml, water_ml_apple, sleep_duration, sleep_deep, sleep_rem, sleep_score,
+          rhr, hrv, readiness_score, activity_source, ${sourceColumns.join(', ')}, last_sync
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${sourceColumns.map(() => '?').join(', ')}, ?)
+        ON CONFLICT(user_id, date) DO UPDATE SET
+          ${preserveHigherPriority('steps', APPLE_RANK)},
+          ${preserveHigherPriority('active_calories', APPLE_RANK)},
+          ${preserveHigherPriority('total_calories_burned', APPLE_RANK)},
+          ${preserveHigherPriority('active_minutes', APPLE_RANK)},
+          wrist_temperature = COALESCE(excluded.wrist_temperature, wrist_temperature),
+          ${preserveHigherPriority('distance_meters', APPLE_RANK)},
+          ${waterUpdate},
+          ${sleepDurationUpdate},
+          ${sleepDeepUpdate},
+          ${sleepRemUpdate},
+          ${sleepScoreUpdate},
+          ${rhrUpdate},
+          ${hrvUpdate},
+          ${readinessScoreUpdate},
+          ${preserveSourceLabel(APPLE_RANK, ACTIVITY_LABEL_COLUMNS)},
+          last_sync = excluded.last_sync
+  `;
+}
+
 router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
   try {
     const { syncToken } = req.params;
@@ -331,10 +448,12 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
   // A workout does NOT provide basal_calories, so total_calories_burned is not computed here
     // (dashboard.js i tak ma fallback bmr + active_calories, gdy total_calories_burned brak).
     //
-  // NO RISK OF DOUBLE COUNTING: the user confirmed this is the ONLY configured Health Auto
-  // Export automation - there is no parallel general-metrics automation already folding
-  // workout calories into the daily active_energy - so writing activeEnergyBurned from
-  // workouts as active_calories is safe.
+  // DOUBLE COUNTING: this used to be waved off with "the user confirmed this is the ONLY
+  // configured Health Auto Export automation", which is a statement about the settings on
+  // one phone, not a property of this code - and the general-metrics automation IS handled
+  // here as well. The daily totals are therefore combined with Math.max rather than
+  // assigned (see workoutAffectedDates below): workouts are a subset of the day, so their
+  // sum is a lower bound on it, never the whole of it.
     const rawMetrics = req.body && req.body.data && req.body.data.metrics;
     const rawWorkouts = req.body && req.body.data && req.body.data.workouts;
     const metrics = Array.isArray(rawMetrics) ? rawMetrics : null;
@@ -371,6 +490,9 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
     // minutes, because those are cumulative rather than instantaneous).
     const byDate = {};
     let matchedEntries = 0;
+    // Days whose water samples this payload touched - re-summed from
+    // apple_health_water_samples after the loop, see the dietary_water branch below.
+    const waterAffectedDates = new Set();
 
     if (metrics) {
       for (const metric of metrics) {
@@ -475,15 +597,20 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
           const bucket = byDate[dateStr];
           const converted = handler.convert(qty, metric.units);
           if (name === 'dietary_water') {
-    // Round 3 (audit): water idempotency - store the sample keyed by user_id and timestamp
+    // Round 3 (audit): water idempotency - store the sample keyed by user_id and timestamp.
+    // Audit 2026-09-23: the daily total is NOT accumulated from insertResult.changes any
+    // more. That made the sample table the sole record of "already counted" while the
+    // millilitres themselves were added in a separate statement far below - so a webhook
+    // that stored the samples and then failed on the health_metrics upsert lost that water
+    // for good (the client's retry saw changes = 0). The sample table is now the single
+    // source of truth and the day is re-summed from it after the loop, exactly the way
+    // workouts are already re-summed from apple_health_workouts.
             const timestamp = entry.date || parsedDate.toISOString();
-            const insertResult = await db.run(`
+            await db.run(`
               INSERT OR IGNORE INTO apple_health_water_samples (user_id, timestamp, date, qty)
               VALUES (?, ?, ?, ?)
             `, [user.id, timestamp, dateStr, converted]);
-            if (insertResult.changes > 0) {
-              bucket[handler.field] = (bucket[handler.field] || 0) + converted;
-            }
+            waterAffectedDates.add(dateStr);
           } else {
             bucket[handler.field] = handler.mode === 'last'
               ? converted
@@ -579,9 +706,40 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
             in_bed_duration: 0, rhr: null, hrv: null
           };
         }
-        byDate[dateStr].active_calories = sums && sums.total_calories !== null ? sums.total_calories : 0;
-        byDate[dateStr].active_minutes = sums && sums.total_minutes !== null ? sums.total_minutes : 0;
+        // The workout totals are a LOWER BOUND on the day, never its replacement (audit
+        // 2026-09-23). This used to assign them unconditionally, and it runs AFTER the
+        // data.metrics[] loop, so on a payload carrying both (one automation exporting
+        // metrics and workouts, or two automations firing into the same webhook - a
+        // supported path, handled explicitly further up) it erased the day's totals
+        // summed from active_energy and apple_exercise_time. A day with 750 kcal active,
+        // 320 of them from one run, was written as 320: the run overwrote the day. That
+        // then propagated into total_calories_burned (active + basal) and understated the
+        // calorie balance on the Dashboard by 430 kcal, permanently, because the upsert
+        // preserves a real incoming value over the stored one.
+        const workoutCalories = sums && sums.total_calories !== null ? sums.total_calories : 0;
+        const workoutMinutes = sums && sums.total_minutes !== null ? sums.total_minutes : 0;
+        byDate[dateStr].active_calories = Math.max(byDate[dateStr].active_calories ?? 0, workoutCalories);
+        byDate[dateStr].active_minutes = Math.max(byDate[dateStr].active_minutes ?? 0, workoutMinutes);
       }
+    }
+
+    // Water: re-sum every affected day from apple_health_water_samples. See the
+    // dietary_water branch above and the WATER comment in buildHealthMetricsUpsertSql -
+    // the sample table, not this request body, decides the daily total.
+    for (const dateStr of waterAffectedDates) {
+      const waterSum = await db.get(
+        'SELECT SUM(qty) AS total FROM apple_health_water_samples WHERE user_id = ? AND date = ?',
+        [user.id, dateStr]
+      );
+      if (!byDate[dateStr]) {
+        byDate[dateStr] = {
+          steps: null, active_calories: null, basal_calories: null, active_minutes: null,
+          wrist_temperature: null, distance_meters: null, water_ml: null,
+          sleep_duration: null, sleep_deep: null, sleep_rem: null, sleep_score: null,
+          in_bed_duration: 0, rhr: null, hrv: null
+        };
+      }
+      byDate[dateStr].water_ml = waterSum && waterSum.total !== null ? waterSum.total : 0;
     }
 
     // Post-processing of the sleep data and computing sleep_score against the user's target
@@ -615,6 +773,9 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
 
     const lastSyncTime = new Date().toISOString();
     const savedDates = [];
+    // The statement depends only on whether the user has Oura connected, so it is built
+    // once per request rather than per date.
+    const healthMetricsUpsertSql = buildHealthMetricsUpsertSql(user.has_oura === 1);
 
     for (const dateStr of dates) {
       const m = byDate[dateStr];
@@ -712,61 +873,29 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
     // later in the day, NULLIF(..., 0) turns a resulting 0 back into NULL when both sides were
     // NULL - without it MAX(COALESCE(NULL,0), COALESCE(NULL,0)) = 0, which insights would read
     // as 'slept zero hours' rather than 'no data'.
-      const sleepDurationUpdate = user.has_oura === 1
-        ? 'sleep_duration = CASE WHEN readiness_score IS NOT NULL THEN sleep_duration ELSE NULLIF(MAX(COALESCE(sleep_duration, 0), COALESCE(excluded.sleep_duration, 0)), 0) END'
-        : 'sleep_duration = NULLIF(MAX(COALESCE(sleep_duration, 0), COALESCE(excluded.sleep_duration, 0)), 0)';
-      const sleepDeepUpdate = user.has_oura === 1
-        ? 'sleep_deep = CASE WHEN readiness_score IS NOT NULL THEN sleep_deep ELSE NULLIF(MAX(COALESCE(sleep_deep, 0), COALESCE(excluded.sleep_deep, 0)), 0) END'
-        : 'sleep_deep = NULLIF(MAX(COALESCE(sleep_deep, 0), COALESCE(excluded.sleep_deep, 0)), 0)';
-      const sleepRemUpdate = user.has_oura === 1
-        ? 'sleep_rem = CASE WHEN readiness_score IS NOT NULL THEN sleep_rem ELSE NULLIF(MAX(COALESCE(sleep_rem, 0), COALESCE(excluded.sleep_rem, 0)), 0) END'
-        : 'sleep_rem = NULLIF(MAX(COALESCE(sleep_rem, 0), COALESCE(excluded.sleep_rem, 0)), 0)';
-      const sleepScoreUpdate = user.has_oura === 1
-        ? 'sleep_score = CASE WHEN readiness_score IS NOT NULL THEN sleep_score ELSE NULLIF(MAX(COALESCE(sleep_score, 0), COALESCE(excluded.sleep_score, 0)), 0) END'
-        : 'sleep_score = NULLIF(MAX(COALESCE(sleep_score, 0), COALESCE(excluded.sleep_score, 0)), 0)';
+      // activity_source = 'apple' only when this payload really carried activity - see the
+      // APPLE ACTIVITY LABEL comment above buildHealthMetricsUpsertSql.
+      const hasAppleActivityData = steps !== null || activeCalories !== null
+        || activeMinutes !== null || distanceMeters !== null || totalCalories !== null;
+      const activitySource = hasAppleActivityData ? 'apple' : null;
+      // Per-column provenance: 'apple' for the columns THIS payload actually carried, NULL
+      // for the rest. Order must match ACTIVITY_LABEL_COLUMNS, which is what
+      // buildHealthMetricsUpsertSql lists in the INSERT.
+      const activityColumnSources = activitySourceValues(
+        [steps, activeCalories, totalCalories, activeMinutes, distanceMeters],
+        activitySource
+      );
 
-      const rhrUpdate = user.has_oura === 1
-        ? 'rhr = CASE WHEN readiness_score IS NOT NULL THEN rhr ELSE COALESCE(excluded.rhr, rhr) END'
-        : 'rhr = COALESCE(excluded.rhr, rhr)';
-      const hrvUpdate = user.has_oura === 1
-        ? 'hrv = CASE WHEN readiness_score IS NOT NULL THEN hrv ELSE COALESCE(excluded.hrv, hrv) END'
-        : 'hrv = COALESCE(excluded.hrv, hrv)';
-      const readinessScoreUpdate = user.has_oura === 1
-        ? 'readiness_score = readiness_score'
-        : 'readiness_score = COALESCE(excluded.readiness_score, readiness_score)';
-
-      await db.run(`
-        INSERT INTO health_metrics (
-          user_id, date, steps, active_calories, total_calories_burned, active_minutes, wrist_temperature,
-          distance_meters, water_ml, sleep_duration, sleep_deep, sleep_rem, sleep_score, rhr, hrv, readiness_score, activity_source, last_sync
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'apple', ?)
-        ON CONFLICT(user_id, date) DO UPDATE SET
-          steps = COALESCE(excluded.steps, steps),
-          active_calories = COALESCE(excluded.active_calories, active_calories),
-          total_calories_burned = COALESCE(excluded.total_calories_burned, total_calories_burned),
-          active_minutes = COALESCE(excluded.active_minutes, active_minutes),
-          wrist_temperature = COALESCE(excluded.wrist_temperature, wrist_temperature),
-          distance_meters = COALESCE(excluded.distance_meters, distance_meters),
-          water_ml = CASE WHEN excluded.water_ml IS NOT NULL THEN COALESCE(water_ml, 0) + excluded.water_ml ELSE water_ml END,
-          ${sleepDurationUpdate},
-          ${sleepDeepUpdate},
-          ${sleepRemUpdate},
-          ${sleepScoreUpdate},
-          ${rhrUpdate},
-          ${hrvUpdate},
-          ${readinessScoreUpdate},
-          activity_source = 'apple',
-          last_sync = excluded.last_sync
-      `, [
+      await db.run(healthMetricsUpsertSql, [
         user.id, dateStr, steps, activeCalories, totalCalories, activeMinutes, wristTemperature,
-        distanceMeters, waterMl, sleepDuration, sleepDeep, sleepRem, sleepScore, rhr, hrv, readinessScore, lastSyncTime
+        distanceMeters, waterMl, waterMl, sleepDuration, sleepDeep, sleepRem, sleepScore, rhr, hrv,
+        readinessScore, activitySource, ...activityColumnSources, lastSyncTime
       ]);
 
       savedDates.push(dateStr);
     }
 
-    console.log(`[APPLE HEALTH] User ${user.id}: saved data for dates [${savedDates.join(', ')}] (${matchedEntries} metric entries, ${matchedWorkouts} workouts z payloadu).`);
+    console.log(`[APPLE HEALTH] User ${user.id}: saved data for dates [${savedDates.join(', ')}] (${matchedEntries} metric entries, ${matchedWorkouts} workouts in the payload).`);
     res.json({ status: 'ok', saved_dates: savedDates, workouts_received: workouts ? workouts.length : 0 });
   } catch (err) {
     console.error('[APPLE HEALTH ERROR]', err.message);
@@ -775,3 +904,6 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
 });
 
 module.exports = router;
+// Exported for tests/test-apple-health-upsert.js, which must exercise the statement this
+// webhook really runs - see the comment on the function.
+module.exports.buildHealthMetricsUpsertSql = buildHealthMetricsUpsertSql;

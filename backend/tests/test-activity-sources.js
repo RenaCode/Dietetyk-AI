@@ -12,10 +12,15 @@ const assert = require('assert');
 const {
   getActivitySourceRank,
   preserveHigherPriority,
-  preserveSourceLabel
+  preserveSourceLabel,
+  activitySourceColumns,
+  activitySourceValues
 } = require('../utils/activitySources');
 
 const LABEL_COLUMNS = ['steps', 'active_calories', 'distance_meters'];
+// Ownership is tracked per column, not per row - see utils/activitySources.js. The table
+// and the INSERT below carry the companion columns exactly as health_metrics does.
+const SOURCE_COLUMNS = activitySourceColumns(LABEL_COLUMNS);
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -39,8 +44,8 @@ function get(db, sql, params = []) {
 function upsertSql(source) {
   const rank = getActivitySourceRank(source);
   return `
-    INSERT INTO health_metrics (user_id, date, steps, active_calories, distance_meters, activity_source)
-    VALUES (?, ?, ?, ?, ?, '${source}')
+    INSERT INTO health_metrics (user_id, date, steps, active_calories, distance_meters, activity_source, ${SOURCE_COLUMNS.join(', ')})
+    VALUES (?, ?, ?, ?, ?, '${source}', ${SOURCE_COLUMNS.map(() => '?').join(', ')})
     ON CONFLICT(user_id, date) DO UPDATE SET
       ${preserveHigherPriority('steps', rank)},
       ${preserveHigherPriority('active_calories', rank)},
@@ -50,7 +55,10 @@ function upsertSql(source) {
 }
 
 async function write(db, source, { steps = null, calories = null, distance = null }) {
-  await run(db, upsertSql(source), [1, '2026-08-20', steps, calories, distance]);
+  await run(db, upsertSql(source), [
+    1, '2026-08-20', steps, calories, distance,
+    ...activitySourceValues([steps, calories, distance], source)
+  ]);
   return get(db, `SELECT * FROM health_metrics WHERE user_id = 1 AND date = '2026-08-20'`);
 }
 
@@ -61,6 +69,7 @@ async function freshDb() {
       user_id INTEGER, date TEXT,
       steps INTEGER, active_calories INTEGER, distance_meters INTEGER,
       activity_source TEXT,
+      ${SOURCE_COLUMNS.map(c => `${c} TEXT`).join(', ')},
       PRIMARY KEY (user_id, date)
     )
   `);

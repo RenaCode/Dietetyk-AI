@@ -1,4 +1,5 @@
 const db = require('../db');
+const { shiftDate } = require('./dates');
 
 // Meal anomaly detector - a product feature built entirely on data the app already
 // collects, requiring no new input from the user.
@@ -21,21 +22,11 @@ const ANOMALY_Z_SCORE_THRESHOLD = 2.5;
 const MACRO_MISMATCH_MIN_KCAL_DIFF = 150;
 const MACRO_MISMATCH_MIN_RATIO = 0.35;
 
-// Shifts a date string (YYYY-MM-DD) by N days - the same proven Date.UTC arithmetic as
-// shiftDate in dashboard.js, kept as a local copy to avoid a module dependency for one
-// small helper.
-const shiftDateForAnomaly = (dateStr, deltaDays) => {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + deltaDays);
-  return dt.toISOString().split('T')[0];
-};
-
 // Baseline distribution of calories per meal from the user's history, computed over ALL
 // days BEFORE `beforeDate` (exclusive) - so the meals of the day being checked never
 // influence their own point of reference.
 async function getCalorieBaseline(userId, beforeDate) {
-  const startDate = shiftDateForAnomaly(beforeDate, -ANOMALY_LOOKBACK_DAYS);
+  const startDate = shiftDate(beforeDate, -ANOMALY_LOOKBACK_DAYS);
   const rows = await db.all(
     `SELECT calories FROM meals WHERE user_id = ? AND date >= ? AND date < ?`,
     [userId, startDate, beforeDate]

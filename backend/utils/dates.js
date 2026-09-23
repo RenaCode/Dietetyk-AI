@@ -133,6 +133,66 @@ function getWarsawDayStartMillis(date = new Date(), deltaDays = 0) {
   return utcMidnight;
 }
 
+// Shifts a 'YYYY-MM-DD' string by N days (negative goes back) using pure calendar
+// arithmetic through Date.UTC, so no timezone offset and no daylight-saving hour can move
+// the result onto a neighbouring day. Date.UTC normalises the month and year rollover, so
+// shiftDate('2026-12-31', 1) is '2027-01-01' without any special case here.
+//
+// It must be given a real calendar date: on a malformed string the arithmetic produces an
+// Invalid Date and toISOString() throws a RangeError, which is how a bad ?date= used to
+// surface as a 500. Validate with isCalendarDateString (or go through resolveQueryDate)
+// before calling this with anything that came from a request.
+function shiftDate(dateStr, deltaDays) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + deltaDays);
+  return dt.toISOString().split('T')[0];
+}
+
+const DATE_STRING_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * True only for a string that is BOTH shaped like YYYY-MM-DD and a date that exists.
+ *
+ * THE REGEX ALONE IS NOT ENOUGH, and the difference is not academic - do not "simplify"
+ * this back to the pattern test. '2026-13-45' matches `^\d{4}-\d{2}-\d{2}$` perfectly and
+ * is not a date. The two ways it then went wrong were both silent in their own way:
+ *
+ *   - `new Date('2026-13-45')` is an Invalid Date, and toISOString() on it throws a
+ *     RangeError. In routes/chat.js that landed in the handler's catch and came back as a
+ *     500 telling the user the AI had failed, when the input was simply malformed.
+ *   - `Date.UTC(2026, 12, 45)` does NOT throw - it rolls month 13 day 45 over into
+ *     February 2027. The dashboard therefore answered 200 with a window around a date
+ *     nobody asked for, reporting "no data", which is harder to notice than an error.
+ *
+ * So the check is a round trip: build the date, format it back, and require the same
+ * string. That also rejects 2026-02-30, 2026-00-10 and the other near-misses that are
+ * well-formed but do not exist.
+ */
+function isCalendarDateString(value) {
+  if (typeof value !== 'string' || !DATE_STRING_RE.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return !isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+/**
+ * Resolves the date a request is asking about: the given value when it is a real calendar
+ * date, otherwise today in Europe/Warsaw.
+ *
+ * Takes the RAW VALUE rather than the request object, because the two callers read it from
+ * different places - routes/dashboard.js from `req.query.date`, routes/chat.js from
+ * `req.body.date`. A helper that reached into `req` itself could serve only one of them,
+ * and serving only one is what left two copies of this validation in the first place.
+ *
+ * A bad value falls back to today instead of producing a 400, matching what happens when
+ * the parameter is absent: the frontend always sends a correct value, so a malformed one is
+ * a bug in a caller rather than something the user could act on.
+ */
+function resolveQueryDate(rawDate) {
+  return isCalendarDateString(rawDate) ? rawDate : getLocalDateString();
+}
+
 module.exports = {
   getLocalDateString,
   formatDateString,
@@ -140,5 +200,8 @@ module.exports = {
   parseHealthAutoExportDate,
   dateObjToLocalDateString,
   getWarsawWallClock,
-  getWarsawDayStartMillis
+  getWarsawDayStartMillis,
+  shiftDate,
+  isCalendarDateString,
+  resolveQueryDate
 };

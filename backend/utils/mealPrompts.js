@@ -12,6 +12,8 @@
 // stated outright, and the model is required to note in the dietician comment that it used
 // the description instead of its own estimate - so it is visible where the number came from.
 
+const { escapeUserInputTag } = require('./mealSanitize');
+
 // Shared description of a single meal's structure. Kept in one place so the Polish and
 // English variants cannot drift apart the next time a field changes.
 function mealFieldsSchema(lang, { portionHint, commentHint }) {
@@ -261,7 +263,13 @@ Struktura JSON:
  */
 function buildMealPrompt({ hasImage, userText, language }) {
   const lang = language === 'en' ? 'en' : 'pl';
-  const text = typeof userText === 'string' ? userText.trim() : '';
+  // Escaped here, at the single point where all four templates (photo/text x pl/en) get
+  // their text, rather than trusting each caller. routes/meals.js already passes an escaped
+  // value, so this is normally a no-op - but this module is also the place a future caller
+  // will reach for, and an unescaped "</user_input>" arriving through one of them would
+  // close the isolation block in all four templates at once. Escaping twice is harmless
+  // (the replacement contains no "<"), escaping nowhere is not.
+  const text = escapeUserInputTag(typeof userText === 'string' ? userText.trim() : '');
 
   return hasImage ? buildImagePrompt(lang, text) : buildTextPrompt(lang, text);
 }

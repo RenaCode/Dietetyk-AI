@@ -12,6 +12,17 @@ const db = require('../db');
 // We clear ONLY the cache (ai_explanation/ai_explanation_generated_at). The next visit to
 // the dashboard for that date regenerates the explanation from current data (see the
 // isFresh logic in ai-explanation-insight).
+//
+// Round 15 (audit): this is now an OPTIMISATION, not the thing correctness rests on. The
+// cached entry carries a hash of the prompt that produced it, and ai-explanation-insight
+// serves it only when the prompt it would send right now hashes to the same value - so any
+// change to the underlying data invalidates it by itself. That matters because the callers
+// were never complete: routes/meals.js and routes/health.js call this, but services/sync.js,
+// which backfills Oura and Withings data for past days, does not - and past days were
+// treated as "fresh forever". Calling this function still saves the next request a
+// comparison against a cache that is known to be dead, and it stays the right thing to do
+// after an edit; it is no longer what stands between the user and an explanation of a
+// metric they are not looking at.
 async function invalidateAiExplanationCache(userId, date) {
   if (!date) return;
   try {

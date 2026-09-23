@@ -8,7 +8,7 @@ const { PORT } = require('./config');
 const logger = require('./services/logger');
 const { requireAuth } = require('./middleware/auth');
 const { apiRateLimiter } = require('./middleware/rateLimit');
-const { runHourlySyncIfDue } = require('./scheduler');
+const { runHourlySyncIfDue, runBackupThenCleanup } = require('./scheduler');
 
 const app = express();
 
@@ -189,26 +189,29 @@ app.use((err, req, res, next) => {
 async function start() {
   await db.initDb();
 
-  // Clean up old photos, logs and expired sessions at startup
+  // BACKUP FIRST, THEN THE IRREVERSIBLE CLEANUP - and only if the backup actually worked
+  // (audit 2026-09-23).
+  //
+  // This used to run cleanupOldImages() (blanks meal photos older than 14 days, then
+  // VACUUMs) and cleanupOldLogs() (deletes app_logs rows) BEFORE backupDatabase(), and
+  // backupDatabase() reported failure by printing `[BACKUP ERROR]` and returning. Nothing
+  // looked at that. A `./data` volume filling up is enough: `VACUUM INTO` fails every
+  // night, the cleanup runs every night regardless, and after a fortnight the freshest
+  // usable backup predates the failure while the photos deleted since then exist nowhere at
+  // all. The missing backup has to STOP the deletion, not annotate it.
+  //
+  // The two 24h intervals were also merged into one, because as separate timers started in
+  // the same tick they raced: whichever fired first decided whether that day's cleanup was
+  // covered by that day's backup.
+  //
+  // cleanupExpiredSessions() stays outside the gate: it removes sessions whose expires_at
+  // has already passed, which are unusable by definition, so there is nothing to lose.
   await db.cleanupExpiredSessions();
-  await db.cleanupOldImages();
-  await db.cleanupOldLogs();
+  await runBackupThenCleanup('startup');
 
-  // First database backup at startup (see backupDatabase in db.js), so a copy exists
-  // immediately rather than only after the container has run for 24h.
-  await db.backupDatabase();
-
-  // Run the cleanup and the backup every 24 hours
   setInterval(async () => {
-    console.log('[CRON] Running the periodic cleanup of old photos, logs and expired sessions...');
     await db.cleanupExpiredSessions();
-    await db.cleanupOldImages();
-    await db.cleanupOldLogs();
-  }, 24 * 60 * 60 * 1000);
-
-  setInterval(async () => {
-    console.log('[CRON] Running the periodic database backup...');
-    await db.backupDatabase();
+    await runBackupThenCleanup('cron');
   }, 24 * 60 * 60 * 1000);
 
   // Data sync (Oura, Withings) and summary checks: hourly, and only within the

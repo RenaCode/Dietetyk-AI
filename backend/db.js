@@ -3,6 +3,11 @@ const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
+// The canonical list of activity columns, shared with the writers so a column can never be
+// governed by the hierarchy in one place and forgotten by a migration in the other.
+// activitySources.js is a pure string/constant module - it does not require this one, so
+// there is no cycle.
+const { ACTIVITY_METRIC_COLUMNS } = require('./utils/activitySources');
 
 // Database directory and file path (data persistence under Docker)
 const dbDir = process.env.DATABASE_DIR || __dirname;
@@ -92,6 +97,7 @@ const all = (sql, params = []) => {
 // this run is the one that actually added the column, which two migrations below need in order
 // to run a one-time backfill.
 const DUPLICATE_COLUMN_ERROR = /duplicate column name/i;
+const UNIQUE_CONSTRAINT_ERROR = /UNIQUE constraint failed/i;
 
 const addColumn = async (sql) => {
   try {
@@ -104,6 +110,45 @@ const addColumn = async (sql) => {
     console.error(`[DB MIGRATE] Migration failed: ${sql}`);
     throw err;
   }
+};
+
+// Migration problems that must NOT stop the process but must never disappear either.
+// They are collected here because they are detected while migrating `users`, long before
+// the app_logs table exists on a fresh database - they are flushed into app_logs at the
+// end of initDb, so the weekly admin report (services/adminReport.js reads app_logs)
+// carries them out of the container instead of leaving them in a log nobody reads.
+const pendingMigrationAlerts = [];
+
+// Creating a UNIQUE index over a column that already holds data is the one migration that
+// can fail on a perfectly healthy database, because production may already contain exactly
+// the duplicates the index is meant to prevent. Three outcomes have to be told apart, and
+// `try { ... } catch (e) {}` collapsed all three into "carry on":
+//   1. the index exists or was created now - done;
+//   2. the data contains duplicates - the constraint genuinely cannot be created. Throwing
+//      would turn a data-quality problem into a refusal to boot (the pod crash-loops and
+//      nobody can log in to fix the data), so we skip the index and raise a loud, durable
+//      alert instead. This is NOT the "warning instead of a safeguard" pattern: nothing
+//      irreversible follows, and the alert names the rows that have to be merged;
+//   3. anything else - SQLITE_BUSY (the db-viewer sidecar on the same PVC, or two backend
+//      pods during a rolling update), SQLITE_READONLY (a full or read-only volume),
+//      SQLITE_CORRUPT - is thrown. Those do not get better by pretending the schema is
+//      complete, and start() in server.js turns a throw into a non-zero exit: a restart,
+//      with the real error at the top of `kubectl logs --previous`. Before this change the
+//      unique index on users.google_id could silently not exist, and the only symptom would
+//      have been a login picking the first of several matching rows.
+const createUniqueIndexWhenDataAllows = async ({ label, indexSql, duplicatesSql, remedy }) => {
+  const duplicates = await all(duplicatesSql);
+  if (duplicates.length > 0) {
+    const detail = duplicates
+      .map(d => `${d.dup_key} -> user ids [${d.ids}]`)
+      .join('; ');
+    const message = `[DB MIGRATE] Unique index ${label} NOT created - the data already contains duplicates: ${detail}. ${remedy}`;
+    console.error(message);
+    pendingMigrationAlerts.push({ message, detail });
+    return false;
+  }
+  await run(indexSql);
+  return true;
 };
 
 // Inicjalizacja tabel i migracje
@@ -143,9 +188,11 @@ const initDb = async () => {
 
   await addColumn("ALTER TABLE users ADD COLUMN created_at TEXT");
 
-  try {
-    await run("UPDATE users SET created_at = datetime('now') WHERE created_at IS NULL");
-  } catch (e) {}
+  // A backfill of a column added one line earlier. It has no expected failure mode at all,
+  // so it gets no catch: `try {} catch (e) {}` here could only ever hide a database that
+  // is busy, read-only or damaged, and leave `created_at` NULL for accounts that would then
+  // sort and display wrongly for the rest of their life.
+  await run("UPDATE users SET created_at = datetime('now') WHERE created_at IS NULL");
 
   await addColumn("ALTER TABLE users ADD COLUMN force_password_change INTEGER DEFAULT 0");
 
@@ -153,9 +200,65 @@ const initDb = async () => {
 
   // Migration: Google sign-in (a step towards eventually dropping password login)
   await addColumn("ALTER TABLE users ADD COLUMN google_id TEXT");
-  try {
-    await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL");
-  } catch (e) {}
+  await createUniqueIndexWhenDataAllows({
+    label: 'idx_users_google_id',
+    indexSql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL",
+    duplicatesSql: `
+      SELECT google_id AS dup_key, GROUP_CONCAT(id) AS ids
+      FROM users WHERE google_id IS NOT NULL
+      GROUP BY google_id HAVING COUNT(*) > 1
+    `,
+    remedy: 'Until one Google account maps to one row, login by Google picks the first matching row.'
+  });
+
+  // UNIQUE on users.email (audit 2026-09-23). The column was created as a plain `email
+  // TEXT` with no constraint at all, so two accounts could hold the same address - and an
+  // authentication audit showed what that buys an attacker: POST /api/login resolves
+  // `WHERE username = ? OR email = ?` and takes the first row, so registering a second
+  // account on somebody else's address is enough to stand in front of their login.
+  //
+  // The three decisions this migration had to make, and why:
+  //
+  // 1. PARTIAL index (WHERE email IS NOT NULL) rather than a plain UNIQUE. Accounts
+  //    legitimately have no email - invitations are created without one, and the summary
+  //    scheduler already handles `no email address set`. SQLite treats every NULL as
+  //    distinct so a plain UNIQUE would technically allow them too, but the partial index
+  //    states the intent and keeps the index small.
+  // 2. BLANK IS NOT AN ADDRESS, and is therefore OUTSIDE the index rather than merely
+  //    normalised. routes/account.js writes '' into the column whenever a user clears the
+  //    field, and '' is a value like any other to a UNIQUE index: with `WHERE email IS NOT
+  //    NULL` alone, the second user to clear their address would hit a constraint error and
+  //    a 500 - the migration would have invented a new failure while closing an old one.
+  //    An empty address is also not the vector: impersonation needs a real mailbox. So the
+  //    index skips blanks, and historic blanks are normalised to NULL as well so that
+  //    `WHERE username = ? OR email = ?` in the login path cannot match on '' either.
+  // 3. CASE-INSENSITIVE AND TRIMMED (lower(TRIM(email))). Mailbox names are effectively
+  //    case-insensitive at every real provider, while the login lookup above compares
+  //    exactly - so 'Marcin@x.pl' registered after 'marcin@x.pl' is a second account owning
+  //    the same inbox, which is the same impersonation vector plus a password-reset mail
+  //    landing in the victim's mailbox. Two genuinely different people never share a case
+  //    variant. TRIM is in the indexed expression for the same reason: ' a@b.pl ' must not
+  //    be able to slip past the constraint as a different string.
+  //
+  // Duplicates that ALREADY exist are not merged or nulled out here. Picking which of two
+  // accounts keeps the address is a product decision with real data behind it (meals,
+  // measurements, an Oura connection), not something a migration should do unattended at
+  // 03:00 - so the index is skipped, the conflict is reported loudly and durably, and the
+  // rest of the schema still comes up. See createUniqueIndexWhenDataAllows above.
+  await run("UPDATE users SET email = NULL WHERE email IS NOT NULL AND TRIM(email) = ''");
+  await run("UPDATE users SET email = TRIM(email) WHERE email IS NOT NULL AND email <> TRIM(email)");
+  await createUniqueIndexWhenDataAllows({
+    label: 'idx_users_email_unique',
+    indexSql: `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique
+               ON users(lower(TRIM(email)))
+               WHERE email IS NOT NULL AND TRIM(email) <> ''`,
+    duplicatesSql: `
+      SELECT lower(TRIM(email)) AS dup_key, GROUP_CONCAT(id) AS ids
+      FROM users WHERE email IS NOT NULL AND TRIM(email) <> ''
+      GROUP BY lower(TRIM(email)) HAVING COUNT(*) > 1
+    `,
+    remedy: 'Merge or clear the address on all but one of those accounts, then restart; until then a second account on the same address can block the first one from logging in.'
+  });
 
 
   // Migration: first and last name - used to personalise the AI dietician's phrasing
@@ -228,19 +331,31 @@ const initDb = async () => {
   // For existing installations: rename to admin, set the 'admin' role
   // and the email (but only when the current email is empty or the default admin@dietetyk-ai.local
   // and a different address is configured in the environment).
-  try {
-    const currentAdmin = await get(`SELECT email FROM users WHERE id = 1`);
-    if (currentAdmin) {
-      const currentEmail = currentAdmin.email || '';
-      const shouldUpdateEmail = !currentEmail || (process.env.ADMIN_EMAIL && currentEmail === 'admin@dietetyk-ai.local' && currentEmail !== process.env.ADMIN_EMAIL);
-      
-      if (shouldUpdateEmail) {
+  const currentAdmin = await get(`SELECT email FROM users WHERE id = 1`);
+  if (currentAdmin) {
+    const currentEmail = currentAdmin.email || '';
+    const shouldUpdateEmail = !currentEmail || (process.env.ADMIN_EMAIL && currentEmail === 'admin@dietetyk-ai.local' && currentEmail !== process.env.ADMIN_EMAIL);
+
+    if (shouldUpdateEmail) {
+      try {
         await run(`UPDATE users SET username = 'admin', email = ?, role = 'admin' WHERE id = 1`, [adminEmail]);
-      } else {
+      } catch (err) {
+        // ONE expected failure, since users.email became UNIQUE above: the address in
+        // ADMIN_EMAIL is already held by a different account. That is a configuration
+        // conflict for an operator to resolve, not a reason to crash-loop the pod and lock
+        // everyone out - so the admin keeps the address it has, the role is still fixed,
+        // and the conflict is reported. Any other error is a real database problem and
+        // propagates, which stops the start (see start() in server.js).
+        if (!UNIQUE_CONSTRAINT_ERROR.test(err && err.message ? err.message : '')) throw err;
+        const message = `[DB MIGRATE] ADMIN_EMAIL (${adminEmail}) is already used by another account - the admin account keeps its current address.`;
+        console.error(message);
+        pendingMigrationAlerts.push({ message, detail: err.message });
         await run(`UPDATE users SET username = 'admin', role = 'admin' WHERE id = 1`);
       }
+    } else {
+      await run(`UPDATE users SET username = 'admin', role = 'admin' WHERE id = 1`);
     }
-  } catch (e) {}
+  }
 
 
   // 2. Meals table, with a user_id column
@@ -289,26 +404,43 @@ const initDb = async () => {
   if (!hasUserIdInSettings) {
     console.log('[DB MIGRATE] Starting the settings table migration...');
     const tableExists = settingsCols.length > 0;
-    if (tableExists) {
-      await run(`ALTER TABLE settings RENAME TO settings_old`);
-    }
 
-    await run(`
-      CREATE TABLE settings (
-        user_id INTEGER NOT NULL,
-        key TEXT NOT NULL,
-        value TEXT NOT NULL,
-        PRIMARY KEY(user_id, key),
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-      )
-    `);
+    // RENAME -> CREATE -> INSERT SELECT -> DROP, inside ONE transaction. Unwrapped, a crash
+    // or a pod eviction between CREATE and INSERT left a state that repairs itself into
+    // silence: the new empty `settings` table exists, so the next start sees
+    // hasUserIdInSettings = true and never runs the migration again, while every target,
+    // schedule and integration setting sits in an orphaned `settings_old` nobody reads. The
+    // app then comes up looking fine, on defaults. BEGIN IMMEDIATE (not a deferred BEGIN)
+    // takes the write lock up front, so a concurrent writer collides here rather than
+    // halfway through the copy.
+    await run('BEGIN IMMEDIATE');
+    try {
+      if (tableExists) {
+        await run(`ALTER TABLE settings RENAME TO settings_old`);
+      }
 
-    if (tableExists) {
       await run(`
-        INSERT INTO settings (user_id, key, value)
-        SELECT 1, key, value FROM settings_old
+        CREATE TABLE settings (
+          user_id INTEGER NOT NULL,
+          key TEXT NOT NULL,
+          value TEXT NOT NULL,
+          PRIMARY KEY(user_id, key),
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
       `);
-      await run(`DROP TABLE settings_old`);
+
+      if (tableExists) {
+        await run(`
+          INSERT INTO settings (user_id, key, value)
+          SELECT 1, key, value FROM settings_old
+        `);
+        await run(`DROP TABLE settings_old`);
+      }
+      await run('COMMIT');
+    } catch (err) {
+      await run('ROLLBACK').catch(() => {});
+      console.error('[DB MIGRATE] The settings table migration failed and was rolled back:', err.message);
+      throw err;
     }
     console.log('[DB MIGRATE] Settings table migration finished.');
   }
@@ -378,6 +510,56 @@ const initDb = async () => {
     await run(`UPDATE sessions SET is_temp = 1 WHERE token LIKE 'temp_%'`);
   }
 
+  // Migration: the hard ceiling on a session's TOTAL lifetime (audit 2026-09-23).
+  //
+  // requireAuth renews a session by 7 days whenever fewer than 6 remain, and that renewal
+  // had no end: a token touched once a week lives for ever. "Sessions expire after 7 days"
+  // was therefore true only of a token nobody uses - a stolen one being polled by a script
+  // is precisely the one that never expires. middleware/auth.js already reads this column
+  // and clamps the renewal to it; without the column the check read `undefined` and the
+  // whole cap sat dormant. Same text format as expires_at ('YYYY-MM-DD HH:MM:SS', UTC).
+  //
+  // The ALTER must come before the UPDATE below, not after: an UPDATE naming a column that
+  // does not exist yet throws, and on a database where the column is already present the
+  // ALTER is the no-op - so the wrong order works everywhere except on the one database
+  // that actually migrates.
+  await addColumn(`ALTER TABLE sessions ADD COLUMN absolute_expires_at TEXT DEFAULT NULL`);
+
+  // BACKFILL: an existing session's cap becomes its CURRENT expires_at.
+  //
+  // `sessions` has no created_at, so a pre-migration row carries no evidence of when it was
+  // born - expires_at is all there is, and after any number of renewals it means "at most 7
+  // days from the last time this token was used" (5 minutes for a temporary one). The three
+  // candidates:
+  //
+  //   - a timestamp already in the past: correct in theory, and it logs out every signed-in
+  //     user the moment the pod restarts. A security fix that lands as a site-wide forced
+  //     logout is a decision for a person to take deliberately, not a side effect of a
+  //     migration running at deploy time.
+  //   - now + the full cap: hands every existing session a brand-new maximum lifetime,
+  //     starting now. That is backwards - the sessions that might already have leaked are
+  //     exactly the ones this grants the most life to.
+  //   - expires_at, i.e. no further renewal: nobody is logged out on deploy, every
+  //     pre-migration session still dies within 7 days (5 minutes for a temporary one), and
+  //     the users re-authenticate one at a time as their sessions run out. It can only ever
+  //     SHORTEN a session's life, never extend it, which is the only direction a security
+  //     migration may move on its own.
+  //
+  // Unlike the is_temp backfill above this is NOT gated on addColumn() returning true. It is
+  // a standing repair of the invariant "every session row has a cap", and it has to be,
+  // because of the deploy order: this column ships before routes/auth.js starts writing the
+  // value in createSession, so sessions created in between would otherwise keep an uncapped
+  // NULL for the rest of their (unbounded) lives. Once createSession writes the value the
+  // statement matches nothing. It is deliberately noisy when it does match, so that a
+  // non-zero count after that change lands reads as "createSession is not writing the
+  // column" rather than being quietly patched over here every restart.
+  const cappedSessions = await run(
+    `UPDATE sessions SET absolute_expires_at = expires_at WHERE absolute_expires_at IS NULL`
+  );
+  if (cappedSessions.changes > 0) {
+    console.log(`[DB MIGRATE] Capped ${cappedSessions.changes} session(s) without an absolute expiry at their current expires_at.`);
+  }
+
   // 5b. Tabela blokady brute-force logowania (login_attempts) - przeniesiona
   // from process memory (a Map) into the database, so that blocks survive a restart of the
   // backend container - during a deploy, for instance. See services/loginAttempts.js.
@@ -443,6 +625,19 @@ const initDb = async () => {
   // Migration: water intake counter (a daily counter, like steps - resets each day)
   await addColumn("ALTER TABLE health_metrics ADD COLUMN water_ml INTEGER DEFAULT 0");
 
+  // Migration: how much of water_ml came from Apple Health (audit 2026-09-23). water_ml is
+  // a MIXED counter - manual taps in the UI plus whatever the smart bottle logs into Apple
+  // Health - and the webhook used to add its share incrementally, which meant a failed
+  // write could never be retried without either losing the water or counting it twice.
+  // Remembering Apple's share lets routes/appleHealth.js REPLACE it with the day's total
+  // recomputed from apple_health_water_samples, which is idempotent, while the user's own
+  // entries in the same column are left alone. Rows that already exist need a one-time
+  // backfill or that first replacement would count Apple's water twice - see
+  // waterShareColumnAdded below, where apple_health_water_samples is already declared.
+  const waterShareColumnAdded = await addColumn(
+    "ALTER TABLE health_metrics ADD COLUMN water_ml_apple INTEGER DEFAULT NULL"
+  );
+
   // Migration: the source of the activity data (steps/active_calories/
   // total_calories_burned/active_minutes) for a given date - 'oura' or 'apple'. Needed for
   // the Apple Health sync rule described in routes/appleHealth.js. At the time this column
@@ -478,6 +673,37 @@ const initDb = async () => {
   // from the same source as the rest of the activity data (priority apple > google_fit >
   // oura, see activity_source and utils/activitySources.js).
   await addColumn("ALTER TABLE health_metrics ADD COLUMN distance_meters REAL DEFAULT NULL");
+
+  // Migration: per-column provenance for the activity metrics (audit 2026-09-23).
+  // activity_source above answers "who owns this DAY", and every upsert used to read it as
+  // "who owns this COLUMN" - which is false as soon as a source supplies only part of the
+  // day, the normal case for Apple Health. A day labelled 'apple' because the phone sent
+  // step count then had its active_calories frozen too, at whatever Google Fit had written
+  // before, with no source able to correct it again. Each column now records who actually
+  // wrote it; see the PER-COLUMN PROVENANCE comment in utils/activitySources.js.
+  let activityProvenanceAdded = false;
+  for (const column of ACTIVITY_METRIC_COLUMNS) {
+    const added = await addColumn(
+      `ALTER TABLE health_metrics ADD COLUMN ${column}_source TEXT DEFAULT NULL`
+    );
+    activityProvenanceAdded = activityProvenanceAdded || added;
+  }
+
+  // One-time backfill for rows written before the columns existed. The only provenance
+  // those rows carry is the row label, so it is what they get - i.e. they keep behaving
+  // exactly as they did yesterday, which is the point: a migration is not the place to
+  // guess that some column really came from somewhere else. From here on the writers keep
+  // the per-column values honest, and the imprecision ages out with the rows.
+  // Columns holding NULL stay unowned (rank 0) so any source may fill them.
+  if (activityProvenanceAdded) {
+    for (const column of ACTIVITY_METRIC_COLUMNS) {
+      await run(`
+        UPDATE health_metrics SET ${column}_source = activity_source
+        WHERE ${column}_source IS NULL AND ${column} IS NOT NULL AND activity_source IS NOT NULL
+      `);
+    }
+    console.log('[DB MIGRATE] Backfilled the per-column activity source columns from activity_source.');
+  }
 
   // Migration: the day broken down into minutes by activity intensity (Oura returns
   // seconds; we store minutes after conversion). This shows what the day actually looked
@@ -560,6 +786,28 @@ const initDb = async () => {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
+
+  // One-time backfill of health_metrics.water_ml_apple (see the column migration above).
+  // The old webhook added each NEW sample to water_ml exactly once, so for a day that has
+  // samples, the amount already inside water_ml that came from Apple is the sum of those
+  // samples. Writing that sum here makes the first upsert under the new scheme a no-op
+  // (water_ml - sum + sum), instead of adding the whole day's water a second time on top of
+  // water it had already counted. Days with no samples keep NULL, which reads as "Apple has
+  // contributed nothing here yet" and is exactly right for them.
+  if (waterShareColumnAdded) {
+    const backfill = await run(`
+      UPDATE health_metrics
+      SET water_ml_apple = (
+        SELECT SUM(s.qty) FROM apple_health_water_samples s
+        WHERE s.user_id = health_metrics.user_id AND s.date = health_metrics.date
+      )
+      WHERE EXISTS (
+        SELECT 1 FROM apple_health_water_samples s
+        WHERE s.user_id = health_metrics.user_id AND s.date = health_metrics.date
+      )
+    `);
+    console.log(`[DB MIGRATE] Backfilled water_ml_apple for ${backfill.changes} health_metrics rows.`);
+  }
 
   // Migracja: typ treningu (np. "Running", "Functional Strength Training" - pole
   // the `name` field from the Health Auto Export payload, see routes/appleHealth.js).
@@ -693,6 +941,18 @@ const initDb = async () => {
   // Round 3 (audit): clean up expired sessions when the database starts
   await cleanupExpiredSessions();
 
+  // Flush the migration problems collected above into app_logs, now that the table exists.
+  // They are written here rather than through services/logger.js because logger.js requires
+  // this module - importing it back would be a require cycle - and because a console line
+  // alone is precisely the kind of alert that never leaves the container.
+  for (const alert of pendingMigrationAlerts) {
+    await run(
+      `INSERT INTO app_logs (level, category, message, details) VALUES ('ERROR', 'SYSTEM', ?, ?)`,
+      [alert.message, alert.detail || null]
+    );
+  }
+  pendingMigrationAlerts.length = 0;
+
   console.log('SQLite database migrated and initialised successfully.');
 };
 
@@ -798,6 +1058,16 @@ const verifyBackupFile = (backupPath) => new Promise((resolve) => {
   });
 });
 
+// Returns { ok: true, path, users } or { ok: false, reason } - it never throws.
+//
+// It used to return undefined and swallow every failure into a `[BACKUP ERROR]` console
+// line, which mattered because of WHERE it sits in server.js: the irreversible cleanups
+// (cleanupOldImages blanks meal photos older than 14 days, cleanupOldLogs deletes log rows)
+// ran BEFORE it and regardless of its outcome. A `./data` volume that fills up makes
+// `VACUUM INTO` fail every night while the cleanup keeps deleting - after two weeks the
+// newest working backup predates the failure and the photos from that fortnight exist
+// nowhere. Callers must therefore be able to see the verdict and refuse to delete anything
+// when there is no fresh copy; a warning in a log nobody reads is not a safeguard.
 const backupDatabase = async () => {
   try {
     if (!fs.existsSync(backupDir)) {
@@ -820,7 +1090,7 @@ const backupDatabase = async () => {
       // all we have.
       console.error(`[BACKUP ERROR] The backup failed verification (${verdict.reason}) - deleting it and KEEPING the previous copies.`);
       await fs.promises.unlink(backupPath).catch(() => {});
-      return;
+      return { ok: false, reason: `verification failed: ${verdict.reason}` };
     }
     console.log(`[BACKUP] Backup written and verified: ${backupPath} (${verdict.users} users)`);
 
@@ -834,8 +1104,10 @@ const backupDatabase = async () => {
       await fs.promises.unlink(path.join(backupDir, f));
       console.log(`[BACKUP] Removed old backup: ${f}`);
     }
+    return { ok: true, path: backupPath, users: verdict.users };
   } catch (err) {
     console.error('[BACKUP ERROR] Failed to create the database backup:', err);
+    return { ok: false, reason: err.message };
   }
 };
 

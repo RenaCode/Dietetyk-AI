@@ -1269,7 +1269,7 @@ export default function App() {
             className={`nav-tab ${currentTab === 'meals' ? 'active' : ''}`}
             onClick={() => setCurrentTab('meals')}
           >
-            {t("Kalkulator Posiłków")}
+            {t("Dziennik posiłków")}
           </button>
           <button
             className={`nav-tab ${currentTab === 'trends' ? 'active' : ''}`}

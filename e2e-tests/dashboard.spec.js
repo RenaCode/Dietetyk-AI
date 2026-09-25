@@ -65,7 +65,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
   });
 
   test('Nawigacja po zakładkach aplikacji', async ({ page }) => {
-    const tabs = ['Kalkulator Posiłków', 'Trendy', 'Aktywność', 'Ustawienia'];
+    const tabs = ['Dziennik posiłków', 'Trendy', 'Aktywność', 'Ustawienia'];
 
     for (const tabName of tabs) {
       // Click the tab
@@ -76,7 +76,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
       await expect(activeTab).toContainText(tabName);
 
       // Additional render checks for that tab's components
-      if (tabName === 'Kalkulator Posiłków') {
+      if (tabName === 'Dziennik posiłków') {
         await expect(page.locator('.logger-card')).toBeVisible();
       } else if (tabName === 'Trendy') {
         await expect(page.locator('h2:has-text("Twoje wykresy")')).toBeVisible();

@@ -14,7 +14,7 @@
 const TRANSLATIONS = {
   // Navigation / Tabs
   "Dashboard": "Dashboard",
-  "Kalkulator Posiłków": "Meal Logger",
+  "Dziennik posiłków": "Meal Logger",
   "Aktywność": "Activity",
   "Trendy": "Trends",
   "Ustawienia": "Settings",
@@ -86,7 +86,7 @@ const TRANSLATIONS = {
   "Dzisiejsze Posiłki": "Today's Meals",
 
   // Meal Logger
-  "Kalkulator posiłków i makroskładników": "Meal & Macronutrient Logger",
+  "Dziennik posiłków i makroskładników": "Meal & Macronutrient Logger",
   "Opisz swój posiłek lub wklej tekst, a AI wyliczy kalorie i makroskładniki.": "Describe your meal or paste text, and AI will estimate calories and macros.",
   "np. jajecznica z 3 jajek na maśle, 2 kromki chleba żytniego": "e.g., 3 scrambled eggs cooked in butter, 2 slices of rye bread",
   "Wybierz plik (JPG, PNG, WebP)...": "Choose image file (JPG, PNG, WebP)...",

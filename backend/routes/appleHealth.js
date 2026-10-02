@@ -10,6 +10,9 @@ const {
   activitySourceColumns,
   activitySourceValues
 } = require('../utils/activitySources');
+const { extractSamples, storeSamples } = require('../utils/appleHealthSamples');
+const { extractEvents, storeEvents, EVENT_KINDS } = require('../utils/appleHealthEvents');
+const { syncAppleColumns } = require('../utils/appleHealthColumns');
 
 // Webhook receiving data from the "Health Auto Export" iOS app - a bridge between Apple
 // Health and this backend. HealthKit has no public cloud API, so an intermediary running
@@ -62,17 +65,30 @@ const {
 //
 // We handle only the metrics needed for the calorie balance (steps, calories, active
 // minutes), wrist temperature, distance and water ("Dietary Water" - see METRIC_FIELD_MAP
-// below) from data.metrics[]. Other metrics in the payload, such as sleep, are simply
-// ignored rather than treated as an error. EXCEPTION: per-workout heart rate from
-// data.workouts[] (avgHeartRate/maxHeartRate/heartRateData) IS handled - see the "CARDIO
-// ZONES" section below - provided the user enabled the "Include Workout Metrics" toggle in
-// the Health Auto Export automation on their phone. It is off by default, and without it
+// below) from data.metrics[] into health_metrics columns. Since 2026-10-02 every numeric
+// sample of every metric - including ones with no column and ones this code has never heard
+// of - is also stored, as hourly buckets in apple_health_hourly (utils/appleHealthSamples.js),
+// so the user can tick everything in the phone automation and nothing is silently dropped.
+// Per-workout heart rate from data.workouts[] (avgHeartRate/maxHeartRate/heartRateData) is
+// handled too - see the "CARDIO ZONES" section below - provided the user enabled the
+// "Include Workout Metrics" toggle in the Health Auto Export automation on their phone. It is off by default, and without it
 // the workout payload carries no heart-rate fields at all.
 
 // Upper size limits for the webhook payload (round 12, security audit) - see the comment
 // where they are used in the POST handler below.
-const MAX_METRIC_ENTRIES_PER_REQUEST = 20000;
+// Raised from 20 000 on 2026-10-02: the intended setup is now "tick EVERYTHING in Health
+// Auto Export and let the server pick what it can use" (see utils/appleHealthSamples.js), and
+// a week of minute-grouped data runs past 20 000 entries. Capped at 100 000 rather than
+// "whatever fits in the body" after the 2026-10-02 audit measured a production-shaped pod
+// (512 Mi, 0.5 CPU): an 18 MB / 250 000-entry body peaked at 550 MB RSS and held the event
+// loop for ~96 s - past nginx's 60 s timeout, the readiness probe, and the memory limit. The
+// JSON body limit deliberately stays 20 MB (server.js); with hourly grouping, which is what
+// the user is told to use, a week of every metric is a few thousand entries.
+const MAX_METRIC_ENTRIES_PER_REQUEST = 100000;
 const MAX_WORKOUTS_PER_REQUEST = 500;
+// Symptoms, heart-rate notifications and cycle entries are a handful a day; a year of all
+// three for one person stays far below this.
+const MAX_EVENTS_PER_REQUEST = 10000;
 
 const KJ_TO_KCAL = 1 / 4.184;
 
@@ -459,8 +475,27 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
     const metrics = Array.isArray(rawMetrics) ? rawMetrics : null;
     const workouts = Array.isArray(rawWorkouts) ? rawWorkouts : null;
 
-    if (!metrics && !workouts) {
-      return res.status(400).json({ error: 'Nieprawidłowy format danych - oczekiwano pola data.metrics[] lub data.workouts[].' });
+    // Symptoms / heart-rate notifications / cycle tracking each come from their OWN Health
+    // Auto Export automation, as the only array in the payload (see utils/appleHealthEvents.js).
+    // The same goes for kinds not processed yet (ecg, stateOfMind, medications): answering
+    // those with a 400 makes the phone report "export failed" for an export that did nothing
+    // wrong, so any payload that carries at least one array is acknowledged. Only a body with
+    // no array at all is malformed.
+    const data = req.body && req.body.data;
+    const hasAnyArray = data && typeof data === 'object'
+      && Object.values(data).some((v) => Array.isArray(v));
+    if (!hasAnyArray) {
+      return res.status(400).json({ error: 'Nieprawidłowy format danych - oczekiwano tablicy w polu data (np. data.metrics[]).' });
+    }
+    const unhandledKinds = Object.keys(data).filter((k) => Array.isArray(data[k])
+      && k !== 'metrics' && k !== 'workouts' && !EVENT_KINDS[k]);
+    if (unhandledKinds.length > 0) {
+      console.log(`[APPLE HEALTH] User ${user.id} sent data kinds that are not processed yet: [${unhandledKinds.join(', ')}]`);
+    }
+    const eventEntries = Object.keys(EVENT_KINDS)
+      .reduce((sum, k) => sum + (Array.isArray(data[k]) ? data[k].length : 0), 0);
+    if (eventEntries > MAX_EVENTS_PER_REQUEST) {
+      return res.status(400).json({ error: `Za dużo zdarzeń w jednym żądaniu (limit: ${MAX_EVENTS_PER_REQUEST}).` });
     }
 
     if (metrics) {
@@ -764,11 +799,43 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
       }
     }
 
+    // Everything beyond the classic columns (all metrics as hourly buckets, symptoms, heart
+    // rate notifications, cycle tracking) - see utils/appleHealthSamples.js and
+    // utils/appleHealthEvents.js. It is stored AFTER the health_metrics upsert below and in its
+    // own try/catch (audit 2026-10-02): steps, calories and sleep worked long before this
+    // storage existed, and a failure in it - a full disk, a lock timeout - must not take them
+    // down with it. Only when the payload carries nothing else (an events-only or
+    // unknown-metrics-only export) does a failure here fail the request, so the phone retries.
+    const extras = { samples: 0, events: 0 };
+    const storeExtras = async () => {
+      if (metrics) {
+        const touchedDates = new Set();
+        for (const metric of metrics) {
+          // One metric at a time keeps memory bounded by the largest single series rather
+          // than the whole payload, and yields the event loop between metrics.
+          const samples = extractSamples(metric);
+          if (samples.length > 0) {
+            await storeSamples(db, user.id, samples);
+            for (const x of samples) touchedDates.add(x.date);
+            extras.samples += samples.length;
+          }
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        // Fill the health_metrics columns the existing cards and insights read (SpO2,
+        // respiratory rate, blood pressure, weight...) for users with no other source.
+        await syncAppleColumns(db, user.id, [...touchedDates]);
+      }
+      const events = extractEvents(data);
+      if (events.length > 0) await storeEvents(db, user.id, events);
+      extras.events = events.length;
+    };
+
     const dates = Object.keys(byDate);
     if (dates.length === 0) {
       // No metrics we recognise in this payload - not an error, since the app may also send
       // metrics we do not handle, such as heart rate or sleep.
-      return res.json({ status: 'ok', saved_dates: [] });
+      await storeExtras();
+      return res.json({ status: 'ok', saved_dates: [], samples_stored: extras.samples, events_stored: extras.events });
     }
 
     const lastSyncTime = new Date().toISOString();
@@ -895,8 +962,20 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
       savedDates.push(dateStr);
     }
 
-    console.log(`[APPLE HEALTH] User ${user.id}: saved data for dates [${savedDates.join(', ')}] (${matchedEntries} metric entries, ${matchedWorkouts} workouts in the payload).`);
-    res.json({ status: 'ok', saved_dates: savedDates, workouts_received: workouts ? workouts.length : 0 });
+    try {
+      await storeExtras();
+    } catch (extrasErr) {
+      console.error(`[APPLE HEALTH ERROR] User ${user.id}: core data saved, but storing the extra metrics/events failed:`, extrasErr.message);
+    }
+
+    console.log(`[APPLE HEALTH] User ${user.id}: saved data for dates [${savedDates.join(', ')}] (${matchedEntries} metric entries, ${matchedWorkouts} workouts, ${extras.samples} samples bucketed, ${extras.events} events).`);
+    res.json({
+      status: 'ok',
+      saved_dates: savedDates,
+      workouts_received: workouts ? workouts.length : 0,
+      samples_stored: extras.samples,
+      events_stored: extras.events
+    });
   } catch (err) {
     console.error('[APPLE HEALTH ERROR]', err.message);
     res.status(500).json({ error: 'Błąd przetwarzania danych Apple Health.' });

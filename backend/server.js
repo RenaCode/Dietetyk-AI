@@ -154,7 +154,6 @@ app.use(require('./routes/meals'));
 app.use(require('./routes/account'));
 app.use(require('./routes/integrations'));
 app.use(require('./routes/health'));
-app.use(require('./routes/dayEvents'));
 app.use(require('./routes/admin'));
 app.use(require('./routes/dashboard'));
 app.use(require('./routes/chat'));

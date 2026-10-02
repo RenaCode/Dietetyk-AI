@@ -9,7 +9,7 @@ const { getCalorieBaseline, detectMealAnomalies } = require('../utils/mealAnomal
 const { DEFAULT_TARGET_WATER_ML, getTargetCalories, getBmr, getTargetWaterMl } = require('../utils/defaultSettings');
 const { genAI, generateContentWithFallback } = require('../config');
 const { buildGoalPaceAnalysis } = require('../services/summaries');
-const { getDayEventsInRange, formatDayEventsForPrompt } = require('../utils/dayEvents');
+const { buildAppleHealthPromptContext } = require('../utils/appleHealthPrompt');
 const { decrypt } = require('../utils/encryption');
 const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 // meals.raw_text is free text the user typed. It is sanitised on the way IN (see
@@ -655,12 +655,6 @@ router.get('/api/dashboard', async (req, res) => {
           [req.user.id]
         );
 
-        // "Tag dnia" (day_events) z ostatnich 30 dni (to samo okno co last30DaysNutrition) -
-        // żeby AI wiedziało o dniach oznaczonych jako choroba/wakacje/późne zaśnięcie i nie
-        // budowało rekomendacji na bazie nietypowych danych z tych dni (patrz utils/dayEvents.js).
-        const dayEventsInWindow = await getDayEventsInRange(req.user.id, shiftDate(date, -30), date);
-        const dayEventsContext = formatDayEventsForPrompt(dayEventsInWindow);
-
         // Cel sylwetki (opis tekstowy + opcjonalne zdjęcie referencyjne, ustawiane
         // w Ustawieniach - patrz routes/account.js i migracja w db.js). Nie trzymamy
         // tego w req.user (middleware/auth.js), bo zdjęcie base64 mogłoby być duże
@@ -683,6 +677,14 @@ router.get('/api/dashboard', async (req, res) => {
 
         const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
         const language = langRow ? langRow.value : 'pl';
+
+        // Everything else the phone sends through Health Auto Export: metrics without a card of
+        // their own (time in daylight, physical effort, new watch metrics) and events -
+        // symptoms, heart-rate notifications, menstrual cycle position. See
+        // utils/appleHealthSamples.js and utils/appleHealthEvents.js. Without these lines the
+        // advice would see none of it, however much the phone exports.
+        // Never throws - see utils/appleHealthPrompt.js.
+        const appleContext = await buildAppleHealthPromptContext(db, req.user.id, date, language);
 
         // Aktualna pogoda i pora dnia (Zadanie: algorytm ma znać i uwzględniać w
         // analizie bieżącą pogodę/czas - patrz utils/weatherContext.js). Ta porada
@@ -731,7 +733,7 @@ ${weatherTimeContext}
 Oura Sleep/Readiness & Withings Body Composition:
 - Sleep Score: ${displaySleepScore !== null ? displaySleepScore + '/100' : 'no data'} (Duration: ${displaySleepDuration || 0}h, Deep: ${displaySleepDeep || 0}h, REM: ${displaySleepRem || 0}h)
 - Heart & Temp parameters: Resting HR (RHR): ${displayRhr || '-'} bpm, HRV: ${displayHrv || '-'} ms, Wrist temperature deviation: ${displayTempDev !== null ? displayTempDev + ' °C' : 'N/A'}
-- Respiration & SpO2: Respiratory rate: ${displayRespiratoryRate !== null ? displayRespiratoryRate + '/min' : 'N/A'}, SpO2: ${displaySpo2 !== null ? displaySpo2 + '%' : 'N/A'}, Wrist temperature: ${displayWristTemperature !== null ? displayWristTemperature + ' °C' : 'N/A'}
+- Respiration & SpO2: Respiratory rate: ${displayRespiratoryRate !== null ? displayRespiratoryRate + '/min' : 'N/A'}, SpO2: ${displaySpo2 !== null ? displaySpo2 + '%' : 'N/A'}, Wrist temperature: ${displayWristTemperature !== null ? displayWristTemperature + ' °C' : 'N/A'}${appleContext ? '\n' + appleContext : ''}
 - Stress (Oura): High stress: ${displayStressHighMinutes !== null ? displayStressHighMinutes + ' min' : 'no data'}, Recovery: ${displayStressRecoveryMinutes !== null ? displayStressRecoveryMinutes + ' min' : 'no data'}, Stress summary: ${displayStressSummary || 'N/A'}
 - Readiness Score: ${displayReadinessScore !== null ? displayReadinessScore + '/100' : 'no data'}
 - Body Composition: Weight: ${displayWeight !== null ? displayWeight + ' kg' : 'no data'}, Body fat percentage: ${displayFatRatio !== null ? displayFatRatio + '%' : 'no data'}, Muscle mass: ${displayMuscleMass !== null ? displayMuscleMass + ' kg' : 'no data'}
@@ -775,7 +777,6 @@ ${supplementsHistory.map(s => `- ${s.date}: ${s.supplements}`).join('\n') || 'no
 ${sleepHistory.map(s => `- ${s.date}: Sleep ${s.sleep_score || '-'}, Readiness ${s.readiness_score || '-'}`).join('\n') || 'no data'}
 - Blood pressure history (Withings):
 ${bpHistory.map(b => `- ${b.date}: ${b.blood_pressure_systolic}/${b.blood_pressure_diastolic} mmHg`).join('\n') || 'no data'}
-${dayEventsContext}
 
 Your analysis MUST consider ALL data above (today's meals & micronutrients, activity, workouts, supplements, yesterday's comparison, 7/30-day trends, weight/body composition/circumference history, blood pressure, sleep, readiness, stress, respiration). Make sure to address:
 1. Workout intensity and cardio zones: if "heart rate zones" are provided (Z1-Z5 based on Karvonen), base your evaluation on these real zones. Relate minutes in zones to the user's body goal.
@@ -784,10 +785,9 @@ Your analysis MUST consider ALL data above (today's meals & micronutrients, acti
 4. Insights from weight, body composition, and circumference trends.
 5. Supplement intake: analyze supplement history and comment on regularity, timing, and usefulness.
 6. Blood pressure: evaluate if values are within range, and advise consulting a doctor if values are elevated (do not diagnose).
-7. Recovery and stress (Oura): SpO2, respiratory rate, wrist temperature, stress minutes.
+7. Recovery and stress (Oura): SpO2, respiratory rate, wrist temperature, stress minutes. If symptoms, heart-rate notifications or the menstrual cycle phase are listed, take them into account: do not read luteal-phase or menstrual weight gain as fat gain, adjust training intensity to symptoms, and for heart-rate notifications advise seeing a doctor if they recur - never diagnose.
 8. Calorie/sleep streaks: highlight consistency or suggest how to return to track.
 9. Body goal: assess if current trend, diet, and training are leading towards it.
-10. Days with a Day Tag (if any): adjust recommendations and do not count deviations from these days as normal.
 
 Format the response STRICTLY in this Markdown structure:
 1. One short, personalized introductory sentence addressing the user by name (${displayName}).
@@ -832,7 +832,7 @@ ${weatherTimeContext}
 Dane gotowości, snu (Oura) i składu ciała (Withings):
 - Wynik Snu: ${displaySleepScore !== null ? displaySleepScore + '/100' : 'Brak danych'} (Czas trwania: ${displaySleepDuration || 0}h, Głęboki: ${displaySleepDeep || 0}h, REM: ${displaySleepRem || 0}h)
 - Parametry serca i temp: Tętno spoczynkowe: ${displayRhr || '-'} bpm, HRV: ${displayHrv || '-'} ms, Odchylenie temperatury ciała: ${displayTempDev !== null ? displayTempDev + ' °C' : 'brak'}
-- Oddech i utlenowanie krwi: Częstość oddechów: ${displayRespiratoryRate !== null ? displayRespiratoryRate + '/min' : 'brak'}, SpO2: ${displaySpo2 !== null ? displaySpo2 + '%' : 'brak'}, Temperatura nadgarstka: ${displayWristTemperature !== null ? displayWristTemperature + ' °C' : 'brak'}
+- Oddech i utlenowanie krwi: Częstość oddechów: ${displayRespiratoryRate !== null ? displayRespiratoryRate + '/min' : 'brak'}, SpO2: ${displaySpo2 !== null ? displaySpo2 + '%' : 'brak'}, Temperatura nadgarstka: ${displayWristTemperature !== null ? displayWristTemperature + ' °C' : 'brak'}${appleContext ? '\n' + appleContext : ''}
 - Stres (Oura): Wysoki stres: ${displayStressHighMinutes !== null ? displayStressHighMinutes + ' min' : 'brak danych'}, Regeneracja: ${displayStressRecoveryMinutes !== null ? displayStressRecoveryMinutes + ' min' : 'brak danych'}, Podsumowanie: ${displayStressSummary || 'brak'}
 - Wynik Gotowości (Readiness): ${displayReadinessScore !== null ? displayReadinessScore + '/100' : 'Brak danych'}
 - Skład Ciała: Waga: ${displayWeight !== null ? displayWeight + ' kg' : 'brak danych'}, Procent tłuszczu: ${displayFatRatio !== null ? displayFatRatio + '%' : 'brak danych'}, Masa mięśniowa: ${displayMuscleMass !== null ? displayMuscleMass + ' kg' : 'brak danych'}
@@ -876,7 +876,6 @@ ${supplementsHistory.map(s => `- ${s.date}: ${s.supplements}`).join('\n') || 'br
 ${sleepHistory.map(s => `- ${s.date}: Sen ${s.sleep_score || '-'}, Gotowość ${s.readiness_score || '-'}`).join('\n') || 'brak danych w bazie'}
 - Historia ciśnienia tętniczego (Withings, ostatnie pomiary):
 ${bpHistory.map(b => `- ${b.date}: ${b.blood_pressure_systolic}/${b.blood_pressure_diastolic} mmHg`).join('\n') || 'brak danych w bazie'}
-${dayEventsContext}
 Twoja analiza MUSI uwzględniać WSZYSTKIE dane podane powyżej (dzisiejsze posiłki i mikroelementy, aktywność, treningi, suplementy, porównanie z wczoraj, trendy 7/30-dniowe, historię wagi/składu ciała/obwodów, ciśnienia tętniczego, snu, gotowości, stresu i parametrów oddechowych) - to jest kluczowa funkcja tej aplikacji, użytkownik oczekuje analizy na bazie CAŁEJ historii i wszystkich dostępnych metryk, nie tylko jednego dnia czy wybranych wskaźników. Weź pod uwagę przy analizie i rekomendacjach:
 1. Intensywność wysiłku i strefy kardio: jeśli przy treningu podano "realny rozkład stref kardio" (zmierzony tętnem podczas treningu, strefy Z1-Z5 metodą Karvonena: Z1 regeneracja, Z2 spalanie tłuszczu/baza tlenowa, Z3 tempo, Z4-Z5 wysoka intensywność beztlenowa), PRIORYTETOWO oprzyj ocenę na tych realnych minutach w strefach, nie na szacowaniu - i odnieś ten rozkład wprost do celu sylwetki użytkownika (np. przy celu redukcji/spalania tłuszczu doceń czas w Z2, przy celu budowy wydolności/masy zwróć uwagę na czas w Z3-Z4, a nadmiar minut w Z1 przy intensywnym typie treningu skomentuj jako niewykorzystany potencjał). Jeśli realnych stref nie podano (brak danych z zegarka), oceń intensywność orientacyjnie na bazie aktywnych kalorii, typu/czasu trwania treningu oraz RHR/HRV, zaznaczając że to oszacowanie.
 2. Precyzyjne zmiany w diecie na bazie dzisiejszych posiłków i treningu, w tym jakość diety pod kątem błonnika, cukrów prostych i sodu (np. zbyt mało błonnika w stosunku do kalorii, zbyt dużo cukrów prostych lub sodu w ostatnich dniach) - nie tylko makra, ale pełny obraz odżywiania.
@@ -884,10 +883,9 @@ Twoja analiza MUSI uwzględniać WSZYSTKIE dane podane powyżej (dzisiejsze posi
 4. Wnioski z trendu wagi, składu ciała i obwodów ciała z ostatnich pomiarów Withings oraz jakości snu, regeneracji i poziomu stresu z Oura (zwróć uwagę, czy obecny trend przybliża użytkownika do celu w dłuższej perspektywie 7/30 dni).
 5. Przyjęte suplementy: przeanalizuj CAŁĄ historię suplementów (nie tylko dziś/wczoraj, ale wszystkie dostępne wpisy z ostatnich dni) i skomentuj krótko ich przydatność, regularność przyjmowania i czas przyjmowania w odniesieniu do treningu i samopoczucia użytkownika.
 6. Ciśnienie tętnicze: jeśli dostępne są pomiary ciśnienia, oceń czy wartości są w normie (orientacyjnie <120/80 mmHg optymalnie, 120-129/<80 podwyższone prawidłowe, ≥130/80 nadciśnienie) i czy trend z ostatnich pomiarów jest stabilny, rosnący czy spadkowy - jeśli widzisz niepokojący trend lub wartości podwyższone, zalecaj konsultację lekarską (nie diagnozuj).
-7. Regeneracja i stres: jeśli dostępne są dane o stresie (Oura), SpO2, częstości oddechów czy temperaturze nadgarstka, skomentuj ogólny stan regeneracji organizmu i zasugeruj, czy potrzebny jest dzień odpoczynku.
+7. Regeneracja i stres: jeśli dostępne są dane o stresie (Oura), SpO2, częstości oddechów czy temperaturze nadgarstka, skomentuj ogólny stan regeneracji organizmu i zasugeruj, czy potrzebny jest dzień odpoczynku. Jeśli podano objawy, powiadomienia o tętnie lub fazę cyklu miesiączkowego, uwzględnij je: nie traktuj wzrostu wagi w fazie lutealnej lub w trakcie miesiączki jako przyrostu tkanki tłuszczowej, dostosuj intensywność treningu do objawów, a przy powiadomieniach o tętnie zalecaj konsultację z lekarzem, jeśli się powtarzają - nigdy nie stawiaj diagnozy.
 8. Konsekwencja (streaki): jeśli użytkownik ma passę trafiania w cel kaloryczny lub cel snu, doceń to krótko - jeśli passa jest przerwana lub bliska zera, zachęcająco zasugeruj, jak wrócić na właściwe tory.
 9. Cel sylwetki: jeśli użytkownik opisał swój cel sylwetki (i/lub dołączył zdjęcie referencyjne), odnieś dzisiejsze i historyczne dane DO TEGO CELU - oceń, czy obecne tempo, dieta i trening realnie do niego prowadzą, i jeśli nie, zaproponuj konkretną korektę. Jeśli cel nie został opisany, pomiń ten punkt bez komentowania jego braku.
-10. Dni oznaczone "Tagiem dnia" (jeśli podane powyżej): jeśli dzisiejsza data lub dni z analizowanej historii pokrywają się z oznaczonym okresem (choroba, wakacje/urlop, późne zaśnięcie), uwzględnij ten kontekst i NIE buduj korygujących rekomendacji na bazie odchyleń z tych dni - są one już wyjaśnione i oczekiwane.
 
 Sformatuj odpowiedź WYŁĄCZNIE w tej strukturze Markdown (frontend renderuje nagłówki, pogrubienia i listy punktowane):
 1. Jedno krótkie, spersonalizowane zdanie wstępu, zwracające się do użytkownika po imieniu (${displayName}).
@@ -1103,16 +1101,11 @@ router.get('/api/dashboard/sleep-insight', async (req, res) => {
     // date - the user wakes on the morning of X and eats during day X. The code used to take
     // meals from X+1, i.e. a full day after waking, which measured the effect of the night
     // before last. See nightAfterDay/dayAfterNight above for the convention.
-    const rawSleepRows = await db.all(
+    const sleepRows = await db.all(
       `SELECT date, sleep_duration FROM health_metrics
        WHERE user_id = ? AND date >= ? AND date <= ? AND sleep_duration IS NOT NULL`,
       [req.user.id, startDate, today]
     );
-    // Tag dnia: noce oznaczone jako "późne zaśnięcie" wykluczamy z liczenia efektu
-    // krótki-sen -> jedzenie następnego dnia - to już wiadomy, opisany wyjątek, nie
-    // powinien kształtować baseline "typowej" krótkiej noce użytkownika.
-    const lateSleepExcluded = await getExcludedDates(req.user.id, ['late_sleep'], startDate, today);
-    const sleepRows = rawSleepRows.filter(r => !lateSleepExcluded.has(r.date));
 
     if (sleepRows.length === 0) {
       return res.json({ hasEnoughData: false, reason: 'no_sleep_data', sleepThreshold });
@@ -1322,18 +1315,12 @@ router.get('/api/dashboard/recovery-insight', async (req, res) => {
       }
     });
 
-    const rawHrvRhrRows = await db.all(
+    const hrvRhrRows = await db.all(
       `SELECT date, hrv, rhr FROM health_metrics
        WHERE user_id = ? AND date >= ? AND date <= ?
        AND hrv IS NOT NULL AND hrv > 0 AND rhr IS NOT NULL AND rhr > 0`,
       [req.user.id, startDate, shiftDate(today, 1)]
     );
-    // Tag dnia: dni choroby i dni po późnym zaśnięciu wykluczamy z liczenia baseline
-    // regeneracji - to znane, opisane wyjątki (HRV/RHR z natury wypada inaczej), nie
-    // powinny zaburzać porównania "trening vs spoczynek" u zdrowego, normalnie
-    // wypoczętego użytkownika.
-    const recoveryExcluded = await getExcludedDates(req.user.id, ['illness', 'late_sleep'], startDate, shiftDate(today, 1));
-    const hrvRhrRows = rawHrvRhrRows.filter(r => !recoveryExcluded.has(r.date));
     const metricsByDate = new Map(hrvRhrRows.map(r => [r.date, { hrv: r.hrv, rhr: r.rhr }]));
 
     // This insight already used the correct pairing (training on day D scored against the
@@ -1688,35 +1675,6 @@ function meanAndStdDev(values) {
   const m = values.reduce((s, v) => s + v, 0) / values.length;
   const variance = values.reduce((s, v) => s + (v - m) * (v - m), 0) / values.length;
   return { mean: m, stdDev: Math.sqrt(variance) };
-}
-
-// "Tag dnia": zbiór dat (stringi 'YYYY-MM-DD') oznaczonych przez użytkownika jednym
-// z podanych typów zdarzenia (day_events), które przecinają się z oknem [startDate,
-// endDate]. Insighty bazujące na własnej normie/baseline (np. recovery-insight,
-// self-benchmark-insight) wykluczają te dni z liczenia średnich/percentyli/regresji
-// poniżej - nietypowy okres (choroba/wakacje/późne zaśnięcie) nie powinien zaburzać
-// trendu, mapowanie typ->insight ustalone z użytkownikiem przy projektowaniu funkcji
-// (patrz routes/dayEvents.js dla samego CRUD i listy dozwolonych typów).
-async function getExcludedDates(userId, types, startDate, endDate) {
-  if (!types || types.length === 0) return new Set();
-  const placeholders = types.map(() => '?').join(',');
-  const rows = await db.all(
-    `SELECT start_date, end_date FROM day_events
-     WHERE user_id = ? AND type IN (${placeholders}) AND end_date >= ? AND start_date <= ?`,
-    [userId, ...types, startDate, endDate]
-  );
-  const excluded = new Set();
-  rows.forEach(r => {
-    // Przecinamy zakres zdarzenia z oknem zapytania, żeby nie generować dat poza
-    // [startDate, endDate] (np. wieloletni zakres wpisany przez pomyłkę).
-    let d = r.start_date > startDate ? r.start_date : startDate;
-    const end = r.end_date < endDate ? r.end_date : endDate;
-    while (d <= end) {
-      excluded.add(d);
-      d = shiftDate(d, 1);
-    }
-  });
-  return excluded;
 }
 
 function linearRegressionSlope(points) {
@@ -2446,16 +2404,11 @@ router.get('/api/dashboard/rhr-drift-insight', async (req, res) => {
     const baselineEnd = shiftDate(recentStart, -1);
     const baselineStart = shiftDate(baselineEnd, -(RHR_BASELINE_WINDOW_DAYS - 1));
 
-    const rawRows = await db.all(
+    const rows = await db.all(
       `SELECT date, rhr FROM health_metrics
        WHERE user_id = ? AND date >= ? AND date <= ? AND rhr IS NOT NULL AND rhr > 0`,
       [req.user.id, baselineStart, today]
     );
-    // Tag dnia: dni choroby wykluczamy z liczenia baseline i odczytu trendu - RHR
-    // jest wtedy podniesione z już znanej przyczyny, włączenie tych dni fałszywie
-    // "wyjaśniałoby" trend chorobą zamiast realnym przemęczeniem/stresem.
-    const rhrIllnessExcluded = await getExcludedDates(req.user.id, ['illness'], baselineStart, today);
-    const rows = rawRows.filter(r => !rhrIllnessExcluded.has(r.date));
 
     const recent = rows.filter(r => r.date >= recentStart && r.date <= today).map(r => r.rhr);
     const baseline = rows.filter(r => r.date >= baselineStart && r.date <= baselineEnd).map(r => r.rhr);
@@ -2757,15 +2710,10 @@ router.get('/api/dashboard/meal-quality-trend-insight', async (req, res) => {
     const baselineEnd = shiftDate(recentStart, -1);
     const baselineStart = shiftDate(baselineEnd, -(MEAL_QUALITY_BASELINE_WINDOW_DAYS - 1));
 
-    const rawRows = await db.all(
+    const rows = await db.all(
       `SELECT date, analysis_json FROM meals WHERE user_id = ? AND date >= ? AND date <= ?`,
       [req.user.id, baselineStart, today]
     );
-    // Tag dnia: dni wakacji wykluczamy z trendu jakości posiłków - jedzenie na
-    // wyjeździe (restauracje, inny rytm) nie jest reprezentatywne dla normalnej
-    // jakości diety, fałszywie zaburzyłoby porównanie "ostatnio vs wcześniej".
-    const mealQualityVacationExcluded = await getExcludedDates(req.user.id, ['vacation'], baselineStart, today);
-    const rows = rawRows.filter(r => !mealQualityVacationExcluded.has(r.date));
 
     const ratedMeals = [];
     rows.forEach(r => {
@@ -2834,20 +2782,14 @@ router.get('/api/dashboard/weekend-effect-insight', async (req, res) => {
     const today = resolveQueryDate(req);
     const startDate = shiftDate(today, -(WEEKEND_EFFECT_LOOKBACK_DAYS - 1));
 
-    const rawMealRows = await db.all(
+    const mealRows = await db.all(
       `SELECT date, SUM(calories) AS calories FROM meals WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date`,
       [req.user.id, startDate, today]
     );
-    const rawHealthRows = await db.all(
+    const healthRows = await db.all(
       `SELECT date, active_calories, steps, sleep_score FROM health_metrics WHERE user_id = ? AND date >= ? AND date <= ?`,
       [req.user.id, startDate, today]
     );
-    // Tag dnia: dni wakacji wykluczamy z efektu weekendu - na wyjeździe "weekend"
-    // przestaje mieć typowe znaczenie (każdy dzień bywa jak weekend), włączenie
-    // tych dni zniekształcałoby porównanie dni robocze vs weekend w normalnym życiu.
-    const weekendVacationExcluded = await getExcludedDates(req.user.id, ['vacation'], startDate, today);
-    const mealRows = rawMealRows.filter(r => !weekendVacationExcluded.has(r.date));
-    const healthRows = rawHealthRows.filter(r => !weekendVacationExcluded.has(r.date));
 
     const weekdayCalories = [], weekendCalories = [];
     mealRows.forEach(r => {
@@ -2989,15 +2931,10 @@ router.get('/api/dashboard/weight-goal-forecast', async (req, res) => {
       return res.json({ hasEnoughData: false, reason: 'no_target_weight_set' });
     }
 
-    const rawWeightRows = await db.all(
+    const weightRows = await db.all(
       `SELECT date, weight FROM health_metrics WHERE user_id = ? AND date >= ? AND date <= ? AND weight IS NOT NULL ORDER BY date ASC`,
       [req.user.id, startDate, today]
     );
-    // Tag dnia: dni wakacji wykluczamy z regresji - wahania wagi na wyjeździe nie
-    // odzwierciedlają realnego tempa zmiany przy normalnym trybie życia, fałszywie
-    // przesunęłyby prognozowaną datę osiągnięcia celu.
-    const forecastVacationExcluded = await getExcludedDates(req.user.id, ['vacation'], startDate, today);
-    const weightRows = rawWeightRows.filter(r => !forecastVacationExcluded.has(r.date));
     if (weightRows.length < MIN_WEIGHT_FORECAST_MEASUREMENTS) {
       return res.json({
         hasEnoughData: false,
@@ -3134,15 +3071,11 @@ router.get('/api/dashboard/spo2-trend-insight', async (req, res) => {
     const baselineEnd = shiftDate(recentStart, -1);
     const baselineStart = shiftDate(baselineEnd, -(SPO2_BASELINE_WINDOW_DAYS - 1));
 
-    const rawRows = await db.all(
+    const rows = await db.all(
       `SELECT date, spo2_percentage FROM health_metrics
        WHERE user_id = ? AND date >= ? AND date <= ? AND spo2_percentage IS NOT NULL AND spo2_percentage > 0`,
       [req.user.id, baselineStart, today]
     );
-    // Tag dnia: dni choroby wykluczamy - obniżone SpO2 ma wtedy już znaną przyczynę
-    // (infekcja), nie powinno trafiać do baseline "normalnego" spoczynkowego SpO2.
-    const spo2IllnessExcluded = await getExcludedDates(req.user.id, ['illness'], baselineStart, today);
-    const rows = rawRows.filter(r => !spo2IllnessExcluded.has(r.date));
 
     const recent = rows.filter(r => r.date >= recentStart && r.date <= today).map(r => r.spo2_percentage);
     const baseline = rows.filter(r => r.date >= baselineStart && r.date <= baselineEnd).map(r => r.spo2_percentage);
@@ -4147,16 +4080,11 @@ router.get('/api/dashboard/self-benchmark-insight', async (req, res) => {
       return res.json({ hasEnoughData: false, reason: 'no_data_for_date' });
     }
 
-    const rawHistoryRows = await db.all(
+    const historyRows = await db.all(
       `SELECT date, sleep_score, readiness_score, hrv, rhr, steps, active_calories FROM health_metrics
        WHERE user_id = ? AND date >= ? AND date < ?`,
       [req.user.id, startDate, today]
     );
-    // Tag dnia: dni choroby wykluczamy z baseline "Ty w przeszłości" - chory dzień
-    // nie jest reprezentatywny dla normalnej formy, fałszywie zaniżałby/zawyżałby
-    // percentyl dzisiejszej wartości w zależności od metryki.
-    const benchmarkIllnessExcluded = await getExcludedDates(req.user.id, ['illness'], startDate, today);
-    const historyRows = rawHistoryRows.filter(r => !benchmarkIllnessExcluded.has(r.date));
 
     const todayValues = { ...(health || {}) };
     if (mealRow && mealRow.calories != null) todayValues.calories = mealRow.calories;
@@ -4737,15 +4665,10 @@ router.get('/api/dashboard/streak-weight-effect-insight', async (req, res) => {
        WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date ORDER BY date ASC`,
       [req.user.id, startDate, today]
     );
-    const rawWeightRows = await db.all(
+    const weightRows = await db.all(
       `SELECT date, weight FROM health_metrics WHERE user_id = ? AND date >= ? AND date <= ? AND weight IS NOT NULL ORDER BY date ASC`,
       [req.user.id, startDate, today]
     );
-    // Tag dnia: dni wakacji wykluczamy z pomiarów wagi - zmiany wagi na wyjeździe
-    // (inna dieta, podróż, zatrzymanie wody) nie są efektem trzymania/nietrzymania
-    // się celu kalorycznego, fałszywie zaburzyłyby porównanie tempa obu grup.
-    const streakVacationExcluded = await getExcludedDates(req.user.id, ['vacation'], startDate, today);
-    const weightRows = rawWeightRows.filter(r => !streakVacationExcluded.has(r.date));
 
     let prevDate = null;
     let currentStreak = 0;

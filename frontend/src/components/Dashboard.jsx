@@ -4,6 +4,8 @@ import { formatHoursMins } from '../utils/format';
 import { t } from '../utils/i18n';
 import { useInsights } from '../utils/useInsights';
 import { getWarsawDateString } from '../utils/dates';
+import AppleHealthMetricsCard from './AppleHealthMetricsCard';
+import AppleHealthEventsCard from './AppleHealthEventsCard';
 
 // Insights are fetched with ONE batched request (/api/dashboard/insights).
 // Previously each of them had its own useEffect and its own fetch - opening the
@@ -694,120 +696,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 
   // The gap between workouts -> performance (Apple Watch only)
   const workoutRestPerfInsight = batchedInsights['workout-rest-performance-insight'];
-
-  // "Day tag" - date ranges marked with a context (illness/holiday/a late bedtime) that
-  // selected insights above exclude when computing the user's own norm or baseline
-  // (see the backend: routes/dayEvents.js + getExcludedDates in routes/dashboard.js).
-  const DAY_EVENT_TYPES = [
-    { value: 'illness', label: 'Choroba' },
-    { value: 'vacation', label: 'Wakacje / urlop' },
-    { value: 'late_sleep', label: t('Późne zaśnięcie') }
-  ];
-  const DAY_EVENT_TYPE_LABELS = Object.fromEntries(DAY_EVENT_TYPES.map(t => [t.value, t.label]));
-  const DAY_EVENT_ICONS = {
-    illness: '🤒',
-    vacation: '🌴',
-    late_sleep: '🌙'
-  };
-
-  const [isDayEventsOpen, setIsDayEventsOpen] = useState(false);
-  const [dayEvents, setDayEvents] = useState([]);
-  const [isLoadingDayEvents, setIsLoadingDayEvents] = useState(false);
-  const [newEventType, setNewEventType] = useState('illness');
-  const [newEventStart, setNewEventStart] = useState('');
-  const [newEventEnd, setNewEventEnd] = useState('');
-  const [newEventNote, setNewEventNote] = useState('');
-  const [isSavingDayEvent, setIsSavingDayEvent] = useState(false);
-  const [dayEventMessage, setDayEventMessage] = useState({ type: '', text: '' });
-
-  const fetchDayEvents = async (cancelledRef) => {
-    if (!sessionToken) return;
-    setIsLoadingDayEvents(true);
-    try {
-      const res = await fetch('/api/day-events', {
-        headers: { 'Authorization': `Bearer ${sessionToken}` }
-      });
-      if (res.ok && !(cancelledRef && cancelledRef.current)) {
-        const data = await res.json();
-        setDayEvents(Array.isArray(data) ? data : []);
-      }
-    } catch (err) {
-      console.error('Failed to fetch the day events:', err);
-    } finally {
-      if (!(cancelledRef && cancelledRef.current)) setIsLoadingDayEvents(false);
-    }
-  };
-
-  useEffect(() => {
-    const cancelledRef = { current: false };
-    fetchDayEvents(cancelledRef);
-    return () => { cancelledRef.current = true; };
-  }, [sessionToken]);
-
-  const handleAddDayEvent = async () => {
-    if (!sessionToken || !newEventType || !newEventStart || !newEventEnd) return;
-    if (newEventEnd < newEventStart) {
-      setDayEventMessage({ type: 'error', text: t('Data końcowa nie może być wcześniejsza niż data początkowa.') });
-      return;
-    }
-    setIsSavingDayEvent(true);
-    setDayEventMessage({ type: '', text: '' });
-    try {
-      const res = await fetch('/api/day-events', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${sessionToken}`
-        },
-        body: JSON.stringify({
-          type: newEventType,
-          start_date: newEventStart,
-          end_date: newEventEnd,
-          note: newEventNote
-        })
-      });
-      if (res.ok) {
-        setNewEventStart('');
-        setNewEventEnd('');
-        setNewEventNote('');
-        setDayEventMessage({ type: 'success', text: 'Zapisano zdarzenie.' });
-        await fetchDayEvents({ current: false }); // F-S3: cancelledRef is required by the function signature
-        setTimeout(() => setDayEventMessage({ type: '', text: '' }), 4000);
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setDayEventMessage({ type: 'error', text: data.error || t('Błąd zapisu zdarzenia.') });
-      }
-    } catch (err) {
-      console.error(err);
-      setDayEventMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
-    } finally {
-      setIsSavingDayEvent(false);
-    }
-  };
-
-  const handleDeleteDayEvent = async (id) => {
-    if (!sessionToken) return;
-    try {
-      const res = await fetch(`/api/day-events/${id}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${sessionToken}` }
-      });
-      if (res.ok) {
-        setDayEvents(prev => prev.filter(ev => ev.id !== id));
-      }
-    } catch (err) {
-      console.error('Failed to delete the day event:', err);
-    }
-  };
-
-  // Whether the given date (the day currently selected on the dashboard, for instance) falls
-  // within the range of an event of one of the given types - used for the context note
-  // ("marked: illness") on the insight cards that exclude that type from the baseline.
-  const getDayEventLabelForDate = (dateStr, types) => {
-    if (!dateStr || dayEvents.length === 0) return null;
-    const match = dayEvents.find(ev => types.includes(ev.type) && dateStr >= ev.start_date && dateStr <= ev.end_date);
-    return match ? DAY_EVENT_TYPE_LABELS[match.type] : null;
-  };
 
   // Collapsible "Analizy" section (UX: round 7 - 12 insight cards in one place, collapsed by
   // default so the dashboard is not flooded the moment it opens).
@@ -1948,122 +1836,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           </div>
         )}
 
-        {/* "DAY TAG" - date ranges marked with a context (illness/holiday/a late bedtime),
-            excluded from the norm calculation in selected analyses above. */}
-        <div
-          className="premium-card"
-          role="button"
-          tabIndex={0}
-          aria-expanded={isDayEventsOpen}
-          onClick={() => setIsDayEventsOpen(o => !o)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsDayEventsOpen(o => !o); } }}
-          style={{ cursor: 'pointer' }}
-        >
-          <div className="premium-title-row" style={{ marginBottom: 0 }}>
-            <span className="premium-title">🏷️ Tag dnia</span>
-            <span style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' }}>
-              {isDayEventsOpen ? t('Zwiń ▲') : t('Pokaż ▼')}
-            </span>
-          </div>
-        </div>
-
-        {isDayEventsOpen && (
-          <div className="premium-card">
-            <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '12px' }}>
-              Oznacz dni choroby, wakacji albo późnego zaśnięcia - takie dni zostaną
-              wykluczone z liczenia Twojej normy w wybranych analizach (regeneracja,
-              sen, trend wagi, jakość posiłków, efekt weekendu i inne).
-            </p>
-
-            <div className="day-event-inputs">
-              <select
-                value={newEventType}
-                onChange={(e) => setNewEventType(e.target.value)}
-                className="day-event-select"
-                style={{ flex: '1 1 140px' }}
-                aria-label="Typ zdarzenia"
-              >
-                {DAY_EVENT_TYPES.map(t => (
-                  <option key={t.value} value={t.value}>{t.label}</option>
-                ))}
-              </select>
-              <input
-                type="date"
-                value={newEventStart}
-                onChange={(e) => setNewEventStart(e.target.value)}
-                className="day-event-date"
-                style={{ flex: '1 1 130px' }}
-                aria-label="Data od"
-              />
-              <input
-                type="date"
-                value={newEventEnd}
-                onChange={(e) => setNewEventEnd(e.target.value)}
-                className="day-event-date"
-                style={{ flex: '1 1 130px' }}
-                aria-label="Data do"
-              />
-            </div>
-            <input
-              type="text"
-              value={newEventNote}
-              onChange={(e) => setNewEventNote(e.target.value)}
-              placeholder="Notatka (opcjonalnie)"
-              maxLength={500}
-              className="day-event-note-input"
-              style={{ marginBottom: '12px' }}
-              aria-label="Notatka"
-            />
-            <button
-              className="btn-primary"
-              onClick={handleAddDayEvent}
-              disabled={isSavingDayEvent || !newEventStart || !newEventEnd}
-            >
-              {isSavingDayEvent ? t('Zapisywanie...') : 'Dodaj'}
-            </button>
-            {dayEventMessage.text && (
-              <p style={{ fontSize: '0.78rem', marginTop: '8px', color: dayEventMessage.type === 'error' ? 'var(--danger-light)' : 'var(--success-light)' }}>
-                {dayEventMessage.text}
-              </p>
-            )}
-
-            <div className="day-event-list">
-              {isLoadingDayEvents && <div className="shimmer-placeholder" style={{ height: '36px', width: '100%', marginBottom: '10px' }} />}
-              {!isLoadingDayEvents && dayEvents.length === 0 && (
-                <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)', textAlign: 'center', padding: '10px 0' }}>Brak oznaczonych dni.</p>
-              )}
-              {!isLoadingDayEvents && dayEvents.map(ev => (
-                <div key={ev.id} className="day-event-item">
-                  <div className="day-event-info">
-                    <span className={`day-event-badge ${ev.type}`}>
-                      <span>{DAY_EVENT_ICONS[ev.type] || '🏷️'}</span>
-                      <span>{DAY_EVENT_TYPE_LABELS[ev.type] || ev.type}</span>
-                    </span>
-                    <span className="day-event-dates">
-                      {ev.start_date}{ev.start_date !== ev.end_date ? ` – ${ev.end_date}` : ''}
-                    </span>
-                    {ev.note && (
-                      <span className="day-event-note">
-                        ({ev.note})
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    className="day-event-delete-btn"
-                    onClick={() => handleDeleteDayEvent(ev.id)}
-                    aria-label={`Usuń zdarzenie ${DAY_EVENT_TYPE_LABELS[ev.type] || ev.type} ${ev.start_date}`}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <line x1="18" y1="6" x2="6" y2="18"></line>
-                      <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* COLLAPSIBLE "ANALIZY" SECTION - 12 cards of descriptive comparisons (sleep,
             sodium, recovery, supplements + 8 new ones from round 7), collapsed by default so
             the dashboard is not flooded the moment it opens (UX round 7, point 1). */}
@@ -2092,11 +1864,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div className="premium-title-row">
               <span className="premium-title">{t("😴 Sen → następny dzień")}</span>
             </div>
-            {getDayEventLabelForDate(selectedDate, ['late_sleep']) && (
-              <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
-                🏷️ Uwaga: wybrany dzień ({selectedDate}) jest oznaczony jako: {getDayEventLabelForDate(selectedDate, ['late_sleep'])} - może to wpływać na statystykę z tego okresu
-              </p>
-            )}
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Po nocach krócej niż {sleepInsight.sleepThreshold}h (cel snu) vs po nocach z wystarczającym snem - ostatnie 90 dni
               ({sleepInsight.shortSleepNights} vs {sleepInsight.goodSleepNights} dni z danymi).
@@ -2187,11 +1954,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div className="premium-title-row">
               <span className="premium-title">🔄 Regeneracja po treningu</span>
             </div>
-            {getDayEventLabelForDate(selectedDate, ['illness', 'late_sleep']) && (
-              <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
-                🏷️ Uwaga: wybrany dzień ({selectedDate}) jest oznaczony jako: {getDayEventLabelForDate(selectedDate, ['illness', 'late_sleep'])} - może to wpływać na statystykę z tego okresu
-              </p>
-            )}
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               {/* The "significant" workout threshold (20 min) is set on the backend
                   (SIGNIFICANT_WORKOUT_MIN_MINUTES in dashboard.js) - this is descriptive only. */}
@@ -2504,11 +2266,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div className="premium-title-row">
               <span className="premium-title">{t("❤️ Trend tętna spoczynkowego")}</span>
             </div>
-            {getDayEventLabelForDate(selectedDate, ['illness']) && (
-              <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
-                🏷️ Uwaga: wybrany dzień ({selectedDate}) jest oznaczony jako: {getDayEventLabelForDate(selectedDate, ['illness'])} - może to wpływać na statystykę z tego okresu
-              </p>
-            )}
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Średnie RHR z ostatnich {rhrDriftInsight.recentDays} dni vs Twoja własna baseline z poprzedzających {rhrDriftInsight.baselineDays} dni.
             </p>
@@ -2809,11 +2566,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div className="premium-title-row">
               <span className="premium-title">{t("🥗 Trend jakości posiłków")}</span>
             </div>
-            {getDayEventLabelForDate(selectedDate, ['vacation']) && (
-              <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
-                🏷️ Uwaga: wybrany dzień ({selectedDate}) jest oznaczony jako: {getDayEventLabelForDate(selectedDate, ['vacation'])} - może to wpływać na statystykę z tego okresu
-              </p>
-            )}
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Średnia ocena zdrowotności posiłków (AI, skala 1-10) - ostatnie 14 dni vs poprzedzające 30 dni
               ({mealQualityTrendInsight.recentRatedMeals} vs {mealQualityTrendInsight.baselineRatedMeals} ocenionych posiłków).
@@ -2835,11 +2587,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div className="premium-title-row">
               <span className="premium-title">📅 Efekt weekendu</span>
             </div>
-            {getDayEventLabelForDate(selectedDate, ['vacation']) && (
-              <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
-                🏷️ Uwaga: wybrany dzień ({selectedDate}) jest oznaczony jako: {getDayEventLabelForDate(selectedDate, ['vacation'])} - może to wpływać na statystykę z tego okresu
-              </p>
-            )}
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Dni robocze vs weekend - ostatnie 4 tygodnie ({weekendEffectInsight.weekdayDaysLogged} vs {weekendEffectInsight.weekendDaysLogged} dni z danymi).
             </p>
@@ -3013,11 +2760,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div className="premium-title-row">
               <span className="premium-title">{t("📊 Ty dziś vs Ty w przeszłości")}</span>
             </div>
-            {getDayEventLabelForDate(selectedDate, ['illness']) && (
-              <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
-                🏷️ Uwaga: wybrany dzień ({selectedDate}) jest oznaczony jako: {getDayEventLabelForDate(selectedDate, ['illness'])} - może to wpływać na statystykę z tego okresu
-              </p>
-            )}
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Na bazie Twoich ostatnich {selfBenchmarkInsight.lookbackDays} dni - wyłącznie Twoja historia, bez porównań z innymi użytkownikami. Percentyl 100 = Twój najlepszy dzień, niezależnie od metryki.
             </p>
@@ -3075,11 +2817,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div className="premium-title-row">
               <span className="premium-title">🫁 Trend SpO2</span>
             </div>
-            {getDayEventLabelForDate(selectedDate, ['illness']) && (
-              <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
-                🏷️ Uwaga: wybrany dzień ({selectedDate}) jest oznaczony jako: {getDayEventLabelForDate(selectedDate, ['illness'])} - może to wpływać na statystykę z tego okresu
-              </p>
-            )}
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Średnie SpO2 z ostatnich {spo2TrendInsight.recentDays} dni vs Twoja własna baseline z poprzedzających {spo2TrendInsight.baselineDays} dni.
             </p>
@@ -3525,11 +3262,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <div className="premium-title-row">
               <span className="premium-title">🔥⚖️ Passa kaloryczna vs efekt na wadze</span>
             </div>
-            {getDayEventLabelForDate(selectedDate, ['vacation']) && (
-              <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
-                🏷️ Uwaga: wybrany dzień ({selectedDate}) jest oznaczony jako: {getDayEventLabelForDate(selectedDate, ['vacation'])} - może to wpływać na statystykę z tego okresu
-              </p>
-            )}
             <p style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', marginTop: '2px', marginBottom: '10px' }}>
               Tempo zmiany wagi w dniach z aktywną passą trzymania celu kalorycznego ({streakWeightEffectInsight.streakMinLength}+ dni w paśmie) vs dni bez passy.
             </p>
@@ -3902,11 +3634,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </div>
             {weightGoalForecast.hasEnoughData ? (
               <>
-                {getDayEventLabelForDate(selectedDate, ['vacation']) && (
-                  <p style={{ fontSize: '0.72rem', color: '#fbbf24', marginTop: '2px', marginBottom: '8px' }}>
-                    🏷️ Uwaga: wybrany dzień ({selectedDate}) jest oznaczony jako: {getDayEventLabelForDate(selectedDate, ['vacation'])} - może to wpływać na statystykę z tego okresu
-                  </p>
-                )}
                 {weightGoalForecast.status === 'reached' ? (
                   <p style={{ fontSize: '0.85rem', color: 'var(--success-light)', marginBottom: 0 }}>
                     Cel wagi ({weightGoalForecast.targetWeightKg} kg) już osiągnięty - aktualna waga {weightGoalForecast.currentWeight} kg.
@@ -4784,6 +4511,18 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             })()}
           </div>
         </div>
+
+        <AppleHealthMetricsCard
+          sessionToken={sessionToken}
+          selectedDate={selectedDate}
+          onSessionExpired={setSessionExpired}
+        />
+
+        <AppleHealthEventsCard
+          sessionToken={sessionToken}
+          selectedDate={selectedDate}
+          onSessionExpired={setSessionExpired}
+        />
 
         {/* TRENING (TRAINING) */}
         <div className="premium-card">

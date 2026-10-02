@@ -787,6 +787,50 @@ const initDb = async () => {
     )
   `);
 
+  // Every Health Auto Export metric, whatever its name, folded into hourly buckets - see
+  // utils/appleHealthSamples.js for why buckets rather than raw samples. hour_start is the
+  // UTC hour as ISO text; `date` is the Warsaw calendar day of that hour, resolved once at
+  // write time, which is what every read filters on. `granularity` ('day' | 'sub') lets a
+  // change of time grouping on the phone replace the old rows instead of adding to them.
+  await run(`
+    CREATE TABLE IF NOT EXISTS apple_health_hourly (
+      user_id INTEGER NOT NULL,
+      metric TEXT NOT NULL,
+      hour_start TEXT NOT NULL,
+      date TEXT NOT NULL,
+      granularity TEXT NOT NULL DEFAULT 'sub',
+      sum REAL NOT NULL,
+      count INTEGER NOT NULL,
+      min REAL NOT NULL,
+      max REAL NOT NULL,
+      last REAL NOT NULL,
+      last_at TEXT NOT NULL,
+      units TEXT DEFAULT NULL,
+      PRIMARY KEY(user_id, metric, hour_start),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run('CREATE INDEX IF NOT EXISTS idx_apple_health_hourly_user_date ON apple_health_hourly(user_id, date)');
+
+  // Symptoms, heart-rate notifications and cycle tracking - see utils/appleHealthEvents.js.
+  // event_key is a hash of kind + start instant + name, so a re-sent export replaces events.
+  await run(`
+    CREATE TABLE IF NOT EXISTS apple_health_events (
+      user_id INTEGER NOT NULL,
+      event_key TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      start TEXT NOT NULL,
+      end TEXT DEFAULT NULL,
+      date TEXT NOT NULL,
+      name TEXT NOT NULL,
+      value TEXT DEFAULT NULL,
+      details_json TEXT DEFAULT NULL,
+      PRIMARY KEY(user_id, event_key),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run('CREATE INDEX IF NOT EXISTS idx_apple_health_events_user_date ON apple_health_events(user_id, kind, date)');
+
   // One-time backfill of health_metrics.water_ml_apple (see the column migration above).
   // The old webhook added each NEW sample to water_ml exactly once, so for a day that has
   // samples, the amount already inside water_ml that came from Apple is the sum of those
@@ -904,15 +948,13 @@ const initDb = async () => {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_shared_reports_user ON shared_reports(user_id)`);
 
-  // 11. Day events table (day_events) - the "day tag": the user marks a date range with
-  // context (illness/holiday/late bedtime) so that (a) the context is visible when
-  // reviewing those days, and (b) selected dashboard insights can exclude them from the
-  // baseline calculation, keeping an atypical period from distorting the trend.
-  // A date range (start_date/end_date) rather than a single date, because a holiday or an
-  // illness usually spans several days and clicking each one separately would be tedious
-  // (for single-day events such as "late bedtime", start_date equals end_date).
-  // `type` is a closed enum controlled by the backend (see routes/dayEvents.js),
-  // not free text - insights map specific types to specific exclusions.
+  // 11. Day events table (day_events) - the former "day tag" feature, where the user
+  // marked a date range as illness/holiday/late bedtime and selected insights excluded
+  // those days from their baselines. The feature was removed on 2026-10-02: the user
+  // never used it and the exclusions distorted the insights. The table is kept only so
+  // existing rows are not destroyed (no code reads or writes it any more); dropping it
+  // would be an irreversible data deletion. The FK cascade stays because account
+  // deletion relies on it to remove these rows together with the user.
   await run(`
     CREATE TABLE IF NOT EXISTS day_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -925,8 +967,8 @@ const initDb = async () => {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
-  // Indeks pod zapytania "WHERE user_id = ? AND type = ? AND end_date >= ? AND
-  // start_date <= ?" (checking that an event range intersects the insight window).
+  // Index kept alongside the table for the same reason: existing databases already have
+  // it, and removing it would gain nothing.
   await run(`CREATE INDEX IF NOT EXISTS idx_day_events_user_type ON day_events(user_id, type, start_date, end_date)`);
 
   // Indeksy pod zapytania zakresowe "WHERE user_id = ? AND date >= ?" (agregacje
@@ -986,6 +1028,27 @@ const cleanupOldImages = async () => {
     }
   } catch (err) {
     console.error('[CLEANUP ERROR] Failed to clean up old photos:', err);
+  }
+};
+
+// Hourly Apple Health buckets are kept for 180 days. The volume is 2 Gi and also holds 14
+// full backups, so the live database has to stay well under ~130 MB (audit 2026-10-02);
+// with every metric ticked, two users produce roughly 60-80 MB of buckets a year. Nothing
+// long-term is lost: the values the trends and insights use (SpO2, respiratory rate,
+// blood pressure, weight...) are copied into health_metrics, which is never pruned - only
+// the "other metrics" card for days older than half a year goes blank.
+const APPLE_HEALTH_HOURLY_RETENTION_DAYS = 180;
+const cleanupOldAppleHealthHours = async () => {
+  try {
+    const result = await run(
+      `DELETE FROM apple_health_hourly WHERE date < date('now', ?)`,
+      [`-${APPLE_HEALTH_HOURLY_RETENTION_DAYS} days`]
+    );
+    if (result.changes > 0) {
+      console.log(`[CLEANUP] Removed ${result.changes} Apple Health hourly buckets older than ${APPLE_HEALTH_HOURLY_RETENTION_DAYS} days.`);
+    }
+  } catch (err) {
+    console.error('[CLEANUP ERROR] Failed to clean up old Apple Health buckets:', err);
   }
 };
 
@@ -1116,6 +1179,7 @@ module.exports = {
   cleanupExpiredSessions,
   cleanupOldImages,
   cleanupOldLogs,
+  cleanupOldAppleHealthHours,
   backupDatabase,
   run,
   get,

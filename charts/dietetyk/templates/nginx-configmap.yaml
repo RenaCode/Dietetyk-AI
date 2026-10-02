@@ -4,17 +4,76 @@ metadata:
   name: {{ include "dietetyk.fullname" . }}-nginx-config
 data:
   default.conf: |
+    # This file is included inside nginx's `http {}` block (conf.d/*.conf), so the map and
+    # log_format directives below are legal at its top level.
+
+    # Access log WITHOUT query strings and with token-bearing paths redacted.
+    #
+    # The image's default `main` format logs `$request` (path + query) and `$http_referer`.
+    # Several URLs carry secrets: /register?token=inv_... (an invitation - possibly for an
+    # admin account), /api/invitation-status?token=..., the OAuth callbacks' ?code=&state=,
+    # /api/integrations/apple-health/<sync_token> and /api/public/shared-reports/<token> (the
+    # only key to a PDF of somebody's health data). And the Referer of every asset request
+    # made by the registration page repeated its URL - invitation token included. All of it
+    # landed in the frontend pod's log, readable by anyone with `kubectl logs` or access to
+    # wherever logs are shipped. The first map cuts the query string off the ORIGINAL request
+    # path ($uri would show /index.html after try_files); the second blanks the two path tokens.
+    map $request_uri $dietetyk_request_path {
+        ~^(?<dietetyk_path>[^?]*)              $dietetyk_path;
+    }
+    map $dietetyk_request_path $dietetyk_log_uri {
+        default                                $dietetyk_request_path;
+        ~^/api/integrations/apple-health/      "/api/integrations/apple-health/[redacted]";
+        ~^/api/public/shared-reports/          "/api/public/shared-reports/[redacted]";
+    }
+    log_format dietetyk_safe '$remote_addr - [$time_local] "$request_method $dietetyk_log_uri $server_protocol" '
+                             '$status $body_bytes_sent $request_time "$http_user_agent"';
+
+    # TLS ends at Traefik, which tells us the original scheme in X-Forwarded-Proto. Passing
+    # `$scheme` on (as this file used to) overwrote that with this hop's plain `http`, so the
+    # backend believed every request was insecure: the Google sign-in nonce cookie was set
+    # without `Secure`, and URLs built without APP_URL started with http://. Fall back to
+    # $scheme only when no proxy in front set the header (local docker runs).
+    map $http_x_forwarded_proto $dietetyk_forwarded_proto {
+        default $http_x_forwarded_proto;
+        ""      $scheme;
+    }
+
     server {
         listen 80;
         server_name localhost;
         server_tokens off;
 
+        access_log /var/log/nginx/access.log dietetyk_safe;
+
+        # Large enough for the Apple Health webhook (workouts with GPS route data). The
+        # backend applies its own, much smaller limit everywhere else (see backend/app.js).
         client_max_body_size 20m;
 
-        # Security headers
+        # Security headers. `always` so they are also sent on error responses.
+        #
+        # HSTS: the site is only ever served over HTTPS (Traefik websecure entrypoint). No
+        # `preload` - that is a commitment for the whole domain that cannot be taken back
+        # quickly, and it is not this chart's to make.
+        add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
         add_header X-Content-Type-Options "nosniff" always;
-        add_header X-Frame-Options "SAMEORIGIN" always;
-        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header X-Frame-Options "DENY" always;
+        # no-referrer rather than strict-origin-when-cross-origin: the registration page's
+        # URL carries the invitation token, and the app has no use for outgoing Referers.
+        add_header Referrer-Policy "no-referrer" always;
+        # Content-Security-Policy matched to what the frontend actually loads
+        # (frontend/index.html, App.jsx, the components):
+        #   - script-src 'self': the Vite build emits external, hashed module scripts and no
+        #     inline <script>.
+        #   - style-src 'unsafe-inline': the components use inline style props throughout; plus
+        #     fonts.googleapis.com for the Google Fonts stylesheet in index.html.
+        #   - font-src fonts.gstatic.com: where Google Fonts serves the font files.
+        #   - img-src data: blob: - the avatar, the 2FA QR code and meal photo previews are
+        #     base64 data URIs; downloads are built from blob: URLs.
+        #   - connect-src 'self': every fetch() goes to /api on this origin.
+        #   - form-action 'self': OAuth flows are started by window.location, not by forms.
+        #   - frame-ancestors 'none': nothing embeds the app (same intent as X-Frame-Options).
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
 
         location / {
             root /usr/share/nginx/html;
@@ -30,7 +89,7 @@ data:
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_set_header X-Forwarded-Proto $dietetyk_forwarded_proto;
             proxy_cache_bypass $http_upgrade;
         }
     }

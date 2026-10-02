@@ -178,7 +178,7 @@ ssh -L 8081:localhost:8081 deploy@<VPS_IP>
 and then opening `http://localhost:8081` locally.
 
 ### Step 5: Database Backups
-The backend automatically creates backups of the SQLite database (at startup and every 24 hours, keeping the last 14) in `./data/backups` on the VPS — see `backupDatabase` in `backend/db.js`.
+The backend automatically creates backups of the SQLite database (at startup and every 24 hours, keeping the newest copy of each of the last 14 days) in `./data/backups` on the VPS — see `backupDatabase` in `backend/db.js`.
 
 **Every backup is verified before it counts.** Right after `VACUUM INTO` writes the copy, the backend reopens it read-only and runs `PRAGMA quick_check` plus a row-count sanity check. A copy that fails is deleted immediately and rotation is skipped, so a run of bad backups can never evict the last good ones. Without this, rotation would eventually leave you with 14 unreadable files and you'd only find out during a restore.
 

@@ -8,6 +8,20 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   revisionHistoryLimit: {{ .Values.revisionHistoryLimit | default 3 }}
+  # Recreate, not the default RollingUpdate. The database is ONE SQLite file on a
+  # ReadWriteOnce local-path volume, and the backend keeps per-process state (the hourly sync
+  # guard, in-flight OAuth refreshes, one-time login codes). During a rolling update the old
+  # and the new pod run side by side on the same node and the same file: both read "summary
+  # not sent yet" and both send it, both refresh the same rotating OAuth refresh token and
+  # the loser disconnects the integration. A few seconds of downtime per deploy is the price.
+  #
+  # `rollingUpdate: null` is for the switch itself: the live Deployment still carries the
+  # defaulted rollingUpdate block from RollingUpdate, and a client-side apply (Argo CD's
+  # default) would otherwise keep it and be rejected with "may not be specified when strategy
+  # type is 'Recreate'".
+  strategy:
+    type: Recreate
+    rollingUpdate: null
   selector:
     matchLabels:
       {{- include "dietetyk.selectorLabels" . | nindent 6 }}
@@ -19,10 +33,24 @@ spec:
         app.kubernetes.io/component: backend
     spec:
       {{- include "dietetyk.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: backend
           image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+          # The image already runs as `node` (uid/gid 1000, see docker/backend.Dockerfile);
+          # this makes Kubernetes enforce it. runAsUser is numeric because runAsNonRoot cannot
+          # verify a user NAME. readOnlyRootFilesystem is deliberately not set: nothing has
+          # yet checked that every library writes only under /app/data.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           ports:
             - containerPort: 3000
           env:
@@ -40,17 +68,26 @@ spec:
               subPath: .env
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
+          # The startup probe covers the window in which liveness used to kill a slow start
+          # (database migrations on a large file; before 2026-10 also the backup and a full
+          # sync, see backend/server.js): up to 30 x 10 s = 5 minutes to answer once. Liveness
+          # and readiness only start counting after it succeeds. /api/healthz is outside the
+          # rate limiter (backend/app.js), so probes cannot be starved by other traffic.
+          startupProbe:
+            httpGet:
+              path: /api/healthz
+              port: 3000
+            periodSeconds: 10
+            failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /api/healthz
               port: 3000
-            initialDelaySeconds: 15
             periodSeconds: 30
           readinessProbe:
             httpGet:
               path: /api/healthz
               port: 3000
-            initialDelaySeconds: 10
             periodSeconds: 10
 
         {{- if .Values.dbImage.enabled }}

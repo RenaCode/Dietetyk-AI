@@ -186,6 +186,17 @@ const initDb = async () => {
 
   await addColumn("ALTER TABLE users ADD COLUMN invitation_token TEXT");
 
+  // Invitations used to be valid for ever: an `inv_` link forwarded, left in a mailbox or
+  // printed into a log stayed a working "create this account" key - possibly for an admin
+  // account - until somebody used it. INVITATION_TTL_DAYS lives in routes/admin.js. Invitations
+  // already outstanding get the full window from the moment this migration runs rather than
+  // being expired on the spot, so nobody who was invited yesterday is locked out by a deploy.
+  await addColumn("ALTER TABLE users ADD COLUMN invitation_expires_at TEXT");
+  await run(`
+    UPDATE users SET invitation_expires_at = datetime('now', '+7 days')
+    WHERE status = 'pending' AND invitation_token IS NOT NULL AND invitation_expires_at IS NULL
+  `);
+
   await addColumn("ALTER TABLE users ADD COLUMN created_at TEXT");
 
   // A backfill of a column added one line earlier. It has no expected failure mode at all,
@@ -197,6 +208,11 @@ const initDb = async () => {
   await addColumn("ALTER TABLE users ADD COLUMN force_password_change INTEGER DEFAULT 0");
 
   await addColumn("ALTER TABLE users ADD COLUMN force_2fa INTEGER DEFAULT 0");
+
+  // The time step (30 s unit) of the last TOTP code accepted for this user - see
+  // utils/totp.js. Without it a code observed once (shoulder-surfed, phished in real time)
+  // could be replayed for the rest of its validity window.
+  await addColumn("ALTER TABLE users ADD COLUMN totp_last_step INTEGER");
 
   // Migration: Google sign-in (a step towards eventually dropping password login)
   await addColumn("ALTER TABLE users ADD COLUMN google_id TEXT");
@@ -1095,14 +1111,38 @@ const cleanupOldLogs = async () => {
   }
 };
 
-  // Automatic SQLite backups, rotated - the last 14 by default.
+  // Automatic SQLite backups, rotated - one per day for the last 14 days (see below).
   // The database file lives on a Docker volume (./data), which is not itself a backup: a
   // disk failure, an accidental `rm -rf` or a bad migration would overwrite the only copy
   // of the data. The copies live in a backups/ subdirectory of that same volume - real
   // protection against host failure additionally requires shipping them off the server
   // (see the "Backups" section of the README).
 const backupDir = path.join(dbDir, 'backups');
-const BACKUP_RETENTION_COUNT = 14;
+// Fourteen DAYS of history, one copy per day - not fourteen files.
+//
+// Retention used to be "keep the newest 14 files", and a backup is taken on every process
+// start. A crashloop (a bad migration, a liveness probe killing a slow start) restarts the
+// pod every minute or two, and fourteen restarts were enough to rotate out every copy from
+// before the problem began - the exact copies a restore after a bad migration needs. Now the
+// newest file of each UTC day is kept for the last BACKUP_RETENTION_DAYS days that have a
+// backup, and extra copies within one day are what gets pruned: however many times the
+// process restarts today, yesterday's copy and the twelve before it stay.
+const BACKUP_RETENTION_DAYS = 14;
+
+// Pure, for tests/test-backup-retention.js. `files` are backup file names
+// (`dietetyk-<ISO timestamp with : and . replaced by ->.db`), which sort chronologically.
+// Returns the names to delete. The newest file overall is always kept.
+function selectBackupsToDelete(files, retentionDays = BACKUP_RETENTION_DAYS) {
+  const sorted = [...files].sort();
+  const newestPerDay = new Map(); // 'YYYY-MM-DD' -> newest file of that day
+  for (const f of sorted) {
+    const day = f.slice('dietetyk-'.length, 'dietetyk-'.length + 10);
+    newestPerDay.set(day, f);
+  }
+  const keptDays = [...newestPerDay.keys()].sort().slice(-retentionDays);
+  const keep = new Set(keptDays.map(day => newestPerDay.get(day)));
+  return sorted.filter(f => !keep.has(f));
+}
 
 // Verifying a freshly created backup: we open it as a SEPARATE read-only database and
 // check that it can be read at all.
@@ -1189,7 +1229,7 @@ const backupDatabase = async () => {
     const files = (await fs.promises.readdir(backupDir))
       .filter(f => f.startsWith('dietetyk-') && f.endsWith('.db'))
       .sort();
-    const toDelete = files.slice(0, Math.max(0, files.length - BACKUP_RETENTION_COUNT));
+    const toDelete = selectBackupsToDelete(files);
     for (const f of toDelete) {
       await fs.promises.unlink(path.join(backupDir, f));
       console.log(`[BACKUP] Removed old backup: ${f}`);
@@ -1208,6 +1248,7 @@ module.exports = {
   cleanupOldLogs,
   cleanupOldAppleHealthHours,
   backupDatabase,
+  selectBackupsToDelete,
   run,
   get,
   all,

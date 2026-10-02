@@ -22,7 +22,7 @@ const { syncAppleColumns } = require('../utils/appleHealthColumns');
 // request in the background, with no browser. We identify the user by their unique
 // `sync_token` (the users.sync_token column, long present in the database and visible in
 // Settings) written directly into the webhook URL. This router MUST therefore be mounted
-// in server.js BEFORE
+// in app.js BEFORE
 // `app.use('/api', requireAuth)` - tak samo jak routes/healthcheck.js.
 //
 // RECONCILIATION WITH OURA: the Oura Ring also provides steps/active_calories/
@@ -82,7 +82,7 @@ const { syncAppleColumns } = require('../utils/appleHealthColumns');
 // "whatever fits in the body" after the 2026-10-02 audit measured a production-shaped pod
 // (512 Mi, 0.5 CPU): an 18 MB / 250 000-entry body peaked at 550 MB RSS and held the event
 // loop for ~96 s - past nginx's 60 s timeout, the readiness probe, and the memory limit. The
-// JSON body limit deliberately stays 20 MB (server.js); with hourly grouping, which is what
+// JSON body limit deliberately stays 20 MB (appleHealthJsonParser below); with hourly grouping, which is what
 // the user is told to use, a week of every metric is a few thousand entries.
 const MAX_METRIC_ENTRIES_PER_REQUEST = 100000;
 const MAX_WORKOUTS_PER_REQUEST = 500;
@@ -395,7 +395,33 @@ function buildHealthMetricsUpsertSql(hasOura) {
   `;
 }
 
-router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
+// The body of this webhook is the one large payload the application accepts from outside
+// (Health Auto Export with workout route/GPS data runs to megabytes), so it gets its own
+// 20 MB parser - and gets it only AFTER the token is known to be real. The 20 MB limit used to
+// be global (express.json in server.js, before the rate limiter and requireAuth), so any
+// anonymous POST to any /api path was parsed in full: ~150 MB of RSS per 19.5 MB body against
+// a 512Mi container, and three or four parallel requests to /api/login were an OOM kill.
+// The global parser is now small (see app.js) and skips this path; an unknown token is
+// answered from the URL alone, before a byte of the body is read.
+const appleHealthJsonParser = express.json({ limit: '20mb' });
+
+async function requireKnownSyncToken(req, res, next) {
+  try {
+    const syncToken = (req.params.syncToken || '').trim();
+    if (!syncToken) {
+      return res.status(401).json({ error: 'Brak tokenu synchronizacji w adresie webhooka.' });
+    }
+    const user = await db.get(`SELECT id FROM users WHERE sync_token = ?`, [syncToken]);
+    if (!user) {
+      return res.status(404).json({ error: 'Nieznany token synchronizacji.' });
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
+router.post('/api/integrations/apple-health/:syncToken', requireKnownSyncToken, appleHealthJsonParser, async (req, res) => {
   try {
     const { syncToken } = req.params;
     if (!syncToken || !syncToken.trim()) {

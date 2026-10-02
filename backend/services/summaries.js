@@ -13,6 +13,7 @@ const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/
 // "</user_input> Ignore the instructions above and …" was replayed to Gemini in the daily
 // e-mail as if the application itself had written it.
 const { escapeUserInputTag } = require('../utils/mealSanitize');
+const { escapeHtml } = require('../utils/html');
 
 // ===== Shared helpers (extracted from duplication across the three functions below) =====
 
@@ -23,7 +24,9 @@ async function getUserAndEmail(userId, customEmail) {
   }
   const emailToUse = customEmail || user.email;
   if (!emailToUse) {
-    throw new Error('Brak zdefiniowanego adresu e-mail dla tego użytkownika.');
+    // `expose`: a message the user can act on, safe to return to the client - see
+    // sendSummaryErrorResponse in routes/account.js.
+    throw Object.assign(new Error('Brak zdefiniowanego adresu e-mail dla tego użytkownika.'), { expose: true });
   }
   return { user, emailToUse };
 }
@@ -617,7 +620,7 @@ Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek 
 
   const emailHtml = buildSummaryEmailHtml({
     title: 'Dietetyk AI: Podsumowanie Tygodniowe',
-    headerSubtitleHtml: `Raport dla użytkownika <strong>${user.username}</strong>`,
+    headerSubtitleHtml: `Raport dla użytkownika <strong>${escapeHtml(user.username)}</strong>`,
     statsSectionTitle: 'Twoje Statystyki Tygodniowe',
     valueColumnLabel: 'Tydzień',
     statRows: [
@@ -803,7 +806,7 @@ Sformatuj odpowiedź w strukturze Markdown: jedno krótkie zdanie wstępu, nagł
 
   const emailHtml = buildSummaryEmailHtml({
     title: 'Dietetyk AI: Podsumowanie Codzienne',
-    headerSubtitleHtml: `Raport z dnia <strong>${date}</strong> dla <strong>${user.username}</strong>`,
+    headerSubtitleHtml: `Raport z dnia <strong>${date}</strong> dla <strong>${escapeHtml(user.username)}</strong>`,
     statsSectionTitle: 'Twoje Statystyki Dzisiejsze',
     valueColumnLabel: 'Dzisiaj',
     statRows: [
@@ -950,7 +953,7 @@ Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek 
 
   const emailHtml = buildSummaryEmailHtml({
     title: 'Dietetyk AI: Podsumowanie Miesięczne',
-    headerSubtitleHtml: `Raport za ostatnie 30 dni dla użytkownika <strong>${user.username}</strong>`,
+    headerSubtitleHtml: `Raport za ostatnie 30 dni dla użytkownika <strong>${escapeHtml(user.username)}</strong>`,
     // The section title and the value-column header used to say "Średnia Dobowa" / "Średnia",
     // which was true when this table held only daily averages and stopped being true the
     // moment a workout COUNT and three start-to-end CHANGES were added to it. The row labels

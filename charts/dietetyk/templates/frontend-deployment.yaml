@@ -19,10 +19,19 @@ spec:
         app.kubernetes.io/component: frontend
     spec:
       {{- include "dietetyk.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: frontend
           image: "{{ .Values.frontend.image.repository }}:{{ .Values.frontend.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.frontend.image.pullPolicy }}
+          # nginx:alpine starts its master as root (port 80, then drops workers to `nginx`),
+          # so runAsNonRoot / dropping ALL capabilities would stop it from starting. That
+          # needs a switch to nginx-unprivileged on port 8080 (image, Service and probe
+          # together) - a separate change. What is safe today: no privilege escalation.
+          securityContext:
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: 80
           volumeMounts:

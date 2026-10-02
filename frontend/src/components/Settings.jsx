@@ -575,9 +575,17 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
 
       if (res.ok) {
-        setPasswordMessage({ type: 'success', text: t('Hasło zostało pomyślnie zmienione!') });
+        // A password change also rotates the Apple Health sync token and unlinks Google (see
+        // backend/routes/account.js) - the user has to know, or their Health Auto Export
+        // silently stops syncing.
+        const data = await res.json().catch(() => ({}));
+        const notes = [t('Hasło zostało pomyślnie zmienione!')];
+        if (data.syncTokenRotated) notes.push(t('Adres webhooka Apple Health został zmieniony - zaktualizuj go w Health Auto Export.'));
+        if (data.unlinkedGoogle) notes.push(t('Konto Google zostało odłączone - możesz je połączyć ponownie.'));
+        setPasswordMessage({ type: 'success', text: notes.join(' ') });
         setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-        setTimeout(() => setPasswordMessage({ type: '', text: '' }), 5000);
+        onProfileUpdate();
+        setTimeout(() => setPasswordMessage({ type: '', text: '' }), 12000);
       } else {
         const data = await res.json();
         setPasswordMessage({ type: 'error', text: data.error || t('Błąd podczas zmiany hasła.') });
@@ -1012,15 +1020,55 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       setMessage({ type: 'error', text: t('Błąd połączenia z serwerem - nie połączono z integracją.') });
       return;
     }
-    window.location.href = `${window.location.origin}/api/auth/${service}?token=${sessionToken}`;
+    await startOAuthFlow(service);
+  };
+
+  // Starts an OAuth connect/link flow. Those begin with a top-level navigation, which cannot
+  // carry the Authorization header, and they used to put the SESSION TOKEN in the URL
+  // (?token=...) - straight into the nginx access log and browser history. Now an
+  // authenticated fetch first mints a one-time, 60-second ticket for this one flow
+  // (backend/services/authTickets.js) and only the ticket travels in the URL.
+  const startOAuthFlow = async (service, extra = {}) => {
+    try {
+      const res = await fetch('/api/auth/ticket', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionToken}`
+        },
+        body: JSON.stringify({ service, ...extra })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ticket) {
+        if (res.status === 401 && onLogout) onLogout();
+        setMessage({ type: 'error', text: data.error || t('Nie udało się rozpocząć łączenia.') });
+        return;
+      }
+      const path = service === 'google_link' ? 'google/link' : service;
+      window.location.href = `${window.location.origin}/api/auth/${path}?ticket=${encodeURIComponent(data.ticket)}`;
+    } catch (err) {
+      console.error('Failed to start the OAuth flow:', err);
+      setMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
+    }
   };
 
   // Linking/unlinking a Google account (sign-in) - separate from Google Fit (a data source).
-  // There are no Client ID/Secret to save (that is global admin configuration), so we simply
-  // redirect with the session token - the backend recognises this as the "linking" flow
-  // thanks to the signed `state` (see backend/routes/auth.js, GET /api/auth/google/link).
-  const handleConnectGoogle = () => {
-    window.location.href = `${window.location.origin}/api/auth/google/link?token=${sessionToken}`;
+  // There are no Client ID/Secret to save (that is global admin configuration); the backend
+  // recognises the "linking" flow by its signed, browser-bound `state` (see
+  // backend/routes/auth.js, GET /api/auth/google/link).
+  //
+  // Linking adds a way to LOG IN, so the backend wants the password (and the current 2FA code
+  // when 2FA is on) - a stolen session alone must not be able to plant a Google login that
+  // outlives a password change. Same prompt() pattern as disabling 2FA.
+  const handleConnectGoogle = async () => {
+    const password = prompt(t('Aby połączyć konto Google, potwierdź swoje aktualne hasło:'));
+    if (!password) return;
+    let code;
+    if (userProfile.totp_enabled) {
+      code = prompt(t('Podaj aktualny kod 2FA z aplikacji uwierzytelniającej:'));
+      if (!code) return;
+    }
+    await startOAuthFlow('google_link', { password, code });
   };
 
   const handleUnlinkGoogle = async () => {
@@ -1046,9 +1094,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   // Connecting/disconnecting Google Fit (the source of step and calorie data), analogous to
   // Oura/Withings but without its own Client ID/Secret - it uses the same,
   // globalnej konfiguracji Google co logowanie Google.
-  const handleConnectGoogleFit = () => {
-    window.location.href = `${window.location.origin}/api/auth/google-fit?token=${sessionToken}`;
-  };
+  const handleConnectGoogleFit = () => startOAuthFlow('google-fit');
 
   const handleDisconnectGoogleFit = async () => {
     if (!confirm(t('Czy na pewno chcesz odłączyć integrację z Google Fit?'))) return;

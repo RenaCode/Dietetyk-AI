@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
-const { getAppConfig, getUserSetting, generateOAuthState, verifyOAuthState, getVerifiedSessionByToken } = require('../services/oauthHelpers');
+const { getAppConfig, getUserSetting, startBrowserBoundOAuthState, verifyBrowserBoundOAuthState } = require('../services/oauthHelpers');
+const { consumeTicket } = require('../services/authTickets');
 const { syncOura, syncWithings, syncGoogleFit } = require('../services/sync');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const { encrypt } = require('../utils/encryption');
@@ -27,21 +28,20 @@ async function resolveWithingsRedirectUri(req, userId, defaultPath) {
 }
 
 router.get('/api/auth/oura', async (req, res) => {
-  const { token } = req.query;
-  if (!token) return res.status(401).send('Brak tokenu autoryzacji.');
+  // A one-time ticket from POST /api/auth/ticket, not the session token - see
+  // services/authTickets.js.
+  const userId = consumeTicket(req.query.ticket, 'oura');
+  if (!userId) return res.status(401).send('Link wygasł. Wróć do Ustawień i spróbuj ponownie.');
 
   try {
-    const session = await getVerifiedSessionByToken(token);
-    if (!session) {
-      return res.status(401).send('Sesja wygasła lub wymaga weryfikacji 2FA.');
-    }
 
-    const clientId = await getUserSetting(session.user_id, 'oura_client_id');
+    const clientId = await getUserSetting(userId, 'oura_client_id');
     if (!clientId) {
       return res.status(400).send('Integracja z Oura nie jest skonfigurowana. Wpisz Client ID w Ustawieniach.');
     }
 
-    const state = generateOAuthState(session.user_id);
+    // Bound to this browser - see startBrowserBoundOAuthState in services/oauthHelpers.js.
+    const state = startBrowserBoundOAuthState(req, res, userId, 'oura');
     const appUrl = await getAppConfig('app_url');
     const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
     const redirectUri = `${base}/api/auth/oura/callback`;
@@ -65,8 +65,12 @@ router.get('/api/auth/oura/callback', async (req, res) => {
     return res.redirect('/?tab=setup&error=auth_failed');
   }
 
-  const verified = verifyOAuthState(state);
-  if (!verified) {
+  // verifyBrowserBoundOAuthState: signed, fresh AND started in this browser. The service is
+  // checked too - this callback serves Oura and (via a shared redirect URI) Withings, and a
+  // state minted for any other flow (google_fit, google_link) used to fall through to the
+  // Oura branch and be exchanged as an Oura code.
+  const verified = verifyBrowserBoundOAuthState(req, res, state);
+  if (!verified || (verified.service !== 'oura' && verified.service !== 'withings')) {
     return res.status(400).send('Nieprawidłowy parametr state (zabezpieczenie CSRF).');
   }
 
@@ -185,22 +189,20 @@ router.post('/api/auth/oura/disconnect', requireAuth, async (req, res) => {
 
 // Trasy OAuth: Inicjalizacja Withings
 router.get('/api/auth/withings', async (req, res) => {
-  const { token } = req.query;
-  if (!token) return res.status(401).send('Brak tokenu autoryzacji.');
+  // A one-time ticket from POST /api/auth/ticket, not the session token - see
+  // services/authTickets.js.
+  const userId = consumeTicket(req.query.ticket, 'withings');
+  if (!userId) return res.status(401).send('Link wygasł. Wróć do Ustawień i spróbuj ponownie.');
 
   try {
-    const session = await getVerifiedSessionByToken(token);
-    if (!session) {
-      return res.status(401).send('Sesja wygasła lub wymaga weryfikacji 2FA.');
-    }
 
-    const clientId = await getUserSetting(session.user_id, 'withings_client_id');
+    const clientId = await getUserSetting(userId, 'withings_client_id');
     if (!clientId) {
       return res.status(400).send('Integracja z Withings nie jest skonfigurowana. Wpisz Client ID w Ustawieniach.');
     }
 
-    const state = generateOAuthState(session.user_id, 'withings');
-    const redirectUri = await resolveWithingsRedirectUri(req, session.user_id, '/api/auth/withings/callback');
+    const state = startBrowserBoundOAuthState(req, res, userId, 'withings');
+    const redirectUri = await resolveWithingsRedirectUri(req, userId, '/api/auth/withings/callback');
 
     const authUrl = `https://account.withings.com/oauth2_user/authorize2?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=user.metrics,user.activity`;
     res.redirect(authUrl);
@@ -221,7 +223,7 @@ router.get('/api/auth/withings/callback', async (req, res) => {
     return res.redirect('/?tab=setup&error=withings_auth_failed');
   }
 
-  const verified = verifyOAuthState(state);
+  const verified = verifyBrowserBoundOAuthState(req, res, state);
   // `service` is checked here the way the Google Fit callback checks it (see
   // /api/auth/google-fit/callback below). The userId comes from the signed state either way,
   // so this is not a way between accounts - but without it a state minted for another service
@@ -295,21 +297,19 @@ router.post('/api/auth/withings/disconnect', requireAuth, async (req, res) => {
 // Unlike Oura and Withings, Google Fit uses the GLOBAL Google configuration, so it does not
 // require the user to supply their own developer credentials.
 router.get('/api/auth/google-fit', async (req, res) => {
-  const { token } = req.query;
-  if (!token) return res.status(401).send('Brak tokenu autoryzacji.');
+  // A one-time ticket from POST /api/auth/ticket, not the session token - see
+  // services/authTickets.js.
+  const userId = consumeTicket(req.query.ticket, 'google-fit');
+  if (!userId) return res.status(401).send('Link wygasł. Wróć do Ustawień i spróbuj ponownie.');
 
   try {
-    const session = await getVerifiedSessionByToken(token);
-    if (!session) {
-      return res.status(401).send('Sesja wygasła lub wymaga weryfikacji 2FA.');
-    }
 
     const clientId = await getAppConfig('google_client_id');
     if (!clientId) {
       return res.status(400).send('Integracja z Google Fit nie jest skonfigurowana. Administrator musi wpisać Client ID/Secret w Panelu Admina.');
     }
 
-    const state = generateOAuthState(session.user_id, 'google_fit');
+    const state = startBrowserBoundOAuthState(req, res, userId, 'google_fit');
     const appUrl = await getAppConfig('app_url');
     const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
     const redirectUri = `${base}/api/auth/google-fit/callback`;
@@ -335,7 +335,7 @@ router.get('/api/auth/google-fit/callback', async (req, res) => {
     return res.redirect('/?tab=setup&error=google_fit_auth_failed');
   }
 
-  const verified = verifyOAuthState(state);
+  const verified = verifyBrowserBoundOAuthState(req, res, state);
   if (!verified || verified.service !== 'google_fit') {
     return res.status(400).send('Nieprawidłowy parametr state (zabezpieczenie CSRF).');
   }

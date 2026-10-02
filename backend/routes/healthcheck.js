@@ -2,9 +2,10 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 
-// Public health-check endpoint (NO authentication - it must be mounted in server.js
+// Public health-check endpoint (NO authentication - it must be mounted in app.js
 // BEFORE `app.use('/api', requireAuth)`). Used by:
-//  - Docker HEALTHCHECK w docker/backend.Dockerfile,
+//  - Docker HEALTHCHECK in docker/backend.Dockerfile,
+//  - the Kubernetes liveness/readiness/startup probes in charts/dietetyk,
 //  - docker-compose.yml (healthcheck: dietetyk-backend),
 //  - the "verify health-check after deploy" step in .github/workflows/docker-publish.yml.
 //

@@ -53,7 +53,9 @@ async function sendMailgunEmail({ to, subject, html }) {
   const from = config.mailgun_from || `"Dietetyk AI" <noreply@${domain || 'dietetyk.ai'}>`;
 
   if (!apiKey || !domain) {
-    throw new Error('Silnik e-mail (Mailgun) nie został jeszcze skonfigurowany przez administratora.');
+    // `expose`: safe to show the user (it names no configuration detail) - see
+    // sendSummaryErrorResponse in routes/account.js.
+    throw Object.assign(new Error('Silnik e-mail (Mailgun) nie został jeszcze skonfigurowany przez administratora.'), { expose: true });
   }
 
   const apiBase = region.toLowerCase() === 'eu'

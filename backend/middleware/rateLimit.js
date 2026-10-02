@@ -174,7 +174,7 @@ setInterval(() => {
 // - the most expensive thing this backend does outside Gemini - and until now NOTHING
 // limited it per user. The only cover was the global apiRateLimiter, which in this cluster
 // is one 120 req/min bucket shared by the entire internet (see the note above
-// `app.set('trust proxy', ...)` in server.js), so a loop on this endpoint is both cheap for
+// `app.set('trust proxy', ...)` in app.js), so a loop on this endpoint is both cheap for
 // the caller and a denial of service for everyone else.
 // 10 per 10 minutes: generating a report for a doctor is something a person does once, twice
 // if they change the period - the limit is set where no honest use can reach it.

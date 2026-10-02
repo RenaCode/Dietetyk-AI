@@ -38,6 +38,14 @@ function resolveGeminiModel() {
 
 const ACTIVE_GEMINI_MODEL = resolveGeminiModel();
 
+// Upper bound on one Gemini request. The SDK (0.21) sets no timeout of its own, so a request
+// that never answered was held until undici gave up after ~5 minutes - inside a summary run
+// that blocks the scheduler tick, and in a meal analysis that blocks the user. 90 s is well
+// above the slowest photo analyses observed (tens of seconds) and well below that; a timeout
+// surfaces as an ordinary error and the next model in generateContentWithFallback is tried.
+// Empirical, not a documented limit.
+const GEMINI_REQUEST_TIMEOUT_MS = 90 * 1000;
+
 // Inicjalizacja Gemini API
 const geminiApiKey = process.env.GEMINI_API_KEY;
 let genAI = null;
@@ -48,7 +56,7 @@ if (geminiApiKey) {
     genAI = new GoogleGenerativeAI(geminiApiKey);
     model = genAI.getGenerativeModel({
       model: ACTIVE_GEMINI_MODEL
-    });
+    }, { timeout: GEMINI_REQUEST_TIMEOUT_MS });
     console.log(`Zainicjalizowano Gemini API z modelem: ${ACTIVE_GEMINI_MODEL}`);
   } catch (err) {
     console.error('Failed to initialise the Gemini API:', err.message);
@@ -78,7 +86,7 @@ async function generateContentWithFallback(promptText, isJson = false, imagePart
   for (const modelName of uniqueModels) {
     try {
       console.log(`[AI LOG] Sending request (JSON=${isJson}, image=${!!imagePart}) to model: ${modelName}`);
-      const tempModel = localGenAI.getGenerativeModel({ model: modelName });
+      const tempModel = localGenAI.getGenerativeModel({ model: modelName }, { timeout: GEMINI_REQUEST_TIMEOUT_MS });
 
       const config = {
         temperature: 0.2,

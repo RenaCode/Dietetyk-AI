@@ -25,7 +25,12 @@ module.exports = [
         clearInterval: 'readonly',
         URLSearchParams: 'readonly',
         fetch: 'readonly',
-        AbortController: 'readonly'
+        AbortController: 'readonly',
+        // Node 18+ globals used by the tests (fetch responses, URL parsing, I/O-phase
+        // callbacks).
+        Response: 'readonly',
+        URL: 'readonly',
+        setImmediate: 'readonly'
       }
     },
     rules: {

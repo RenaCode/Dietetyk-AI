@@ -1,6 +1,7 @@
 const db = require('../db');
 const { sendMailgunEmail } = require('./mailgun');
 const logger = require('./logger');
+const { escapeHtml } = require('../utils/html');
 
 // Prosta walidacja formatu adresu e-mail (Runda 17, naprawa z audytu) - przed
 // sending, we filter out addresses that do not even look like an email (a typo saved earlier
@@ -303,20 +304,6 @@ function generateReportHtml(stats, topErrors, topSecurity, recentLogs) {
     </body>
     </html>
   `;
-}
-
-/**
- * Zabezpieczenie przed atakami XSS w raportach HTML
- */
-function escapeHtml(text) {
-  if (!text) return '';
-  return text
-    .toString()
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }
 
 module.exports = { sendWeeklyAdminReport };

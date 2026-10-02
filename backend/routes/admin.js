@@ -139,6 +139,12 @@ router.post('/api/admin/users/:id/force-password-change', requireAdmin, async (r
   }
 });
 
+// How long an invitation link stays usable. A week covers "I will do it at the weekend"
+// without leaving a link that creates an account - possibly an admin one - working for ever
+// in somebody's mailbox. An expired invitation is answered like an unknown one; the admin
+// simply sends a new one.
+const INVITATION_TTL_DAYS = 7;
+
 router.post('/api/admin/invite', requireAdmin, async (req, res) => {
   const { email, role, confirm_admin } = req.body;
   if (!email) {
@@ -168,9 +174,9 @@ router.post('/api/admin/invite', requireAdmin, async (req, res) => {
     const syncToken = 'sync_' + crypto.randomBytes(24).toString('hex');
 
     await db.run(`
-      INSERT INTO users (username, password_hash, sync_token, totp_enabled, email, role, status, invitation_token)
-      VALUES (?, ?, ?, 0, ?, ?, 'pending', ?)
-    `, [tempUsername, dummyPassword, syncToken, email, roleToUse, token]);
+      INSERT INTO users (username, password_hash, sync_token, totp_enabled, email, role, status, invitation_token, invitation_expires_at)
+      VALUES (?, ?, ?, 0, ?, ?, 'pending', ?, datetime('now', ?))
+    `, [tempUsername, dummyPassword, syncToken, email, roleToUse, token, `+${INVITATION_TTL_DAYS} days`]);
 
     // Round 12 (security audit): origin used to be taken from req.headers.referer/origin/host
     // - ALL fully controlled by the client. That allowed forging a registration link, carrying
@@ -207,7 +213,9 @@ router.post('/api/admin/invite', requireAdmin, async (req, res) => {
     res.json({ success: true, message: 'Zaproszenie zostało wysłane pomyślnie.' });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Błąd zapraszania użytkownika: ' + err.message });
+    // err.message is not returned: from Mailgun it carries the raw API response (see
+    // sendSummaryErrorResponse in routes/account.js); the detail stays in the log above.
+    res.status(500).json({ error: err && err.expose ? `Błąd zapraszania użytkownika: ${err.message}` : 'Błąd zapraszania użytkownika.' });
   }
 });
 

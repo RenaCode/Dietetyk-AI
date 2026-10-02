@@ -8,6 +8,7 @@ import Trends from './components/Trends';
 import SummaryUnavailable from './components/SummaryUnavailable';
 import { t, setLanguage, getLanguage } from './utils/i18n';
 import { getWarsawDateString } from './utils/dates';
+import { parseGoogleReturn } from './utils/googleReturn';
 
 // Today's date in YYYY-MM-DD, in the timezone the BACKEND uses (Europe/Warsaw).
 //
@@ -210,41 +211,54 @@ export default function App() {
     return () => clearInterval(intervalId);
   }, [sessionToken, selectedDate]);
 
-// Receiving the token after returning from Google sign-in. This works independently of
-// sessionToken, because for a new or signed-out user this token is what establishes the session.
-  //
-  // Tokeny (google_token/google_temp_token) backend przekazuje w FRAGMENCIE URL (#),
-// not in the query string - the fragment is never sent to the server with the page request,
-// so a live session token does not end up in the server logs (morgan) or in the browser
-// history/Referer. google_error is not a secret, so it still arrives through an ordinary
-// query string.
+// Returning from Google sign-in. This works independently of sessionToken, because for a new
+// or signed-out user this is what establishes the session.
+//
+// The callback no longer puts a session token in the URL - see utils/googleReturn.js for the
+// login-CSRF hole that closed. It leaves a one-time code in the FRAGMENT (never sent to a
+// server, so not in any access log or Referer), and the code is only worth something together
+// with the HttpOnly cookie the callback set in this browser; the exchange answers exactly like
+// /api/login (2FA, forced enrolment, forced password change or a session). google_error is not
+// a secret, so it still arrives through an ordinary query string.
   useEffect(() => {
-    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
-    const params = new URLSearchParams(window.location.search);
-    const googleToken = hashParams.get('google_token');
-    const googleTempToken = hashParams.get('google_temp_token');
-    const googleError = params.get('google_error');
+    const googleReturn = parseGoogleReturn(window.location.hash, window.location.search);
+    if (!googleReturn) return;
+    window.history.replaceState({}, document.title, '/');
 
-    if (googleToken) {
-      setSessionToken(googleToken);
-      localStorage.setItem('diet_session_token', googleToken);
-      window.history.replaceState({}, document.title, '/');
-    } else if (googleTempToken) {
-      setTempToken(googleTempToken);
-      setLoginStep('require_2fa');
-      window.history.replaceState({}, document.title, '/');
-    } else if (googleError) {
-      let msg = t('Nie udało się zalogować przez Google.');
-      if (googleError === 'account_inactive') {
-        msg = t('To konto jest nieaktywne. Skontaktuj się z administratorem.');
-      } else if (googleError === 'email_exists') {
-        msg = t('Konto z tym adresem e-mail już istnieje. Zaloguj się hasłem i połącz konto Google w Ustawieniach.');
-      } else if (googleError === 'csrf_failed') {
-        msg = t('Błąd weryfikacji żądania (CSRF). Spróbuj ponownie.');
-      }
-      setLoginError(msg);
-      window.history.replaceState({}, document.title, '/');
+    if (googleReturn.code) {
+      (async () => {
+        try {
+          const res = await fetch('/api/auth/google/exchange', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ code: googleReturn.code })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            applyLoginResult(data);
+          } else {
+            setLoginError(data.error || t('Nie udało się zalogować przez Google.'));
+          }
+        } catch (err) {
+          console.error(err);
+          setLoginError(t('Błąd połączenia z serwerem.'));
+        }
+      })();
+      return;
     }
+
+    let msg = t('Nie udało się zalogować przez Google.');
+    if (googleReturn.error === 'account_inactive') {
+      msg = t('To konto jest nieaktywne. Skontaktuj się z administratorem.');
+    } else if (googleReturn.error === 'email_exists') {
+      msg = t('Konto z tym adresem e-mail już istnieje. Zaloguj się hasłem i połącz konto Google w Ustawieniach.');
+    } else if (googleReturn.error === 'csrf_failed') {
+      msg = t('Błąd weryfikacji żądania (CSRF). Spróbuj ponownie.');
+    } else if (googleReturn.error === 'registration_closed') {
+      msg = t('Rejestracja jest zamknięta. Aby założyć konto, poproś administratora o zaproszenie.');
+    }
+    setLoginError(msg);
   }, []);
 
   useEffect(() => {
@@ -666,6 +680,30 @@ export default function App() {
     }
   };
 
+  // The next step after a successful identity check - shared by the password login and the
+  // Google exchange, which answer with the same shapes (see completeLogin in
+  // backend/routes/auth.js).
+  const applyLoginResult = (data) => {
+    if (data.status === 'require_2fa') {
+      setTempToken(data.tempToken);
+      setLoginStep('require_2fa');
+      setTotpCode('');
+    } else if (data.status === 'setup_2fa') {
+      setTempToken(data.tempToken);
+      setQrCode(data.qrCode);
+      setLoginStep('setup_2fa');
+      setTotpCode('');
+    } else if (data.status === 'force_password_change') {
+      setTempToken(data.tempToken);
+      setLoginStep('force_password_change');
+      setNewPasswordForced('');
+      setConfirmPasswordForced('');
+    } else if (data.token) {
+      setSessionToken(data.token);
+      localStorage.setItem('diet_session_token', data.token);
+    }
+  };
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoginError('');
@@ -681,25 +719,7 @@ export default function App() {
       });
 
       if (res.ok) {
-        const data = await res.json();
-        if (data.status === 'require_2fa') {
-          setTempToken(data.tempToken);
-          setLoginStep('require_2fa');
-          setTotpCode('');
-        } else if (data.status === 'setup_2fa') {
-          setTempToken(data.tempToken);
-          setQrCode(data.qrCode);
-          setLoginStep('setup_2fa');
-          setTotpCode('');
-        } else if (data.status === 'force_password_change') {
-          setTempToken(data.tempToken);
-          setLoginStep('force_password_change');
-          setNewPasswordForced('');
-          setConfirmPasswordForced('');
-        } else {
-          setSessionToken(data.token);
-          localStorage.setItem('diet_session_token', data.token);
-        }
+        applyLoginResult(await res.json());
       } else {
         const errData = await res.json();
         setLoginError(errData.error || t('Nieprawidłowe dane logowania.'));

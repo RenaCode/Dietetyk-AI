@@ -57,13 +57,13 @@ function assert(condition, message) {
   console.log(`✅ ${message}`);
 }
 
-// Reads the `trust proxy` argument straight out of server.js so this test cannot pass
+// Reads the `trust proxy` argument straight out of app.js so this test cannot pass
 // while the production setting says something else.
 function readTrustProxyFromServer() {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
   const match = src.match(/app\.set\(\s*['"]trust proxy['"]\s*,\s*(.+?)\s*\)\s*;/);
   if (!match) {
-    throw new Error('❌ no app.set(\'trust proxy\', ...) call found in server.js');
+    throw new Error('❌ no app.set(\'trust proxy\', ...) call found in app.js');
   }
   const raw = match[1];
   if (raw === 'true') return true;
@@ -73,7 +73,7 @@ function readTrustProxyFromServer() {
   try {
     return JSON.parse(raw.replace(/'/g, '"'));
   } catch (e) {
-    throw new Error(`❌ unrecognised 'trust proxy' value in server.js: ${raw}`);
+    throw new Error(`❌ unrecognised 'trust proxy' value in app.js: ${raw}`);
   }
 }
 
@@ -113,7 +113,7 @@ async function run() {
   console.log('\n--- TEST: trust proxy / spoofing X-Forwarded-For ---');
 
   const trustProxy = readTrustProxyFromServer();
-  console.log(`   server.js sets trust proxy = ${JSON.stringify(trustProxy)}`);
+  console.log(`   app.js sets trust proxy = ${JSON.stringify(trustProxy)} (app.js)`);
 
   const server = await startApp(trustProxy);
   const port = server.address().port;

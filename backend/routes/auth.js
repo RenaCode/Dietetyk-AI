@@ -3,11 +3,14 @@ const router = express.Router();
 const db = require('../db');
 const bcrypt = require('bcryptjs');
 const { authenticator } = require('otplib');
+const { verifyTotpOnce } = require('../utils/totp');
 const QRCode = require('qrcode');
 const crypto = require('crypto');
 const loginAttempts = require('../services/loginAttempts');
 const logger = require('../services/logger');
-const { getAppConfig, generateOAuthState, verifyOAuthState, getVerifiedSessionByToken } = require('../services/oauthHelpers');
+const { getAppConfig, generateOAuthState, verifyOAuthState, readCookie, isSecureRequest, startBrowserBoundOAuthState, verifyBrowserBoundOAuthState } = require('../services/oauthHelpers');
+const { consumeTicket } = require('../services/authTickets');
+const { isValidUsername, USERNAME_RULE_MESSAGE } = require('../utils/username');
 const { revokeUserSessions } = require('../middleware/auth');
 const { revokeAllSharesForUser } = require('../services/sharedReports');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
@@ -22,7 +25,7 @@ const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 // The token prefix ('temp_' for short-lived verification sessions, 'sess_' for real login
 // sessions) is kept only so that tokens stay recognisable to a human reading a log or a
 // database row. NOTHING may authorise on it: the authoritative marker is the is_temp column
-// written below and read by middleware/auth.js and getVerifiedSessionByToken.
+// written below and read by middleware/auth.js.
 const TEMP_SESSION_TTL_DAYS = 5 / (24 * 60); // 5 minutes expressed in days
 const PERMANENT_SESSION_TTL_DAYS = 7;
 
@@ -68,7 +71,7 @@ const loginAttemptKeyForUser = (userId) => `login_user:${userId}`;
 //
 // The previous binding was `sha256(req.ip + User-Agent)` and it bound nothing. req.ip is
 // 10.42.0.1 for every request from the internet (measured on production - see the long note
-// above `app.set('trust proxy', ...)` in server.js), and the User-Agent is a header the
+// above `app.set('trust proxy', ...)` in app.js), and the User-Agent is a header the
 // attacker chooses when GENERATING the state, so reproducing the victim's fingerprint means
 // sending one common header value. No change inside this file could have fixed it: the
 // address never enters the cluster.
@@ -84,28 +87,75 @@ const GOOGLE_LOGIN_NONCE_COOKIE = 'dai_google_login';
 const GOOGLE_LOGIN_COOKIE_PATH = '/api/auth/google';
 const GOOGLE_LOGIN_NONCE_TTL_MS = 10 * 60 * 1000;
 
-// Minimal cookie reader. cookie-parser is not a dependency of this project and the
-// project deliberately keeps its dependency surface small (see CLAUDE.md); one header,
-// parsed once, does not justify a package.
-function readCookie(req, name) {
-  const header = req.headers.cookie;
-  if (!header) return null;
-  for (const part of header.split(';')) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    if (part.slice(0, eq).trim() === name) {
-      return decodeURIComponent(part.slice(eq + 1).trim());
-    }
-  }
-  return null;
-}
-
 // Only the HASH of the nonce travels in `state`; the nonce itself never leaves the cookie.
 // The state is visible to Google, to the address bar and to anything that logs the callback
 // URL, so a state that carried the raw nonce would hand back the very secret that proves
 // "this browser started the flow".
 function googleLoginService(nonce) {
   return `google_login:${crypto.createHash('sha256').update(nonce).digest('hex')}`;
+}
+
+// ===== Handing the result of Google sign-in to the browser =====
+// The callback used to put a live session token straight into the URL fragment
+// (`/#google_token=sess_...`) and the frontend stored whatever token such a URL carried. That
+// made the nonce cookie above protect only half of the flow: the backend made sure the
+// browser finishing the Google round-trip was the one that started it, and then the frontend
+// accepted the same token from ANY link. An attacker could log in to their own account, copy
+// the redirect URL and send it to a victim; one click and the victim was silently working in
+// the attacker's account - meals, weight, and after copying the sync URL from Settings even
+// their Apple Health export, all landing where the attacker could read it.
+//
+// Now the callback issues only a one-time code with a 60-second life, and binds it to the
+// browser with a second HttpOnly cookie. The frontend trades code + cookie for the login
+// result at POST /api/auth/google/exchange. A code pasted into another browser arrives
+// without the cookie and is refused. As a side effect no session token is ever part of a
+// URL, and the exchange can answer with the same shapes as /api/login (require_2fa,
+// setup_2fa with its QR code, force_password_change), which a fragment could not carry.
+//
+// In process memory: the backend runs as a single replica (Recreate strategy, SQLite on an
+// RWO volume), and losing an unexchanged code on restart costs one more click.
+const GOOGLE_EXCHANGE_COOKIE = 'dai_google_exchange';
+const GOOGLE_EXCHANGE_COOKIE_PATH = '/api/auth/google/exchange';
+const GOOGLE_EXCHANGE_TTL_MS = 60 * 1000;
+const pendingGoogleExchanges = new Map(); // code -> { userId, nonceHash, expiresAt }
+
+function issueGoogleExchange(req, res, userId) {
+  const now = Date.now();
+  for (const [code, entry] of pendingGoogleExchanges) {
+    if (entry.expiresAt <= now) pendingGoogleExchanges.delete(code);
+  }
+  const code = 'gx_' + crypto.randomBytes(24).toString('hex');
+  const nonce = crypto.randomBytes(32).toString('hex');
+  pendingGoogleExchanges.set(code, {
+    userId,
+    nonceHash: crypto.createHash('sha256').update(nonce).digest('hex'),
+    expiresAt: now + GOOGLE_EXCHANGE_TTL_MS
+  });
+  // SameSite=Strict is enough here: the cookie is only ever SENT by the frontend's own
+  // same-origin fetch to the exchange endpoint. Setting it on the response to Google's
+  // cross-site redirect is allowed regardless of SameSite.
+  res.cookie(GOOGLE_EXCHANGE_COOKIE, nonce, {
+    httpOnly: true,
+    sameSite: 'strict',
+    secure: isSecureRequest(req),
+    maxAge: GOOGLE_EXCHANGE_TTL_MS,
+    path: GOOGLE_EXCHANGE_COOKIE_PATH
+  });
+  return code;
+}
+
+// One-time: the entry is deleted on the first lookup, matching or not, so a code cannot be
+// probed with several cookies.
+function consumeGoogleExchange(code, nonce) {
+  if (typeof code !== 'string') return null;
+  const entry = pendingGoogleExchanges.get(code);
+  if (!entry) return null;
+  pendingGoogleExchanges.delete(code);
+  if (entry.expiresAt <= Date.now() || !nonce) return null;
+  const expected = Buffer.from(entry.nonceHash, 'utf8');
+  const actual = Buffer.from(crypto.createHash('sha256').update(nonce).digest('hex'), 'utf8');
+  if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) return null;
+  return entry.userId;
 }
 
 const validatePassword = (password) => {
@@ -148,6 +198,58 @@ async function createSession(userId, isVerified2fa, ttlDays = PERMANENT_SESSION_
   return token;
 }
 
+// Everything that happens once a user has proved WHO they are (password, or Google), up to
+// the response the frontend acts on: an owed password change, the second factor, a forced
+// 2FA enrolment, or a full session. Returns the JSON body.
+//
+// Extracted from /api/login because Google sign-in had its own, shorter copy that checked
+// only totp_enabled: global force_2fa, per-user force_2fa and force_password_change were
+// all skipped, so a user an administrator had forced into 2FA - or into a password change
+// after a suspected compromise - got a full session simply by clicking "Sign in with
+// Google". One function means one policy for every way in.
+async function completeLogin(user) {
+  if (user.force_password_change === 1) {
+    const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
+    return { status: 'force_password_change', tempToken };
+  }
+
+  if (user.totp_enabled === 1) {
+    // Generate a temporary token, valid for 5 minutes
+    const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
+    return { status: 'require_2fa', tempToken };
+  }
+
+  // B-W4: forced 2FA applies to ALL users, admin included (the bypass was removed)
+  const force2faRow = await db.get(`SELECT value FROM app_config WHERE key = 'force_2fa'`);
+  const isForce2faEnabled = force2faRow && force2faRow.value === '1';
+  const isUserForce2fa = user.force_2fa === 1;
+
+  if (isForce2faEnabled || isUserForce2fa) {
+    // Check the account age in UTC (only for the global enforcement; for an individual one
+    // there is no grace period)
+    const userCreated = user.created_at ? new Date(user.created_at + 'Z') : new Date();
+    const hoursSinceCreation = (Date.now() - userCreated.getTime()) / (1000 * 60 * 60);
+
+    if (isUserForce2fa || hoursSinceCreation > 24) {
+      // Force 2FA setup at login
+      const secret = user.totp_secret || authenticator.generateSecret();
+      if (!user.totp_secret) {
+        await db.run(`UPDATE users SET totp_secret = ? WHERE id = ?`, [secret, user.id]);
+      }
+
+      const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
+      const otpauth = authenticator.keyuri(user.username, 'Dietetyk AI', secret);
+      const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
+
+      return { status: 'setup_2fa', tempToken, qrCode: qrCodeDataUrl, secret };
+    }
+  }
+
+  // Direct login without 2FA (enforcement off, or the account is younger than 24h)
+  const permanentToken = await createSession(user.id, false);
+  return { token: permanentToken };
+}
+
 // ===== Google sign-in =====
 // configured globally by an administrator (Admin Panel), because sign-in applies to the
 // whole application rather than being a per-user integration like Oura or Withings.
@@ -188,29 +290,33 @@ router.get('/api/auth/google', async (req, res) => {
 // afresh. Google sign-in above already links accounts by email as a side effect, but only
 // when the email matches - this flow works regardless of the email address, because the user
 // is already verified by their session.
-// `state` is HMAC-signed here (generateOAuthState), unlike ordinary Google sign-in where
-// state is just a random string with no verification - that is how the callback tells the
-// two flows apart.
+//
+// Entered with a one-time `?ticket=` from POST /api/auth/ticket, never with the session token
+// itself: this is a top-level navigation, so whatever is in the query string lands in the
+// nginx access log and in browser history, and a session token there was a 7-30 day key to
+// the account for anyone who could read logs. The ticket for 'google_link' is only issued
+// after the password (and TOTP, if enabled) has been re-entered - linking a sign-in method is
+// a way back INTO the account, so a stolen session alone must not be able to plant one that
+// outlives a password change (see routes/account.js, change-password).
+//
+// The state is bound to this browser by startBrowserBoundOAuthState (services/oauthHelpers.js)
+// - without that, the attacker could hand their own link URL to a victim and pin the
+// victim's Google identity to the attacker's account.
 router.get('/api/auth/google/link', async (req, res) => {
-  const { token } = req.query;
-  if (!token) return res.status(401).send('Brak tokenu autoryzacji.');
+  const userId = consumeTicket(req.query.ticket, 'google_link');
+  if (!userId) return res.status(401).send('Link wygasł. Wróć do Ustawień i spróbuj ponownie.');
 
   try {
-    const session = await getVerifiedSessionByToken(token);
-    if (!session) {
-      return res.status(401).send('Sesja wygasła lub wymaga weryfikacji 2FA.');
-    }
-
     const clientId = await getAppConfig('google_client_id');
     if (!clientId) {
       return res.status(400).send('Logowanie przez Google nie jest skonfigurowane. Administrator musi wpisać Client ID/Secret w Panelu Admina.');
     }
 
     const appUrl = await getAppConfig('app_url');
-    const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
+    const base = appUrl ? appUrl.replace(/\/$/, '') : `${isSecureRequest(req) ? 'https' : 'http'}://${req.get('host')}`;
     const redirectUri = `${base}/api/auth/google/callback`;
 
-    const state = generateOAuthState(session.user_id, 'google_link');
+    const state = startBrowserBoundOAuthState(req, res, userId, 'google_link');
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('openid email profile')}&state=${state}&prompt=select_account`;
     res.redirect(authUrl);
   } catch (err) {
@@ -232,7 +338,10 @@ router.get('/api/auth/google/callback', async (req, res) => {
   // not match and ends as csrf_failed - before any code is exchanged for a session.
   const loginNonce = readCookie(req, GOOGLE_LOGIN_NONCE_COOKIE);
   const isLoginFlow = !!(verified && verified.userId === 0 && loginNonce && verified.service === googleLoginService(loginNonce));
-  const isLinkFlow = !!(verified && verified.userId > 0 && verified.service === 'google_link');
+  // The link flow carries its own browser binding (see GET /api/auth/google/link); the helper
+  // also clears that cookie, so it runs for every callback, not only for link states.
+  const linkVerified = verifyBrowserBoundOAuthState(req, res, state);
+  const isLinkFlow = !!(linkVerified && linkVerified.userId > 0 && linkVerified.service === 'google_link');
 
   // One cookie, one flow: whatever happens below, this nonce must not stay usable for a
   // second callback. Cleared for every state that claims to be a sign-in - including a
@@ -246,7 +355,10 @@ router.get('/api/auth/google/callback', async (req, res) => {
     return res.redirect(isLinkFlow ? '/?tab=settings&google_link_error=auth_failed' : '/?google_error=auth_failed');
   }
   if (!code || !verified || (!isLoginFlow && !isLinkFlow)) {
-    return res.redirect(isLinkFlow ? '/?tab=settings&google_link_error=csrf_failed' : '/?google_error=csrf_failed');
+    // A signed google_link state without the matching cookie is still answered on the
+    // settings screen, where the user started it.
+    const claimsLink = !!(verified && verified.userId > 0 && verified.service === 'google_link');
+    return res.redirect(claimsLink ? '/?tab=settings&google_link_error=csrf_failed' : '/?google_error=csrf_failed');
   }
 
   try {
@@ -313,6 +425,18 @@ router.get('/api/auth/google/callback', async (req, res) => {
     }
 
     if (!user) {
+      // 3a. Creating an account here is a registration, and registration is closed unless an
+      // administrator opened it. Only /api/register-public used to check the flag, so with
+      // a Google Client ID configured ANY Google account could create an account in a closed
+      // application - and every such account could send "test summary" emails through the
+      // app's Mailgun domain to arbitrary addresses (rate-limited per account, accounts not
+      // limited at all).
+      const allowPublicRegRow = await db.get(`SELECT value FROM app_config WHERE key = 'allow_public_registration'`);
+      if (!allowPublicRegRow || allowPublicRegRow.value !== '1') {
+        logger.security('Google sign-in refused: no account and public registration is closed', 'AUTH_REGISTRATION_CLOSED', { email: profile.email || null }, req.ip);
+        return res.redirect('/?google_error=registration_closed');
+      }
+
         // 3. No account - create one. A Google account has no known password, so we generate
         // a random, unused hash (the schema requires NOT NULL) to make password login for
         // this account genuinely impossible until the user sets a password themselves in
@@ -352,21 +476,40 @@ router.get('/api/auth/google/callback', async (req, res) => {
       return res.redirect('/?google_error=account_inactive');
     }
 
-      // Respect 2FA if the user enabled it earlier - Google sign-in does not bypass 2FA
-    if (user.totp_enabled === 1) {
-      const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
-      // The token goes in the URL fragment (#), NOT the query string: a fragment is never
-      // sent by the browser to the server on a subsequent request (a plain GET /, say), so a
-      // live session token does not reach morgan('dev') logs, which record the full request
-      // URL, nor the Referer header or browser history.
-      return res.redirect(`/#google_temp_token=${tempToken}`);
-    }
-
-    const permanentToken = await createSession(user.id, false);
-    res.redirect(`/#google_token=${permanentToken}`);
+    // No session is created here - see issueGoogleExchange. The 2FA / forced-enrolment /
+    // forced-password-change decisions happen at the exchange, in completeLogin, exactly as
+    // for a password login. The code goes in the fragment (#), which the browser never sends
+    // to a server, so it does not reach access logs or a Referer header either.
+    const exchangeCode = issueGoogleExchange(req, res, user.id);
+    res.redirect(`/#google_code=${exchangeCode}`);
   } catch (err) {
     console.error('[GOOGLE LOGIN CALLBACK ERROR]', err.message);
     res.redirect(isLinkFlow ? '/?tab=settings&google_link_error=exchange_failed' : '/?google_error=exchange_failed');
+  }
+});
+
+// Step 3: the frontend trades the one-time code from the callback for the login result.
+// Requires the HttpOnly cookie set next to the code - see issueGoogleExchange.
+router.post('/api/auth/google/exchange', async (req, res) => {
+  const nonce = readCookie(req, GOOGLE_EXCHANGE_COOKIE);
+  if (nonce) {
+    res.clearCookie(GOOGLE_EXCHANGE_COOKIE, { path: GOOGLE_EXCHANGE_COOKIE_PATH });
+  }
+  const userId = consumeGoogleExchange(req.body && req.body.code, nonce);
+  if (!userId) {
+    logger.security('Google sign-in exchange refused (unknown/expired code or missing browser binding)', 'AUTH_GOOGLE_EXCHANGE', {}, req.ip);
+    return res.status(401).json({ error: 'Logowanie przez Google wygasło lub zostało rozpoczęte w innej przeglądarce. Spróbuj ponownie.' });
+  }
+
+  try {
+    const user = await db.get(`SELECT * FROM users WHERE id = ?`, [userId]);
+    if (!user || user.status !== 'active') {
+      return res.status(403).json({ error: 'To konto jest nieaktywne. Skontaktuj się z administratorem.' });
+    }
+    res.json(await completeLogin(user));
+  } catch (err) {
+    console.error('[GOOGLE EXCHANGE ERROR]', err);
+    res.status(500).json({ error: 'Błąd logowania serwera.' });
   }
 });
 
@@ -376,7 +519,10 @@ router.post('/api/login', async (req, res) => {
     return res.status(400).json({ error: 'Nazwa użytkownika i hasło są wymagane.' });
   }
 
-  const lockedMs = await loginAttempts.isLocked(req.ip, username);
+  // reserveAttempt counts this attempt BEFORE bcrypt runs - see services/loginAttempts.js
+  // for the parallel-burst race that an isLocked()-then-recordFailure() pair allowed. A
+  // failure below therefore records nothing more; a success gives the slots back.
+  const lockedMs = await loginAttempts.reserveAttempt(req.ip, username);
   if (lockedMs > 0) {
     return res.status(429).json({
       error: `Za dużo nieudanych prób logowania. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.`
@@ -386,8 +532,7 @@ router.post('/api/login', async (req, res) => {
   try {
     const user = await db.get(`SELECT * FROM users WHERE username = ? OR email = ?`, [username, username]);
     if (!user) {
-      await loginAttempts.recordFailure(req.ip, username);
-      logger.security(`Nieudana próba logowania na konto: ${username} (użytkownik nie istnieje)`, 'AUTH_LOGIN_FAILURE', { username }, req.ip);
+      logger.security(`Failed login attempt for account: ${username} (no such user)`, 'AUTH_LOGIN_FAILURE', { username }, req.ip);
       return res.status(401).json({ error: 'Niepoprawny użytkownik lub hasło.' });
     }
 
@@ -395,7 +540,7 @@ router.post('/api/login', async (req, res) => {
     // before that. The response is the same 429 the typed-identifier lockout produces, so an
     // attacker cannot tell the two counters apart, and a legitimate user sees one consistent
     // message whichever name they signed in with.
-    const userLockedMs = await loginAttempts.isLocked(req.ip, loginAttemptKeyForUser(user.id));
+    const userLockedMs = await loginAttempts.reserveAttempt(req.ip, loginAttemptKeyForUser(user.id));
     if (userLockedMs > 0) {
       return res.status(429).json({
         error: `Za dużo nieudanych prób logowania. Spróbuj ponownie za ${Math.ceil(userLockedMs / 60000)} min.`
@@ -404,72 +549,14 @@ router.post('/api/login', async (req, res) => {
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
     if (!isMatch) {
-      await loginAttempts.recordFailure(req.ip, username);
-      await loginAttempts.recordFailure(req.ip, loginAttemptKeyForUser(user.id));
-      logger.security(`Nieudana próba logowania na konto: ${username} (błędne hasło)`, 'AUTH_LOGIN_FAILURE', { username }, req.ip);
+      logger.security(`Failed login attempt for account: ${username} (wrong password)`, 'AUTH_LOGIN_FAILURE', { username }, req.ip);
       return res.status(401).json({ error: 'Niepoprawny użytkownik lub hasło.' });
     }
 
     await loginAttempts.recordSuccess(req.ip, username);
     await loginAttempts.recordSuccess(req.ip, loginAttemptKeyForUser(user.id));
 
-    // Check whether a password change is being forced
-    if (user.force_password_change === 1) {
-      const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
-
-      return res.json({
-        status: 'force_password_change',
-        tempToken: tempToken
-      });
-    }
-
-    if (user.totp_enabled === 1) {
-      // Generate a temporary token, valid for 5 minutes
-      const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
-
-      return res.json({
-        status: 'require_2fa',
-        tempToken: tempToken
-      });
-    } else {
-    // B-W4: forced 2FA applies to ALL users, admin included (the bypass was removed)
-      const force2faRow = await db.get(`SELECT value FROM app_config WHERE key = 'force_2fa'`);
-      const isForce2faEnabled = force2faRow && force2faRow.value === '1';
-      const isUserForce2fa = user.force_2fa === 1;
-
-      if (isForce2faEnabled || isUserForce2fa) {
-    // Check the account age in UTC (only for the global enforcement; for an individual one
-        const userCreated = user.created_at ? new Date(user.created_at + 'Z') : new Date();
-        const hoursSinceCreation = (Date.now() - userCreated.getTime()) / (1000 * 60 * 60);
-
-        if (isUserForce2fa || hoursSinceCreation > 24) {
-      // Force 2FA setup at login
-          const secret = user.totp_secret || authenticator.generateSecret();
-          if (!user.totp_secret) {
-            await db.run(`UPDATE users SET totp_secret = ? WHERE id = ?`, [secret, user.id]);
-          }
-
-          const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
-
-          const otpauth = authenticator.keyuri(user.username, 'Dietetyk AI', secret);
-          const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
-
-          return res.json({
-            status: 'setup_2fa',
-            tempToken: tempToken,
-            qrCode: qrCodeDataUrl,
-            secret: secret
-          });
-        }
-      }
-
-    // Direct login without 2FA (enforcement off, or the account is younger than 24h)
-      const permanentToken = await createSession(user.id, false);
-
-      return res.json({
-        token: permanentToken
-      });
-    }
+    res.json(await completeLogin(user));
   } catch (err) {
     console.error('Login failed:', err);
     res.status(500).json({ error: 'Błąd logowania serwera.' });
@@ -507,20 +594,17 @@ router.post('/api/verify-2fa-setup', async (req, res) => {
       return res.status(401).json({ error: 'Tymczasowa sesja wygasła. Zaloguj się ponownie.' });
     }
 
-    const lockedMs = await loginAttempts.isLocked(req.ip, twoFactorAttemptKey(session.user_id));
+    const lockedMs = await loginAttempts.reserveAttempt(req.ip, twoFactorAttemptKey(session.user_id));
     if (lockedMs > 0) {
       return res.status(429).json({
         error: `Za dużo nieudanych prób. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.`
       });
     }
 
-    const isValid = authenticator.verify({
-      token: code,
-      secret: session.totp_secret
-    });
+    // verifyTotpOnce also refuses a code already used once - see utils/totp.js.
+    const isValid = await verifyTotpOnce(session.user_id, session.totp_secret, code);
 
     if (!isValid) {
-      await loginAttempts.recordFailure(req.ip, twoFactorAttemptKey(session.user_id));
       logger.security(`Niepoprawny kod 2FA podczas konfiguracji (UID: ${session.user_id})`, 'AUTH_2FA_FAILURE', { userId: session.user_id }, req.ip);
       return res.status(400).json({ error: 'Niepoprawny kod 2FA. Spróbuj ponownie.' });
     }
@@ -565,20 +649,17 @@ router.post('/api/login-2fa', async (req, res) => {
       return res.status(401).json({ error: 'Tymczasowa sesja wygasła. Zaloguj się ponownie.' });
     }
 
-    const lockedMs = await loginAttempts.isLocked(req.ip, twoFactorAttemptKey(session.user_id));
+    const lockedMs = await loginAttempts.reserveAttempt(req.ip, twoFactorAttemptKey(session.user_id));
     if (lockedMs > 0) {
       return res.status(429).json({
         error: `Za dużo nieudanych prób. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.`
       });
     }
 
-    const isValid = authenticator.verify({
-      token: code,
-      secret: session.totp_secret
-    });
+    // verifyTotpOnce also refuses a code already used once - see utils/totp.js.
+    const isValid = await verifyTotpOnce(session.user_id, session.totp_secret, code);
 
     if (!isValid) {
-      await loginAttempts.recordFailure(req.ip, twoFactorAttemptKey(session.user_id));
       logger.security(`Niepoprawny kod 2FA podczas logowania (UID: ${session.user_id})`, 'AUTH_2FA_FAILURE', { userId: session.user_id }, req.ip);
       return res.status(400).json({ error: 'Niepoprawny kod 2FA. Spróbuj ponownie.' });
     }
@@ -722,7 +803,7 @@ router.get('/api/invitation-status', async (req, res) => {
   }
 
   try {
-    const user = await db.get(`SELECT email FROM users WHERE invitation_token = ? AND status = 'pending'`, [token]);
+    const user = await db.get(`SELECT email FROM users WHERE invitation_token = ? AND status = 'pending' AND datetime(invitation_expires_at) > datetime('now')`, [token]);
     if (!user) {
       return res.status(404).json({ error: 'Nieprawidłowy lub wygasły token zaproszenia.' });
     }
@@ -739,6 +820,9 @@ router.post('/api/register-invitation', async (req, res) => {
   if (!token || !username || !password) {
     return res.status(400).json({ error: 'Wszystkie pola są wymagane.' });
   }
+  if (!isValidUsername(username)) {
+    return res.status(400).json({ error: USERNAME_RULE_MESSAGE });
+  }
   const passError = validatePassword(password);
   if (passError) {
     return res.status(400).json({ error: passError });
@@ -750,14 +834,13 @@ router.post('/api/register-invitation', async (req, res) => {
 // mechanism, keyed per IP rather than per username, because at registration the username
 // differs on every attempt. Every registration attempt counts towards the limit regardless
 // of outcome, unlike login where only FAILED attempts count.
-  const registerLockedMs = await loginAttempts.isLocked(req.ip, 'register_endpoint');
+  const registerLockedMs = await loginAttempts.reserveAttempt(req.ip, 'register_endpoint');
   if (registerLockedMs > 0) {
     return res.status(429).json({ error: `Za dużo prób rejestracji z tego adresu IP. Spróbuj ponownie za ${Math.ceil(registerLockedMs / 60000)} min.` });
   }
-  await loginAttempts.recordFailure(req.ip, 'register_endpoint');
 
   try {
-    const user = await db.get(`SELECT id FROM users WHERE invitation_token = ? AND status = 'pending'`, [token]);
+    const user = await db.get(`SELECT id FROM users WHERE invitation_token = ? AND status = 'pending' AND datetime(invitation_expires_at) > datetime('now')`, [token]);
     if (!user) {
       return res.status(404).json({ error: 'Nieprawidłowy lub wygasły token zaproszenia.' });
     }
@@ -772,7 +855,7 @@ router.post('/api/register-invitation', async (req, res) => {
     
     await db.run(`
       UPDATE users 
-      SET username = ?, password_hash = ?, totp_secret = ?, totp_enabled = 0, status = 'active', invitation_token = NULL
+      SET username = ?, password_hash = ?, totp_secret = ?, totp_enabled = 0, status = 'active', invitation_token = NULL, invitation_expires_at = NULL
       WHERE id = ?
     `, [username, passwordHash, secret, user.id]);
 
@@ -819,17 +902,19 @@ router.post('/api/register-public', async (req, res) => {
   if (!username || !password) {
     return res.status(400).json({ error: 'Nazwa użytkownika i hasło są wymagane.' });
   }
+  if (!isValidUsername(username)) {
+    return res.status(400).json({ error: USERNAME_RULE_MESSAGE });
+  }
   const passError = validatePassword(password);
   if (passError) {
     return res.status(400).json({ error: passError });
   }
 
     // See the comment in /api/register-invitation - the same per-IP anti-spam mechanism.
-  const registerLockedMs = await loginAttempts.isLocked(req.ip, 'register_endpoint');
+  const registerLockedMs = await loginAttempts.reserveAttempt(req.ip, 'register_endpoint');
   if (registerLockedMs > 0) {
     return res.status(429).json({ error: `Za dużo prób rejestracji z tego adresu IP. Spróbuj ponownie za ${Math.ceil(registerLockedMs / 60000)} min.` });
   }
-  await loginAttempts.recordFailure(req.ip, 'register_endpoint');
 
   try {
     const existingUsername = await db.get(`SELECT id FROM users WHERE username = ?`, [username]);

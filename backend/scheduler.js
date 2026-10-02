@@ -5,6 +5,49 @@ const { sendWeeklySummaryForUser, sendDailySummaryForUser, sendMonthlySummaryFor
 const { sendWeeklyAdminReport } = require('./services/adminReport');
 const logger = require('./services/logger');
 
+// Retry budget for a scheduled summary that failed to send.
+//
+// The "already sent" key (last_*_summary_sent) is written only after sendMailgunEmail
+// succeeds, and each send generates the AI text afresh. So a summary that kept failing - Mailgun
+// down, a recipient Mailgun rejects - was retried on EVERY 5-minute tick until the period
+// ended: up to ~12 Gemini calls an hour per user until midnight (for the admin, on the
+// application's own key), all of them thrown away. And a Mailgun call that delivered but
+// answered after the 15 s timeout produced a duplicate email every five minutes.
+//
+// Now each attempt is claimed BEFORE the send, in settings under `summary_attempt_<kind>`
+// ({ period, count, at }): at most SUMMARY_MAX_ATTEMPTS per period, at least
+// SUMMARY_RETRY_BACKOFF_MS apart. A success clears the claim, so the next period starts
+// fresh. The numbers are a judgement call: three tries an hour apart ride out a short Mailgun
+// outage without turning a long one into dozens of Gemini calls.
+const SUMMARY_MAX_ATTEMPTS = 3;
+const SUMMARY_RETRY_BACKOFF_MS = 60 * 60 * 1000;
+
+async function claimSummaryAttempt(userId, kind, periodKey) {
+  const key = `summary_attempt_${kind}`;
+  const row = await db.get(`SELECT value FROM settings WHERE user_id = ? AND key = ?`, [userId, key]);
+  let previous = null;
+  try {
+    previous = row ? JSON.parse(row.value) : null;
+  } catch {
+    previous = null;
+  }
+  const now = Date.now();
+  const samePeriod = !!(previous && previous.period === periodKey);
+  if (samePeriod && (previous.count >= SUMMARY_MAX_ATTEMPTS || now - previous.at < SUMMARY_RETRY_BACKOFF_MS)) {
+    return false;
+  }
+  const next = { period: periodKey, count: samePeriod ? previous.count + 1 : 1, at: now };
+  await db.run(`
+    INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)
+    ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
+  `, [userId, key, JSON.stringify(next)]);
+  return true;
+}
+
+async function clearSummaryAttempt(userId, kind) {
+  await db.run(`DELETE FROM settings WHERE user_id = ? AND key = ?`, [userId, `summary_attempt_${kind}`]);
+}
+
 async function checkAndSendAutomatedSummaries() {
   try {
     const users = await db.all(`SELECT id, username, email FROM users WHERE status = 'active'`);
@@ -55,7 +98,9 @@ async function checkAndSendAutomatedSummaries() {
           if (currentTimeStr >= monthlyScheduledTime) {
             if (lastMonthlySent !== currentYearMonthStr) {
               console.log(`[SCHEDULER] Sending the monthly summary to ${user.username} (${user.email || 'no email'})`);
-              if (user.email) {
+              if (user.email && !(await claimSummaryAttempt(user.id, 'monthly', currentYearMonthStr))) {
+                console.warn(`[SCHEDULER] Skipping the monthly summary for ${user.username} - retry budget for this period used up or backing off after a failure.`);
+              } else if (user.email) {
                 try {
                   await sendMonthlySummaryForUser(user.id);
                   await db.run(`
@@ -64,6 +109,7 @@ async function checkAndSendAutomatedSummaries() {
                     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
                   `, [user.id, currentYearMonthStr]);
                   console.log(`[SCHEDULER] Sent the monthly summary to ${user.username}; last_monthly_summary_sent set to ${currentYearMonthStr}`);
+                  await clearSummaryAttempt(user.id, 'monthly');
                 } catch (sendErr) {
                   console.error(`[SCHEDULER ERROR] Failed to send the monthly summary to ${user.username}:`, sendErr.message);
                 }
@@ -80,7 +126,9 @@ async function checkAndSendAutomatedSummaries() {
         if (currentTimeStr >= scheduledTime) {
           if (lastDailySent !== todayStr) {
             console.log(`[SCHEDULER] Sending the daily summary to ${user.username} (${user.email || 'no email'})`);
-            if (user.email) {
+            if (user.email && !(await claimSummaryAttempt(user.id, 'daily', todayStr))) {
+              console.warn(`[SCHEDULER] Skipping the daily summary for ${user.username} - retry budget for this period used up or backing off after a failure.`);
+            } else if (user.email) {
               try {
                 await sendDailySummaryForUser(user.id);
                 await db.run(`
@@ -89,6 +137,7 @@ async function checkAndSendAutomatedSummaries() {
                   ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
                 `, [user.id, todayStr]);
                 console.log(`[SCHEDULER] Sent the daily summary to ${user.username}; last_daily_summary_sent set to ${todayStr}`);
+                await clearSummaryAttempt(user.id, 'daily');
               } catch (sendErr) {
                 console.error(`[SCHEDULER ERROR] Failed to send the daily summary to ${user.username}:`, sendErr.message);
               }
@@ -103,7 +152,9 @@ async function checkAndSendAutomatedSummaries() {
           if (currentTimeStr >= scheduledTime) {
             if (lastWeeklySent !== todayStr) {
               console.log(`[SCHEDULER] Sending the weekly summary to ${user.username} (${user.email || 'no email'})`);
-              if (user.email) {
+              if (user.email && !(await claimSummaryAttempt(user.id, 'weekly', todayStr))) {
+                console.warn(`[SCHEDULER] Skipping the weekly summary for ${user.username} - retry budget for this period used up or backing off after a failure.`);
+              } else if (user.email) {
                 try {
                   await sendWeeklySummaryForUser(user.id);
                   await db.run(`
@@ -112,6 +163,7 @@ async function checkAndSendAutomatedSummaries() {
                     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
                   `, [user.id, todayStr]);
                   console.log(`[SCHEDULER] Sent the weekly summary to ${user.username}; last_weekly_summary_sent set to ${todayStr}`);
+                  await clearSummaryAttempt(user.id, 'weekly');
                 } catch (sendErr) {
                   console.error(`[SCHEDULER ERROR] Failed to send the weekly summary to ${user.username}:`, sendErr.message);
                 }

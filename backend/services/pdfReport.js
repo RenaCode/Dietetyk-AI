@@ -2,6 +2,7 @@ const PDFDocument = require('pdfkit');
 const db = require('../db');
 const path = require('path');
 const { getUserSettings, aggregateNutritionAndHealth } = require('./summaries');
+const { getLocalDateString, shiftDate } = require('../utils/dates');
 
 // PDF export for a doctor or dietician - a document the user downloads themselves and shows
 // to a professional. Deliberately WITHOUT any Gemini-generated text (unlike the summary
@@ -27,6 +28,16 @@ const MEASUREMENT_FIELDS = [
   ['thigh', 'Udo']
 ];
 
+// The report's date window as Warsaw calendar dates, through utils/dates.js - not
+// toISOString(), which is UTC. Between 00:00 and 02:00 Warsaw time the UTC date is still
+// yesterday's, so a report generated then labelled its period a day early and its window
+// started a day early: every `date` column in the database is a Warsaw date (see CLAUDE.md,
+// "Dates"). Exported for tests/test-pdf-report-window.js.
+function reportWindow(days) {
+  const today = getLocalDateString();
+  return { startDate: shiftDate(today, -days), today };
+}
+
 async function buildHealthReportPdf(userId, requestedDays) {
   const days = Math.min(Math.max(parseInt(requestedDays, 10) || PDF_REPORT_DEFAULT_DAYS, 1), PDF_REPORT_MAX_DAYS);
 
@@ -39,8 +50,7 @@ async function buildHealthReportPdf(userId, requestedDays) {
   }
 
   const settings = await getUserSettings(userId);
-  const startDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const today = new Date().toISOString().slice(0, 10);
+  const { startDate, today } = reportWindow(days);
 
     // The same tables and columns as the email reports (summaries.js) - without image_base64
     // or analysis_json, which this report never displays.
@@ -209,4 +219,4 @@ async function buildHealthReportPdf(userId, requestedDays) {
   });
 }
 
-module.exports = { buildHealthReportPdf, PDF_REPORT_MAX_DAYS, PDF_REPORT_DEFAULT_DAYS };
+module.exports = { buildHealthReportPdf, reportWindow, PDF_REPORT_MAX_DAYS, PDF_REPORT_DEFAULT_DAYS };

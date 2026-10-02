@@ -1,0 +1,34 @@
+{{- if .Values.networkPolicy.enabled }}
+# Only the frontend's nginx may open connections to the backend.
+#
+# Without this, every pod in the cluster - any other application, anything compromised in
+# it - could reach the backend on :3000 directly, skipping nginx (its body-size limit, its
+# header handling) and, with the sqlite-web sidecar enabled, :8080 with no authentication at
+# all. Kubelet probes and `kubectl port-forward` are not subject to NetworkPolicy, so the
+# health checks and the documented db-viewer workflow keep working.
+#
+# Off by default (values.yaml) until it has been switched on once under observation: if
+# anything else in the cluster legitimately talks to the backend, this is what breaks it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dietetyk.fullname" . }}-backend
+  labels:
+    {{- include "dietetyk.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dietetyk.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "dietetyk.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: frontend
+      ports:
+        - port: 3000
+          protocol: TCP
+{{- end }}

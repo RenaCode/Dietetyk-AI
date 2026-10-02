@@ -4,6 +4,7 @@ const db = require('../db');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { authenticator } = require('otplib');
+const { verifyTotpOnce } = require('../utils/totp');
 const QRCode = require('qrcode');
 const { sendWeeklySummaryForUser, sendDailySummaryForUser, sendMonthlySummaryForUser } = require('../services/summaries');
 const { buildHealthReportPdf } = require('../services/pdfReport');
@@ -12,6 +13,7 @@ const { getAppConfig } = require('../services/oauthHelpers');
 const { summaryEmailLimiter, pdfRateLimiter } = require('../middleware/rateLimit');
 const { revokeUserSessions } = require('../middleware/auth');
 const loginAttempts = require('../services/loginAttempts');
+const { issueTicket } = require('../services/authTickets');
 const logger = require('../services/logger');
 const { USER_SECRET_SETTING_KEYS, maskSecretValue, isMaskedSecretWrite } = require('../utils/secretKeys');
 const { encrypt } = require('../utils/encryption');
@@ -66,10 +68,13 @@ const MAX_LOCATION_QUERY_LENGTH = 100;
 // part of the key through loginAttempts.buildKey.
 const passwordCheckAttemptKey = (userId) => `pwcheck_user:${userId}`;
 
-// Shared guard for those three endpoints. Returns a response body to send with 429 when the
-// account is locked, or null when the caller may go ahead and compare the password.
+// Shared guard for those endpoints. Returns a response body to send with 429 when the
+// account is locked, or null when the caller may go ahead and compare the password. The
+// attempt is COUNTED here, before the comparison (reserveAttempt - see
+// services/loginAttempts.js for the parallel-burst race this closes), so a failure needs only
+// to be logged and a success must call recordSuccess.
 async function passwordCheckLockout(req) {
-  const lockedMs = await loginAttempts.isLocked(req.ip, passwordCheckAttemptKey(req.user.id));
+  const lockedMs = await loginAttempts.reserveAttempt(req.ip, passwordCheckAttemptKey(req.user.id));
   if (lockedMs > 0) {
     return { error: `Za dużo nieudanych prób podania hasła. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.` };
   }
@@ -77,13 +82,23 @@ async function passwordCheckLockout(req) {
 }
 
 async function recordPasswordCheckFailure(req, action) {
-  await loginAttempts.recordFailure(req.ip, passwordCheckAttemptKey(req.user.id));
   logger.security(
     `Wrong password supplied for an account operation: ${action} (UID: ${req.user.id})`,
     'AUTH_PASSWORD_FAILURE',
     { userId: req.user.id, action },
     req.ip
   );
+}
+
+// Replaces users.sync_token, the only credential of the Apple Health webhook
+// (routes/appleHealth.js). Part of "end everything the old credentials could reach" on a
+// password change and on "log out all other devices": revoking sessions left the sync token
+// alone, so whoever had copied the webhook URL from Settings while holding a stolen session
+// kept writing - and, through the dashboard built from it, influencing - the victim's health
+// data indefinitely. The cost is that the user has to paste the new URL into Health Auto
+// Export; the responses below say so.
+async function rotateSyncToken(userId) {
+  await db.run(`UPDATE users SET sync_token = ? WHERE id = ?`, ['sync_' + crypto.randomBytes(24).toString('hex'), userId]);
 }
 
 router.get('/api/settings', async (req, res) => {
@@ -589,15 +604,22 @@ router.post('/api/user/verify-2fa', async (req, res) => {
       return res.status(400).json({ error: 'Tymczasowa sesja wygasła lub jest niepoprawna. Spróbuj ponownie.' });
     }
 
-    const isValid = authenticator.verify({
-      token: code,
-      secret: session.totp_secret
-    });
+    // Counted like the password re-checks in this file. This endpoint had no limit at all: a
+    // stolen session could call setup-2fa + verify-2fa in a loop and guess codes as fast as
+    // the shared global limiter allowed. Guessing here does not log anyone in, but it does
+    // switch on a second factor whose secret only the caller holds.
+    const locked = await passwordCheckLockout(req);
+    if (locked) return res.status(429).json(locked);
+
+    // verifyTotpOnce also refuses a code already used once - see utils/totp.js.
+    const isValid = await verifyTotpOnce(req.user.id, session.totp_secret, code);
 
     if (!isValid) {
+      await recordPasswordCheckFailure(req, 'verify-2fa');
       return res.status(400).json({ error: 'Niepoprawny kod 2FA.' });
     }
 
+    await loginAttempts.recordSuccess(req.ip, passwordCheckAttemptKey(req.user.id));
     // Activate 2FA for the user
     await db.run(`UPDATE users SET totp_enabled = 1 WHERE id = ?`, [req.user.id]);
     // Remove the temporary session
@@ -662,6 +684,57 @@ router.post('/api/user/disable-2fa', async (req, res) => {
   }
 });
 
+// One-time ticket that starts an OAuth flow by top-level navigation - see
+// services/authTickets.js for why the session token no longer goes in that URL.
+//
+// 'google_link' additionally requires the password, plus a current TOTP code when 2FA is on.
+// Linking Google adds a way to log in, and a way to log in that a stolen session can add on
+// its own survives everything the owner does about it afterwards. The data-source flows
+// (Oura, Withings, Google Fit) only bring data INTO the account and need just the session.
+const TICKET_SERVICES = new Set(['oura', 'withings', 'google-fit', 'google_link']);
+
+router.post('/api/auth/ticket', async (req, res) => {
+  const { service, password, code } = req.body || {};
+  if (!TICKET_SERVICES.has(service)) {
+    return res.status(400).json({ error: 'Nieznana integracja.' });
+  }
+
+  try {
+    if (service === 'google_link') {
+      if (!password) {
+        return res.status(400).json({ error: 'Podaj aktualne hasło, aby połączyć konto Google.' });
+      }
+      const locked = await passwordCheckLockout(req);
+      if (locked) return res.status(429).json(locked);
+
+      const user = await db.get(`SELECT password_hash, totp_enabled, totp_secret FROM users WHERE id = ?`, [req.user.id]);
+      if (!user) {
+        return res.status(404).json({ error: 'Użytkownik nie istnieje.' });
+      }
+      const isMatch = await bcrypt.compare(password, user.password_hash);
+      if (!isMatch) {
+        await recordPasswordCheckFailure(req, 'google-link');
+        return res.status(400).json({ error: 'Niepoprawne hasło.' });
+      }
+      if (user.totp_enabled === 1) {
+        if (!code) {
+          return res.status(400).json({ error: 'Podaj kod 2FA, aby połączyć konto Google.', require2fa: true });
+        }
+        if (!(await verifyTotpOnce(req.user.id, user.totp_secret, code))) {
+          await recordPasswordCheckFailure(req, 'google-link-2fa');
+          return res.status(400).json({ error: 'Niepoprawny kod 2FA.', require2fa: true });
+        }
+      }
+      await loginAttempts.recordSuccess(req.ip, passwordCheckAttemptKey(req.user.id));
+    }
+
+    res.json({ ticket: issueTicket(req.user.id, service) });
+  } catch (err) {
+    console.error('[AUTH TICKET ERROR]', err);
+    res.status(500).json({ error: 'Błąd serwera.' });
+  }
+});
+
 // Unlinking the Google account - password login (or Google Fit, if it was connected only
 // alongside Google sign-in) remains available, because the account always has a
 // password_hash: random if the account was created through Google, and resettable.
@@ -716,21 +789,41 @@ router.post('/api/user/change-password', async (req, res) => {
     // revoking the share links as well.
     const revokedSessions = await revokeUserSessions(req.user.id, req.sessionToken);
     const revokedShares = await revokeAllSharesForUser(req.user.id);
+
+    // The two ways back in that do not go through a session. A Google identity linked from a
+    // stolen session kept logging the attacker in after the victim changed the password, and
+    // the sync token kept the Apple Health webhook writing (see rotateSyncToken). Linking now
+    // requires the password (POST /api/auth/ticket below), so the owner can re-link in a
+    // minute; an attacker cannot. Unlinking is safe HERE because the caller has just proved
+    // they have a working password - unlike logout-all, which Google-only accounts must be able
+    // to use and which therefore leaves the link alone.
+    const googleRow = await db.get(`SELECT google_id FROM users WHERE id = ?`, [req.user.id]);
+    const unlinkedGoogle = !!(googleRow && googleRow.google_id);
+    if (unlinkedGoogle) {
+      await db.run(`UPDATE users SET google_id = NULL WHERE id = ?`, [req.user.id]);
+    }
+    await rotateSyncToken(req.user.id);
+
     logger.security(
-      `Password changed: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s) (UID: ${req.user.id})`,
+      `Password changed: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s), rotated sync token${unlinkedGoogle ? ', unlinked Google' : ''} (UID: ${req.user.id})`,
       'AUTH_PASSWORD_CHANGE',
-      { userId: req.user.id, revokedSessions, revokedShares },
+      { userId: req.user.id, revokedSessions, revokedShares, unlinkedGoogle },
       req.ip,
       req.user.id
     );
 
+    const parts = ['Hasło zostało pomyślnie zmienione. Pozostałe urządzenia zostały wylogowane'];
+    if (revokedShares > 0) parts.push('aktywne linki do raportów unieważnione');
+    if (unlinkedGoogle) parts.push('konto Google odłączone (możesz je połączyć ponownie w Ustawieniach)');
+    parts.push('adres webhooka Apple Health zmieniony - zaktualizuj go w Health Auto Export');
+
     res.json({
       success: true,
-      message: revokedShares > 0
-        ? 'Hasło zostało pomyślnie zmienione. Pozostałe urządzenia zostały wylogowane, a aktywne linki do raportów unieważnione.'
-        : 'Hasło zostało pomyślnie zmienione. Pozostałe urządzenia zostały wylogowane.',
+      message: parts.join(', ') + '.',
       revokedSessions,
-      revokedShares
+      revokedShares,
+      unlinkedGoogle,
+      syncTokenRotated: true
     });
   } catch (err) {
     console.error(err);
@@ -755,13 +848,31 @@ router.post('/api/user/change-password', async (req, res) => {
 router.post('/api/user/logout-all', async (req, res) => {
   try {
     const revoked = await revokeUserSessions(req.user.id, req.sessionToken);
-    logger.security(`Logged out all other devices: ${revoked} session(s) (UID: ${req.user.id})`, 'AUTH_SESSION_REVOKE', { userId: req.user.id, revoked }, req.ip, req.user.id);
-    res.json({ success: true, message: 'Pozostałe urządzenia zostały wylogowane.', revokedSessions: revoked });
+    // See rotateSyncToken: a session that is being shut out must not keep the webhook.
+    await rotateSyncToken(req.user.id);
+    logger.security(`Logged out all other devices: ${revoked} session(s), rotated sync token (UID: ${req.user.id})`, 'AUTH_SESSION_REVOKE', { userId: req.user.id, revoked }, req.ip, req.user.id);
+    res.json({
+      success: true,
+      message: 'Pozostałe urządzenia zostały wylogowane. Adres webhooka Apple Health został zmieniony - zaktualizuj go w Health Auto Export.',
+      revokedSessions: revoked,
+      syncTokenRotated: true
+    });
   } catch (err) {
     console.error('[LOGOUT ALL ERROR]', err);
     res.status(500).json({ error: 'Błąd wylogowywania pozostałych urządzeń.' });
   }
 });
+
+// The send-*-summary endpoints used to append err.message to the response. That message is
+// whatever failed inside - for Mailgun, `Mailgun API error: <status> - <response body>`, which
+// can carry the sending domain, account state or other configuration detail the user has no
+// business seeing. Only errors explicitly marked `expose` (no email address set, Mailgun not
+// configured) reach the client verbatim; everything else is a fixed message, with the detail
+// left in the server log by the caller.
+function sendSummaryErrorResponse(res, err) {
+  const detail = err && err.expose ? `: ${err.message}` : '.';
+  res.status(500).json({ error: `Błąd serwera podczas wysyłania e-maila${detail}` });
+}
 
 router.post('/api/user/send-weekly-summary', summaryEmailLimiter, async (req, res) => {
   try {
@@ -776,7 +887,7 @@ router.post('/api/user/send-weekly-summary', summaryEmailLimiter, async (req, re
     });
   } catch (err) {
     console.error('[API ERROR] Failed to send the weekly summary:', err);
-    res.status(500).json({ error: 'Błąd serwera podczas wysyłania e-maila: ' + err.message });
+    sendSummaryErrorResponse(res, err);
   }
 });
 
@@ -794,7 +905,7 @@ router.post('/api/user/send-daily-summary', summaryEmailLimiter, async (req, res
     });
   } catch (err) {
     console.error('[API ERROR] Failed to send the daily summary:', err);
-    res.status(500).json({ error: 'Błąd serwera podczas wysyłania e-maila: ' + err.message });
+    sendSummaryErrorResponse(res, err);
   }
 });
 
@@ -812,7 +923,7 @@ router.post('/api/user/send-monthly-summary', summaryEmailLimiter, async (req, r
     });
   } catch (err) {
     console.error('[API ERROR] Failed to send the monthly summary:', err);
-    res.status(500).json({ error: 'Błąd serwera podczas wysyłania e-maila: ' + err.message });
+    sendSummaryErrorResponse(res, err);
   }
 });
 

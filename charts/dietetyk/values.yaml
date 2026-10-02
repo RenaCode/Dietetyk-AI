@@ -60,6 +60,12 @@ dbImage:
       cpu: 50m
       memory: 128Mi
 
+# Restrict who may connect to the backend pod (templates/networkpolicy.yaml): only the
+# frontend's nginx. OFF until it has been enabled once under observation - k3s enforces
+# NetworkPolicy, and anything else that talks to the backend directly would stop working.
+networkPolicy:
+  enabled: false
+
 ingress:
   enabled: true
   className: traefik

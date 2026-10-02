@@ -7,15 +7,23 @@
 // time, makes all of them use watch data with no change to any of them, and keeps one
 // definition of "today's SpO2" instead of fifteen.
 //
-// SOURCE RULE. Each of these columns already has an owner: Oura writes spo2_percentage and
+// SOURCE RULE. Each of these columns may also have an owner: Oura writes spo2_percentage and
 // respiratory_rate (services/sync.js, Oura branch), Withings writes weight, fat_ratio and
 // blood pressure (Withings branch). Both use COALESCE(excluded.x, x), so they overwrite
-// whatever is there whenever they have a value. Apple therefore fills a column ONLY for a
-// user who has no owner connected for it - otherwise the two sources would take turns
-// overwriting each other depending on which synced last, and the trend insights would read
-// the alternation as day-to-day change. For a user who HAS the owner connected, the watch
-// value is not lost: it stays in apple_health_hourly and shows up in the "other metrics"
-// card and the prompts (see columnBackedMetrics below).
+// whatever is there whenever they have a value. Apple writes a column when
+//   - the user has no owner connected for it, or
+//   - the column is empty (the owner delivered nothing that day - e.g. Oura without SpO2,
+//     Withings before its scale synced), or
+//   - the column still holds exactly the value Apple itself wrote last time (Apple refreshing
+//     its own partial-day value), remembered in health_metrics.apple_columns_json.
+// Once the owner writes a different value, the third condition fails and Apple never touches
+// that column for that day again - so the sources cannot take turns overwriting each other,
+// which the trend insights would read as day-to-day change.
+//
+// NO DUPLICATES (user request, 2026-10-02): every metric mapped here is shown through its
+// regular Dashboard card and prompt line, so it is always left out of the "other metrics"
+// list - see columnBackedMetrics. Before this, a user with Oura saw respiratory rate twice
+// with two different numbers.
 //
 // This mirrors the has_oura rule the webhook already applies to sleep.
 
@@ -50,50 +58,66 @@ async function connectedServices(db, userId) {
 }
 
 /**
- * Metrics whose daily value this user sees through a health_metrics column. The "other
- * metrics" card and prompt line leave them out so the same number is not shown twice.
+ * Metrics shown through a health_metrics column and therefore left out of the "other
+ * metrics" card and prompt line. Async and per-user for API stability; currently the same
+ * set for everyone.
  */
-async function columnBackedMetrics(db, userId) {
-  const services = await connectedServices(db, userId);
-  return new Set(
-    Object.entries(COLUMN_MAP)
-      .filter(([, spec]) => !spec.owner || !services.has(spec.owner))
-      .map(([metric]) => metric)
-  );
+async function columnBackedMetrics() {
+  return new Set(Object.keys(COLUMN_MAP));
+}
+
+function sameValue(a, b) {
+  return a != null && b != null && Math.abs(Number(a) - Number(b)) < 1e-9;
 }
 
 /**
- * Recomputes the Apple-owned columns for the given dates from apple_health_hourly. Always
- * recomputed from the stored samples, never from the request alone, so a payload carrying
- * only part of a day cannot shrink the value (same reasoning as the water re-sum in the
- * webhook).
+ * Recomputes the Apple-filled columns for the given dates from apple_health_hourly. Always
+ * from the stored buckets, never from the request alone, so a payload carrying only part of a
+ * day cannot shrink the value (same reasoning as the water re-sum in the webhook).
  */
 async function syncAppleColumns(db, userId, dates) {
   const services = await connectedServices(db, userId);
-  const owned = Object.entries(COLUMN_MAP).filter(([, spec]) => !spec.owner || !services.has(spec.owner));
-  if (owned.length === 0) return 0;
+  const columns = Object.values(COLUMN_MAP).map((spec) => spec.column);
 
   let updatedDays = 0;
   for (const date of dates) {
     const daily = await getDailyMetrics(db, userId, date, { excludeOwnColumns: false });
     const byMetric = new Map(daily.map((m) => [m.metric, m]));
+    const current = await db.get(
+      `SELECT ${columns.join(', ')}, apple_columns_json FROM health_metrics WHERE user_id = ? AND date = ?`,
+      [userId, date]
+    );
+    let lastApple = {};
+    try {
+      lastApple = current && current.apple_columns_json ? JSON.parse(current.apple_columns_json) : {};
+    } catch {
+      lastApple = {};
+    }
+
     const assignments = [];
     const values = [];
-    for (const [metric, spec] of owned) {
+    for (const [metric, spec] of Object.entries(COLUMN_MAP)) {
       const m = byMetric.get(metric);
       if (!m) continue;
+      const existing = current ? current[spec.column] : null;
+      const ownerConnected = spec.owner && services.has(spec.owner);
+      const mayWrite = !ownerConnected || existing == null || sameValue(existing, lastApple[spec.column]);
+      if (!mayWrite) continue;
       let value = m.value;
       if (spec.toKg && /^(lb|lbs|pound)/i.test(m.units || '')) value *= LB_TO_KG;
+      value = round(value, spec.digits);
       assignments.push(spec.column);
-      values.push(round(value, spec.digits));
+      values.push(value);
+      lastApple[spec.column] = value;
     }
     if (assignments.length === 0) continue;
     await db.run(
-      `INSERT INTO health_metrics (user_id, date, ${assignments.join(', ')})
-       VALUES (?, ?, ${assignments.map(() => '?').join(', ')})
+      `INSERT INTO health_metrics (user_id, date, ${assignments.join(', ')}, apple_columns_json)
+       VALUES (?, ?, ${assignments.map(() => '?').join(', ')}, ?)
        ON CONFLICT(user_id, date) DO UPDATE SET
-         ${assignments.map((c) => `${c} = excluded.${c}`).join(', ')}`,
-      [userId, date, ...values]
+         ${assignments.map((c) => `${c} = excluded.${c}`).join(', ')},
+         apple_columns_json = excluded.apple_columns_json`,
+      [userId, date, ...values, JSON.stringify(lastApple)]
     );
     updatedDays++;
   }

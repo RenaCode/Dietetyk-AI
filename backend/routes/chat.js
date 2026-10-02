@@ -6,7 +6,7 @@ const { aiRateLimiter } = require('../middleware/rateLimit');
 const { shiftDate, resolveQueryDate } = require('../utils/dates');
 const { escapeUserInputTag } = require('../utils/mealSanitize');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
-const { buildAppleHealthPromptContext } = require('../utils/appleHealthPrompt');
+const { buildAppleHealthPromptContext, buildAppleHealthPeriodContext } = require('../utils/appleHealthPrompt');
 const { generateContentWithFallback } = require('../config');
 const { getTargetCalories, getBmr, getTargetWaterMl } = require('../utils/defaultSettings');
 const { decrypt } = require('../utils/encryption');
@@ -248,7 +248,12 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
     // plus symptoms, heart-rate notifications and cycle position. Without it the model would
     // see only the dozen metrics that have their own health_metrics column, however much the
     // phone sends. Never throws - see utils/appleHealthPrompt.js.
-    const appleExtrasLine = await buildAppleHealthPromptContext(db, req.user.id, queryDate, language);
+    const appleExtrasLine = [
+      await buildAppleHealthPromptContext(db, req.user.id, queryDate, language),
+      // The same window as the meal/workout history above (7 days, or 90 for long-range
+      // questions), so "how has my HRV changed this month" has watch data to answer from.
+      await buildAppleHealthPeriodContext(db, req.user.id, pastDateStr, shiftDate(queryDate, -1), language)
+    ].filter(Boolean).join('\n');
 
     // Current weather and time of day (the model should know and account for both - see
     // utils/weatherContext.js). It never throws, so no extra try/catch is needed here.

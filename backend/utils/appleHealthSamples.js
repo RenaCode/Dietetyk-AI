@@ -88,6 +88,11 @@ const METRIC_CATALOG = {
   walking_heart_rate_average: { label: 'Średnie tętno podczas chodzenia', agg: 'avg' },
   heart_rate_variability: { label: 'Zmienność tętna (HRV)', agg: 'avg' },
   heart_rate_variability_sdnn: { label: 'Zmienność tętna (HRV)', agg: 'avg' },
+  // New in watchOS 26/27, shown in the Health app as "HRV regeneracji". RMSSD - the same
+  // statistic Oura reports as HRV, unlike Apple's older SDNN-based heart_rate_variability, so
+  // the two Apple numbers are not interchangeable.
+  heart_rate_variability_rmssd: { label: 'HRV regeneracji (RMSSD)', agg: 'avg' },
+  six_minute_walking_test_distance: { label: 'Dystans testu 6-minutowego chodu', agg: 'last' },
   cardio_recovery: { label: 'Odzyskiwanie kardio', agg: 'last' },
   atrial_fibrillation_burden: { label: 'Obciążenie migotaniem przedsionków', agg: 'last' },
   blood_pressure_systolic: { label: 'Ciśnienie skurczowe', agg: 'avg' },
@@ -348,6 +353,26 @@ async function storeSamples(db, userId, samples) {
 }
 
 
+// Health Auto Export's unit spellings are HealthKit's ("count/min", "km/hr", "count"). They
+// are fine for the model but read like code on the card.
+const UNIT_DISPLAY = {
+  'count/min': '/min',
+  'km/hr': 'km/h',
+  'kcal/hr·kg': 'kcal/h·kg',
+  dBASPL: 'dB',
+  degC: '°C',
+  count: ''
+};
+const HEART_RATE_METRICS = new Set([
+  'heart_rate_avg', 'heart_rate_min', 'heart_rate_max', 'resting_heart_rate', 'walking_heart_rate_average'
+]);
+
+function displayUnits(metric, units) {
+  if (units === 'count/min' && HEART_RATE_METRICS.has(metric)) return 'bpm';
+  if (units != null && Object.prototype.hasOwnProperty.call(UNIT_DISPLAY, units)) return UNIT_DISPLAY[units] || null;
+  return units;
+}
+
 function normalizeValue(metric, value, units) {
   const u = (units || '').toLowerCase();
   if (u === 'kj') return { value: value * KJ_TO_KCAL, units: 'kcal' };
@@ -369,47 +394,77 @@ function normalizeValue(metric, value, units) {
  *   appleHealthColumns.columnBackedMetrics).
  * @returns {Promise<Array<{metric, label, value, units, agg, samples}>>}
  */
+// One aggregated (metric, day) row -> the day's value, per the metric's aggregation.
+function rowToMetric(row) {
+  const metric = row.metric;
+  const agg = aggregationFor(metric);
+  let value;
+  if (agg === 'sum') value = row.total;
+  else if (agg === 'min') value = row.lo;
+  else if (agg === 'max') value = row.hi;
+  else if (agg === 'last') value = row.last;
+  // Weighted by sample count: averaging hourly averages would let one reading at 3 a.m.
+  // weigh as much as sixty readings in the afternoon.
+  else value = row.total / row.n;
+  const normalized = normalizeValue(metric, value, row.units);
+  return {
+    metric,
+    label: labelFor(metric),
+    value: Math.round(normalized.value * 10) / 10,
+    units: displayUnits(metric, normalized.units),
+    agg,
+    samples: row.n
+  };
+}
+
+function isExcluded(metric, excludeOwnColumns, exclude) {
+  return (excludeOwnColumns && METRICS_WITH_OWN_COLUMN.has(metric)) || (exclude && exclude.has(metric));
+}
+
+// Aggregated in SQL rather than by pulling every bucket into JS: this runs on every chat
+// message and Dashboard load. The bare `last`/`units` columns next to MAX(last_at) take their
+// values from the row holding that maximum - a documented SQLite guarantee for a single
+// MIN/MAX aggregate - which is exactly "the latest reading of the day".
+const DAILY_AGGREGATE_COLUMNS = `metric, SUM(sum) AS total, SUM(count) AS n, MIN(min) AS lo,
+  MAX(max) AS hi, last, MAX(last_at) AS latest_at, units`;
+
 async function getDailyMetrics(db, userId, date, { excludeOwnColumns = true, exclude = null } = {}) {
-  // Aggregated in SQL rather than by pulling every bucket into JS: this runs on every chat
-  // message and Dashboard load. The bare `last`/`units` columns next to MAX(last_at) take their
-  // values from the row holding that maximum - a documented SQLite guarantee for a single
-  // MIN/MAX aggregate - which is exactly "the latest reading of the day".
   const rows = await db.all(
-    `SELECT metric, SUM(sum) AS total, SUM(count) AS n, MIN(min) AS lo, MAX(max) AS hi,
-            last, MAX(last_at) AS latest_at, units
+    `SELECT ${DAILY_AGGREGATE_COLUMNS}
      FROM apple_health_hourly
      WHERE user_id = ? AND date = ?
      GROUP BY metric`,
     [userId, date]
   );
-
-  const result = [];
-  for (const row of rows) {
-    const metric = row.metric;
-    if (excludeOwnColumns && METRICS_WITH_OWN_COLUMN.has(metric)) continue;
-    if (exclude && exclude.has(metric)) continue;
-    const agg = aggregationFor(metric);
-    let value;
-    if (agg === 'sum') value = row.total;
-    else if (agg === 'min') value = row.lo;
-    else if (agg === 'max') value = row.hi;
-    else if (agg === 'last') value = row.last;
-    // Weighted by sample count: averaging hourly averages would let one reading at 3 a.m.
-    // weigh as much as sixty readings in the afternoon.
-    else value = row.total / row.n;
-
-    const normalized = normalizeValue(metric, value, row.units);
-    result.push({
-      metric,
-      label: labelFor(metric),
-      value: Math.round(normalized.value * 10) / 10,
-      units: normalized.units,
-      agg,
-      samples: row.n
-    });
-  }
+  const result = rows
+    .filter((row) => !isExcluded(row.metric, excludeOwnColumns, exclude))
+    .map(rowToMetric);
   result.sort((a, b) => a.label.localeCompare(b.label, 'pl'));
   return result;
+}
+
+/**
+ * Daily values of every metric for each day in [startDate, endDate] - the input for period
+ * summaries (training plan, weekly/monthly reports, long chat questions).
+ * @returns {Promise<Map<string, Array<{date, value, units, label}>>>} metric -> days, by date
+ */
+async function getDailyMetricsRange(db, userId, startDate, endDate, { excludeOwnColumns = true, exclude = null } = {}) {
+  const rows = await db.all(
+    `SELECT date, ${DAILY_AGGREGATE_COLUMNS}
+     FROM apple_health_hourly
+     WHERE user_id = ? AND date >= ? AND date <= ?
+     GROUP BY date, metric
+     ORDER BY date`,
+    [userId, startDate, endDate]
+  );
+  const byMetric = new Map();
+  for (const row of rows) {
+    if (isExcluded(row.metric, excludeOwnColumns, exclude)) continue;
+    const m = rowToMetric(row);
+    if (!byMetric.has(m.metric)) byMetric.set(m.metric, []);
+    byMetric.get(m.metric).push({ date: row.date, value: m.value, units: m.units, label: m.label });
+  }
+  return byMetric;
 }
 
 // Bounds the prompt line however many metrics a payload invents (the audit could add
@@ -447,6 +502,7 @@ module.exports = {
   storeSamples,
   bucketSamples,
   getDailyMetrics,
+  getDailyMetricsRange,
   formatDailyMetricsForPrompt,
   aggregationFor,
   labelFor,

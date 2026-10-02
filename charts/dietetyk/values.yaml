@@ -14,7 +14,7 @@ imagePullSecrets: []
 backend:
   image:
     repository: ghcr.io/renacode/dietetyk-ai-backend
-    tag: "sha-9d0cb2b"
+    tag: "sha-0d2a3e3"
     pullPolicy: IfNotPresent
   secretName: dietetyk-backend-secret
   resources:

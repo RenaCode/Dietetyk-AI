@@ -109,22 +109,28 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
     db.close();
 
     // 2. Add two workouts (boxing and running) for today through the Apple Health webhook
-    const today = new Date();
-    const y = today.getFullYear();
-    const m = String(today.getMonth() + 1).padStart(2, '0');
-    const d = String(today.getDate()).padStart(2, '0');
-    const dateStr = `${y}-${m}-${d}`;
-    
-    // Wczorajsza data do testu filtrowania
-    const yesterday = new Date();
-    yesterday.setDate(today.getDate() - 1);
-    const yY = yesterday.getFullYear();
-    const yM = String(yesterday.getMonth() + 1).padStart(2, '0');
-    const yD = String(yesterday.getDate()).padStart(2, '0');
-    const yesterdayDateStr = `${yY}-${yM}-${yD}`;
-    
-    const startStrBox = `${dateStr} 10:00:00 +0200`;
-    const startStrRun = `${dateStr} 15:30:00 +0200`;
+    // "Today" is the WARSAW date, because that is what the dashboard opens on (the app forces
+    // Europe/Warsaw - see backend/utils/dates.js and CLAUDE.md, "Dates"). This used to read the
+    // date from the runner's own clock: GitHub runners are on UTC, so between 00:00 and 02:00
+    // Warsaw time the test posted yesterday's workouts and then looked for them on today's
+    // dashboard - it failed every time CI happened to run in that window (2026-10-02 23:00 UTC).
+    const warsawParts = (date) => Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Warsaw', year: 'numeric', month: '2-digit', day: '2-digit', timeZoneName: 'longOffset'
+      }).formatToParts(date).map(p => [p.type, p.value])
+    );
+    const now = warsawParts(new Date());
+    const dateStr = `${now.year}-${now.month}-${now.day}`;
+    // The same offset Health Auto Export would send: +0200 in summer, +0100 in winter.
+    const offset = (now.timeZoneName.replace('GMT', '') || '+00:00').replace(':', '');
+
+    // Yesterday's date for the filtering check - calendar arithmetic on the Warsaw date, not
+    // on the runner's clock.
+    const y = new Date(Date.UTC(Number(now.year), Number(now.month) - 1, Number(now.day) - 1));
+    const yesterdayDateStr = y.toISOString().slice(0, 10);
+
+    const startStrBox = `${dateStr} 10:00:00 ${offset}`;
+    const startStrRun = `${dateStr} 15:30:00 ${offset}`;
 
     // POST to the Apple Health sync webhook
     const response = await request.post(`/api/integrations/apple-health/${syncToken}`, {
@@ -135,7 +141,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
               id: 'playwright-test-box-1',
               name: 'Box',
               start: startStrBox,
-              end: `${dateStr} 11:00:00 +0200`,
+              end: `${dateStr} 11:00:00 ${offset}`,
               duration: 3600, // 60 minut
               activeEnergyBurned: {
                 qty: 650,
@@ -146,7 +152,7 @@ test.describe('Dashboard i Funkcjonalność UI', () => {
               id: 'playwright-test-run-1',
               name: 'Running',
               start: startStrRun,
-              end: `${dateStr} 16:00:00 +0200`,
+              end: `${dateStr} 16:00:00 ${offset}`,
               duration: 1800, // 30 minut
               activeEnergyBurned: {
                 qty: 400,

@@ -488,11 +488,19 @@ router.post('/api/verify-2fa-setup', async (req, res) => {
     // user id and the id is only known once the tempToken has been validated. Answering
     // an unknown/expired token with a 401 ahead of the 429 costs nothing: no code was
     // guessed, so there is nothing to rate-limit yet.
+    //
+    // `force_password_change = 0`: an owed password change comes first. The login path hands
+    // a user with that flag a temp token for /api/change-password-forced, and a temp token
+    // does not record which step it was minted for - so without this guard the same token,
+    // plus a TOTP code, came back from here (or from /api/login-2fa) as a full session and
+    // the change an administrator forced (typically after a suspected compromise) simply
+    // never happened.
     const session = await db.get(`
       SELECT s.*, u.totp_secret
       FROM sessions s
       JOIN users u ON s.user_id = u.id
       WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_temp = 1 AND s.is_verified_2fa = 0
+        AND COALESCE(u.force_password_change, 0) = 0
     `, [tempToken]);
 
     if (!session) {
@@ -543,12 +551,14 @@ router.post('/api/login-2fa', async (req, res) => {
   }
 
   try {
-    // Session first, then the lockout - see the comment in /api/verify-2fa-setup above.
+    // Session first, then the lockout - see the comment in /api/verify-2fa-setup above,
+    // which also explains the force_password_change guard.
     const session = await db.get(`
       SELECT s.*, u.totp_secret
       FROM sessions s
       JOIN users u ON s.user_id = u.id
       WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_temp = 1 AND s.is_verified_2fa = 0
+        AND COALESCE(u.force_password_change, 0) = 0
     `, [tempToken]);
 
     if (!session) {
@@ -613,11 +623,20 @@ router.post('/api/change-password-forced', async (req, res) => {
     // step. Without it a full 7-day session token could be replayed into this endpoint as a
     // "tempToken" (is_verified_2fa = 0 is true for ordinary sessions of users without 2FA)
     // and change the account password with no knowledge of the current one.
+    //
+    // `force_password_change = 1` narrows it further, to accounts that actually owe a
+    // password change. `is_temp` alone does not say WHICH step a temp token was minted for,
+    // and the login path mints the same kind of token for the 2FA step: a user with 2FA
+    // receives one right after the password check, before any TOTP code. Without this guard
+    // that token was accepted here, so a password alone - no second factor - was enough to
+    // set a new password, revoke every session and every share link of the account, and lock
+    // the owner out. 2FA protected the session but not the credential it was layered on.
     const session = await db.get(`
       SELECT s.*, u.username
       FROM sessions s
       JOIN users u ON s.user_id = u.id
       WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_temp = 1 AND s.is_verified_2fa = 0
+        AND u.force_password_change = 1
     `, [tempToken]);
 
     if (!session) {

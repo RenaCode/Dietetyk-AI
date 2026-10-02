@@ -210,7 +210,7 @@ Exit code 0 means the file opens, passes an integrity check, and its core tables
 
 ## ☸️ Kubernetes (Helm chart)
 
-The chart in `charts/dietetyk` deploys the backend, frontend and the sqlite-web browser. CI keeps the image tags in `values.yaml` pointing at the latest built `sha-<commit>`.
+The chart in `charts/dietetyk` deploys the backend and frontend. The sqlite-web browser is an opt-in sidecar (`dbImage.enabled`, off by default): it has no authentication and would be reachable from every pod in the cluster, so enable it only for a debugging session and reach it with `kubectl port-forward`. CI keeps the image tags in `values.yaml` pointing at the latest built `sha-<commit>`.
 
 ### Registry credentials — required
 

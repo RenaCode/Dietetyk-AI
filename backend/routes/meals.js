@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { getLocalDateString } = require('../utils/dates');
+const { getLocalDateString, isCalendarDateString } = require('../utils/dates');
 const { generateContentWithFallback } = require('../config');
 const { getCalorieBaseline, detectMealAnomalies } = require('../utils/mealAnomaly');
 const { invalidateAiExplanationCache } = require('../utils/aiExplanationCache');
@@ -58,8 +58,29 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
   // utils/mealSanitize.js for what the unbounded value did to every later prompt.
   const safeRawText = sanitizeMealText(rawText);
 
-  if ((!rawText || rawText.trim() === '') && !image) {
+  // The date is a storage key, not a display value: it goes into meals.date and
+  // health_metrics.date and every aggregation selects on it with string comparisons
+  // (`date BETWEEN ? AND ?`, `date >= ?`). '2026-09-99' sorts inside September and was
+  // silently counted in that month's averages; arbitrary text produced rows no screen could
+  // ever show or delete. An empty value still means "today" - that is what the date input
+  // sends when it is cleared.
+  if (!isCalendarDateString(targetDate)) {
+    return res.status(400).json({ error: 'Nieprawidłowa data (oczekiwany format RRRR-MM-DD).' });
+  }
+
+  // safeRawText rather than rawText.trim(): a non-string rawText threw a TypeError here and
+  // came back as a 500.
+  if (!safeRawText && !image) {
     return res.status(400).json({ error: 'Opis posiłku lub zdjęcie nie może być puste.' });
+  }
+
+  // Anything other than a data URL used to fall through with only a console warning: no
+  // MIME check, no size cap, and the raw string was still stored in meals.image_base64 and
+  // served back to the browser as an <img src>. The MIME and size checks further down
+  // therefore guarded only the inputs that were already well-formed, and anything else up to
+  // the 20 MB body limit could be written into the database on every request.
+  if (image && (typeof image !== 'string' || !/^data:[^;]+;base64,.+$/.test(image))) {
+    return res.status(400).json({ error: 'Nieprawidłowy format zdjęcia.' });
   }
 
   const userId = req.user.id;
@@ -395,6 +416,11 @@ router.get('/api/meals/frequent', async (req, res) => {
 router.post('/api/meals/repeat', async (req, res) => {
   const { mealId, date } = req.body;
   const targetDate = date || getLocalDateString();
+
+  // Same storage-key reasoning as POST /api/meals above.
+  if (!isCalendarDateString(targetDate)) {
+    return res.status(400).json({ error: 'Nieprawidłowa data (oczekiwany format RRRR-MM-DD).' });
+  }
 
   if (!mealId) {
     return res.status(400).json({ error: 'Brak wskazania posiłku do powtórzenia.' });

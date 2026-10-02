@@ -524,9 +524,21 @@ router.post('/api/user/profile', async (req, res) => {
 
 router.post('/api/user/setup-2fa', async (req, res) => {
   try {
-    const user = await db.get(`SELECT username, totp_secret FROM users WHERE id = ?`, [req.user.id]);
+    const user = await db.get(`SELECT username, totp_secret, totp_enabled FROM users WHERE id = ?`, [req.user.id]);
     if (!user) {
       return res.status(404).json({ error: 'Użytkownik nie istnieje.' });
+    }
+
+    // The new secret is written straight into users.totp_secret, which is also the secret
+    // login checks codes against. With 2FA already on, that silently replaced the working
+    // secret before anything had been verified: the authenticator on the owner's phone
+    // stopped matching, and whoever called this endpoint now held the only valid secret.
+    // A stolen session could therefore take over the second factor with no password at
+    // all - exactly what POST /api/user/disable-2fa demands a password to prevent. The
+    // Settings UI only offers setup while 2FA is off, so re-pairing goes through disable
+    // first (password required) and nothing legitimate needs this path.
+    if (user.totp_enabled === 1) {
+      return res.status(409).json({ error: 'Weryfikacja 2FA jest już włączona. Aby skonfigurować ją ponownie, najpierw ją wyłącz.' });
     }
 
     const secret = authenticator.generateSecret();

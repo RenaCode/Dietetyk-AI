@@ -625,14 +625,29 @@ async function syncGoogleFit(userId) {
   }
 }
 
+// One user's failure must not end the loop for everyone after them (audit 2026-10-02).
+// syncOura/syncWithings/syncGoogleFit catch their own HTTP errors, but getOrRefreshToken()
+// runs BEFORE their try and calls decrypt() on the stored tokens, which throws on a
+// ciphertext that no longer authenticates (a botched APP_PASSWORD rotation, a hand-edited
+// row). That exception used to escape into the syncAll* catch below and abort the whole
+// loop, so every user after the broken one silently stopped syncing - every hour - with one
+// generic "[CRON ERROR]" line as the only trace. tests/test-sync-all-isolation.js.
+async function syncEachUser(label, tokens, syncOne) {
+  for (const t of tokens) {
+    try {
+      await syncOne(t.user_id);
+    } catch (err) {
+      console.error(`[CRON ERROR] ${label} sync failed for user ${t.user_id}:`, err.message);
+    }
+  }
+}
+
 // Oura sync for every user (invoked by the shared hourly scheduler, 05:00-22:00)
 async function syncAllOura() {
   console.log('[CRON OURA] Syncing data...');
   try {
     const tokens = await db.all(`SELECT DISTINCT user_id FROM oauth_tokens WHERE service = 'oura'`);
-    for (const t of tokens) {
-      await syncOura(t.user_id);
-    }
+    await syncEachUser('Oura', tokens, syncOura);
     console.log(`[CRON OURA] Synced ${tokens.length} user(s).`);
   } catch (err) {
     console.error('[CRON ERROR] Oura sync failed:', err);
@@ -644,9 +659,7 @@ async function syncAllWithings() {
   console.log('[CRON WITHINGS] Syncing data...');
   try {
     const tokens = await db.all(`SELECT DISTINCT user_id FROM oauth_tokens WHERE service = 'withings'`);
-    for (const t of tokens) {
-      await syncWithings(t.user_id);
-    }
+    await syncEachUser('Withings', tokens, syncWithings);
     console.log(`[CRON WITHINGS] Synced ${tokens.length} user(s).`);
   } catch (err) {
     console.error('[CRON ERROR] Withings sync failed:', err);
@@ -658,9 +671,7 @@ async function syncAllGoogleFit() {
   console.log('[CRON GOOGLE FIT] Syncing data...');
   try {
     const tokens = await db.all(`SELECT DISTINCT user_id FROM oauth_tokens WHERE service = 'google_fit'`);
-    for (const t of tokens) {
-      await syncGoogleFit(t.user_id);
-    }
+    await syncEachUser('Google Fit', tokens, syncGoogleFit);
     console.log(`[CRON GOOGLE FIT] Synced ${tokens.length} user(s).`);
   } catch (err) {
     console.error('[CRON ERROR] Google Fit sync failed:', err);

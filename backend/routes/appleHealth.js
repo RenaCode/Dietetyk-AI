@@ -540,6 +540,9 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
             console.log(`[APPLE HEALTH DEBUG SLEEP] Pierwszy wpis: ${JSON.stringify(metric.data[0])}`);
           }
           for (const entry of metric.data) {
+            // A null entry used to throw on `entry.startDate` and fail the whole request with a
+            // 500, which the phone answers by retrying the same payload for ever.
+            if (!entry || typeof entry !== 'object') continue;
             const startStr = entry.startDate || entry.start_date || entry.sleepStart || entry.sleep_start || entry.inBedStart || entry.date;
             const endStr = entry.endDate || entry.end_date || entry.sleepEnd || entry.sleep_end || entry.inBedEnd;
             if (!startStr || !endStr) continue;
@@ -640,10 +643,17 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
     // for good (the client's retry saw changes = 0). The sample table is now the single
     // source of truth and the day is re-summed from it after the loop, exactly the way
     // workouts are already re-summed from apple_health_workouts.
+    // Audit 2026-10-02: a repeated timestamp REPLACES the stored qty instead of being ignored.
+    // Health Auto Export groups samples into buckets (hour / day) and re-exports the CURRENT
+    // bucket with a growing total, under the same timestamp, on every run. INSERT OR IGNORE
+    // kept the first partial value - 250 ml at 14:10 - and dropped the 500 ml the same 14:00
+    // bucket carried at 14:50; with day grouping the whole day froze at the first export of
+    // the morning. Replacing keeps a resend idempotent (same value in, same value stored).
             const timestamp = entry.date || parsedDate.toISOString();
             await db.run(`
-              INSERT OR IGNORE INTO apple_health_water_samples (user_id, timestamp, date, qty)
+              INSERT INTO apple_health_water_samples (user_id, timestamp, date, qty)
               VALUES (?, ?, ?, ?)
+              ON CONFLICT(user_id, timestamp) DO UPDATE SET qty = excluded.qty, date = excluded.date
             `, [user.id, timestamp, dateStr, converted]);
             waterAffectedDates.add(dateStr);
           } else {
@@ -751,10 +761,26 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
         // then propagated into total_calories_burned (active + basal) and understated the
         // calorie balance on the Dashboard by 430 kcal, permanently, because the upsert
         // preserves a real incoming value over the stored one.
+        //
+        // The bound must also hold against what an EARLIER request stored (audit 2026-10-02).
+        // The Math.max above only saw this payload's metrics, but two automations - one for
+        // metrics, one for workouts - arrive as two separate requests, so a workouts-only
+        // request still replaced the stored 750 kcal with the run's 320. When this payload has
+        // no daily figure of its own, the workout sum is sent only if it EXCEEDS the stored
+        // value; otherwise the column is left NULL, and the upsert's COALESCE keeps the stored
+        // value together with whichever source wrote it.
         const workoutCalories = sums && sums.total_calories !== null ? sums.total_calories : 0;
         const workoutMinutes = sums && sums.total_minutes !== null ? sums.total_minutes : 0;
-        byDate[dateStr].active_calories = Math.max(byDate[dateStr].active_calories ?? 0, workoutCalories);
-        byDate[dateStr].active_minutes = Math.max(byDate[dateStr].active_minutes ?? 0, workoutMinutes);
+        const stored = (byDate[dateStr].active_calories === null || byDate[dateStr].active_minutes === null)
+          ? await db.get('SELECT active_calories, active_minutes FROM health_metrics WHERE user_id = ? AND date = ?', [user.id, dateStr])
+          : null;
+        const lowerBound = (fromPayload, fromWorkouts, storedValue) => {
+          if (fromPayload !== null) return Math.max(fromPayload, fromWorkouts);
+          if (storedValue != null && storedValue >= Math.round(fromWorkouts)) return null;
+          return fromWorkouts;
+        };
+        byDate[dateStr].active_calories = lowerBound(byDate[dateStr].active_calories, workoutCalories, stored && stored.active_calories);
+        byDate[dateStr].active_minutes = lowerBound(byDate[dateStr].active_minutes, workoutMinutes, stored && stored.active_minutes);
       }
     }
 

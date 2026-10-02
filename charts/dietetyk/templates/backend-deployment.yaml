@@ -53,6 +53,7 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
 
+        {{- if .Values.dbImage.enabled }}
         - name: db-viewer
           image: "{{ .Values.dbImage.repository }}:{{ .Values.dbImage.tag }}"
           imagePullPolicy: {{ .Values.dbImage.pullPolicy }}
@@ -66,6 +67,7 @@ spec:
               mountPath: /data
           resources:
             {{- toYaml .Values.dbImage.resources | nindent 12 }}
+        {{- end }}
 
       volumes:
         - name: data-volume

@@ -38,7 +38,17 @@ frontend:
       cpu: 50m
       memory: 128Mi
 
+# sqlite-web sidecar in the backend pod. OFF by default: sqlite-web has no authentication,
+# the image listens on 0.0.0.0:8080, and it mounts the database read-write - so with it on,
+# ANY pod in the cluster can reach the pod IP and read or edit every table, including the
+# `sessions` table (live session tokens = log in as any user, admins included). There is no
+# NetworkPolicy in this chart to stop that. The README's "only reachable locally" promise
+# held for the docker-compose setup (bound to 127.0.0.1 on the VPS), not for k8s.
+# Enable it only for a debugging session and turn it off again:
+#   helm upgrade ... --set dbImage.enabled=true
+#   kubectl port-forward deploy/<release>-backend 8080:8080
 dbImage:
+  enabled: false
   repository: coleifer/sqlite-web
   tag: latest
   pullPolicy: IfNotPresent

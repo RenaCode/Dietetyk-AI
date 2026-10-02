@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { invalidateAiExplanationCache } = require('../utils/aiExplanationCache');
-const { resolveQueryDate } = require('../utils/dates');
+const { resolveQueryDate, isCalendarDateString } = require('../utils/dates');
 const { recomputeSupplements } = require('../utils/supplementsMerge');
 const { getDailyMetrics } = require('../utils/appleHealthSamples');
 const { getDailyEventsView } = require('../utils/appleHealthEvents');
@@ -75,6 +75,17 @@ router.get('/api/body-measurements', requireAuth, async (req, res) => {
 // a typo (entering a weight of 95 into a circumference field, or a missing decimal point,
 // '950' instead of '95.0') would be stored silently and poison the body-recomposition
 // insight and the Trends charts with a phantom jump.
+// The write routes below take `date` as the health_metrics / body_measurements row key.
+// Checking only that it is present let any string through: '2026-09-99' sorts inside
+// September and was counted by every `date BETWEEN` aggregation (summaries, trends, the PDF
+// report), and free text created rows that no screen could display or delete. Reads fall
+// back to today via resolveQueryDate; a write has no sensible fallback, so it is refused.
+function rejectInvalidDate(date, res) {
+  if (isCalendarDateString(date)) return false;
+  res.status(400).json({ error: 'Nieprawidłowa data (oczekiwany format RRRR-MM-DD).' });
+  return true;
+}
+
 const MIN_MEASUREMENT_CM = 1;
 const MAX_MEASUREMENT_CM = 300;
 
@@ -98,7 +109,7 @@ function parseMeasurement(value, label) {
 // Save or update body circumferences
 router.post('/api/body-measurements', requireAuth, async (req, res) => {
   const { date, chest, waist, hips, biceps, thigh, biceps_left, biceps_right, shoulders, waist_above, waist_below } = req.body;
-  if (!date) return res.status(400).json({ error: 'Data jest wymagana.' });
+  if (rejectInvalidDate(date, res)) return;
 
   let parsed;
   try {
@@ -177,7 +188,7 @@ router.delete('/api/body-measurements/:id', requireAuth, async (req, res) => {
 router.post('/api/water/add', requireAuth, async (req, res) => {
   const { date, amount_ml } = req.body;
   const amount = Number(amount_ml);
-  if (!date) return res.status(400).json({ error: 'Data jest wymagana.' });
+  if (rejectInvalidDate(date, res)) return;
   if (!amount || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ error: 'Ilość wody (amount_ml) musi być liczbą większą od zera.' });
   }
@@ -205,7 +216,7 @@ router.post('/api/water/add', requireAuth, async (req, res) => {
 // Reset the water counter for a given day (undoing a mistaken entry, for instance)
 router.post('/api/water/reset', requireAuth, async (req, res) => {
   const { date } = req.body;
-  if (!date) return res.status(400).json({ error: 'Data jest wymagana.' });
+  if (rejectInvalidDate(date, res)) return;
   try {
     // water_ml_apple records how much of water_ml the Apple Health webhook contributed (see
     // buildHealthMetricsUpsertSql in routes/appleHealth.js). Resetting the counter has to
@@ -238,7 +249,10 @@ const MAX_SUPPLEMENTS_LENGTH = 2000;
 // Save or update the supplements for a given day
 router.post('/api/supplements', requireAuth, async (req, res) => {
   const { date, supplements } = req.body;
-  if (!date) return res.status(400).json({ error: 'Data jest wymagana.' });
+  if (rejectInvalidDate(date, res)) return;
+  if (supplements != null && typeof supplements !== 'string') {
+    return res.status(400).json({ error: 'Lista suplementów musi być tekstem.' });
+  }
   const trimmed = supplements ? supplements.trim() : null;
   if (trimmed && trimmed.length > MAX_SUPPLEMENTS_LENGTH) {
     return res.status(400).json({ error: `Lista suplementów jest za długa (maks. ${MAX_SUPPLEMENTS_LENGTH} znaków).` });
@@ -267,7 +281,7 @@ const FEELING_MAX = 5;
 
 router.post('/api/feeling', requireAuth, async (req, res) => {
   const { date, energy_level, mood } = req.body;
-  if (!date) return res.status(400).json({ error: 'Data jest wymagana.' });
+  if (rejectInvalidDate(date, res)) return;
 
   const energy = energy_level != null ? Number(energy_level) : null;
   const moodVal = mood != null ? Number(mood) : null;

@@ -65,10 +65,12 @@ function summariseHeartRateNotification(entry) {
   const hr = numbers(entry.heartRate, 'hr');
   const hrv = numbers(entry.heartRateVariation, 'hrv');
   const threshold = Number.isFinite(Number(entry.threshold)) ? Number(entry.threshold) : null;
+  // reduce, not Math.min(...hr): spreading a list past the engine's argument limit (~10^5
+  // entries) throws a RangeError, which failed an events-only export with a 500 on every retry.
   const details = {
     threshold,
-    hr_min: hr.length ? Math.min(...hr) : null,
-    hr_max: hr.length ? Math.max(...hr) : null,
+    hr_min: hr.length ? hr.reduce((a, b) => (b < a ? b : a)) : null,
+    hr_max: hr.length ? hr.reduce((a, b) => (b > a ? b : a)) : null,
     hr_avg: hr.length ? round1(hr.reduce((a, b) => a + b, 0) / hr.length) : null,
     hrv_avg: hrv.length ? round1(hrv.reduce((a, b) => a + b, 0) / hrv.length) : null
   };

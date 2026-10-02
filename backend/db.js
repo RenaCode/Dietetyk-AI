@@ -904,15 +904,13 @@ const initDb = async () => {
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_shared_reports_user ON shared_reports(user_id)`);
 
-  // 11. Day events table (day_events) - the "day tag": the user marks a date range with
-  // context (illness/holiday/late bedtime) so that (a) the context is visible when
-  // reviewing those days, and (b) selected dashboard insights can exclude them from the
-  // baseline calculation, keeping an atypical period from distorting the trend.
-  // A date range (start_date/end_date) rather than a single date, because a holiday or an
-  // illness usually spans several days and clicking each one separately would be tedious
-  // (for single-day events such as "late bedtime", start_date equals end_date).
-  // `type` is a closed enum controlled by the backend (see routes/dayEvents.js),
-  // not free text - insights map specific types to specific exclusions.
+  // 11. Day events table (day_events) - the former "day tag" feature, where the user
+  // marked a date range as illness/holiday/late bedtime and selected insights excluded
+  // those days from their baselines. The feature was removed on 2026-10-02: the user
+  // never used it and the exclusions distorted the insights. The table is kept only so
+  // existing rows are not destroyed (no code reads or writes it any more); dropping it
+  // would be an irreversible data deletion. The FK cascade stays because account
+  // deletion relies on it to remove these rows together with the user.
   await run(`
     CREATE TABLE IF NOT EXISTS day_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -925,8 +923,8 @@ const initDb = async () => {
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
-  // Indeks pod zapytania "WHERE user_id = ? AND type = ? AND end_date >= ? AND
-  // start_date <= ?" (checking that an event range intersects the insight window).
+  // Index kept alongside the table for the same reason: existing databases already have
+  // it, and removing it would gain nothing.
   await run(`CREATE INDEX IF NOT EXISTS idx_day_events_user_type ON day_events(user_id, type, start_date, end_date)`);
 
   // Indeksy pod zapytania zakresowe "WHERE user_id = ? AND date >= ?" (agregacje

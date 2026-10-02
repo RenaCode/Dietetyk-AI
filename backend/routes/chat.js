@@ -8,7 +8,6 @@ const { escapeUserInputTag } = require('../utils/mealSanitize');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
 const { generateContentWithFallback } = require('../config');
 const { getTargetCalories, getBmr, getTargetWaterMl } = require('../utils/defaultSettings');
-const { getDayEventsInRange, formatDayEventsForPrompt } = require('../utils/dayEvents');
 const { decrypt } = require('../utils/encryption');
 const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 const {
@@ -228,13 +227,6 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
       }
     }
 
-    // "Tag dnia" (day_events) z analizowanego okna historii [pastDateStr, queryDate] -
-    // so the chat also knows about days tagged as illness/holiday/late bedtime and does not
-    // suggest corrections based on the atypical data from those days (see utils/dayEvents.js,
-    // the same mechanism as in dashboard.js).
-    const dayEventsInWindow = await getDayEventsInRange(req.user.id, pastDateStr, queryDate);
-    const dayEventsContext = formatDayEventsForPrompt(dayEventsInWindow);
-
     // Fetch the user's API key, if they have one
     const apiKeyRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'gemini_api_key'", [req.user.id]);
     const userApiKey = apiKeyRow ? decrypt(apiKeyRow.value) : null;
@@ -301,7 +293,6 @@ Current User Stats for ${queryDate}:
 Current time and weather (context, not a user-provided metric):
 ${weatherTimeContext}
 ${weeklyTrendSummary}
-${dayEventsContext}
 ${historyContext}
 User's Question: <user_input>${escapeUserInputTag(message)}</user_input>
 
@@ -348,7 +339,6 @@ Aktualne statystyki użytkownika na dzień ${queryDate}:
 Aktualny czas i pogoda (kontekst, nie metryka wpisana przez użytkownika):
 ${weatherTimeContext}
 ${weeklyTrendSummary}
-${dayEventsContext}
 ${historyContext}
 Pytanie użytkownika: <user_input>${escapeUserInputTag(message)}</user_input>
 

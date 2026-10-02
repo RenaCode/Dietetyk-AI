@@ -3,6 +3,10 @@ const router = express.Router();
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { invalidateAiExplanationCache } = require('../utils/aiExplanationCache');
+const { resolveQueryDate } = require('../utils/dates');
+const { getDailyMetrics } = require('../utils/appleHealthSamples');
+const { getDailyEventsView } = require('../utils/appleHealthEvents');
+const { columnBackedMetrics } = require('../utils/appleHealthColumns');
 
 router.get('/api/health/history', requireAuth, async (req, res) => {
   try {
@@ -16,6 +20,37 @@ router.get('/api/health/history', requireAuth, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Błąd pobierania historii pomiarów zdrowotnych.' });
+  }
+});
+
+// Every Apple Health metric stored for a day that has no dedicated card of its own - see
+// utils/appleHealthSamples.js. Feeds the "Pozostałe dane z Apple Health" card on the
+// Dashboard, so whatever the user ticks in Health Auto Export becomes visible without a code
+// change per metric.
+router.get('/api/health/apple-metrics', requireAuth, async (req, res) => {
+  try {
+    const date = resolveQueryDate(req.query.date);
+    const metrics = await getDailyMetrics(db, req.user.id, date, {
+      exclude: await columnBackedMetrics(db, req.user.id)
+    });
+    res.json({ date, metrics });
+  } catch (err) {
+    console.error('[APPLE METRICS] Failed to read daily metrics:', err.message);
+    res.status(500).json({ error: 'Błąd pobierania danych z Apple Health.' });
+  }
+});
+
+// Symptoms, menstrual cycle position and heart-rate notifications (last 7 days) for the
+// "Objawy, cykl i serce" Dashboard card - see utils/appleHealthEvents.js.
+router.get('/api/health/apple-events', requireAuth, async (req, res) => {
+  try {
+    const date = resolveQueryDate(req.query.date);
+    const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
+    const view = await getDailyEventsView(db, req.user.id, date, langRow ? langRow.value : 'pl');
+    res.json({ date, ...view });
+  } catch (err) {
+    console.error('[APPLE EVENTS] Failed to read daily events:', err.message);
+    res.status(500).json({ error: 'Błąd pobierania objawów i cyklu z Apple Health.' });
   }
 });
 

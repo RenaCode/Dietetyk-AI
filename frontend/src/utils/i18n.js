@@ -516,6 +516,8 @@ const TRANSLATIONS = {
   "Sen głęboki": "Deep sleep",
   "Poza normą 12-20": "Outside the 12-20 range",
   "Prawidłowy ≥ 95%": "Normal ≥ 95%",
+  "Pozostałe dane z Apple Health": "Other Apple Health data",
+  "Objawy, cykl i serce": "Symptoms, cycle and heart",
   "Podwyższone": "Elevated",
   "Prawidłowe wysokie": "High normal",
   "Posiłek zapisany!": "Meal saved.",

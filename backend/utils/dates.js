@@ -1,3 +1,16 @@
+// One shared formatter instead of a new Intl.DateTimeFormat per call. Constructing one costs
+// ~40 µs (far more on a throttled container), and the Apple Health webhook calls
+// dateObjToLocalDateString once per sample: a 300 000-sample export spent ~24 s of a 0.5-CPU
+// pod in this constructor alone, blocking the event loop until nginx answered the phone with
+// a 504 and the readiness probe pulled the pod (audit 2026-10-02). Formatting is stateless,
+// so sharing the instance is safe.
+const WARSAW_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Warsaw',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit'
+});
+
 function getLocalDateString() {
   // NOTE: this used to be computed via d.getTimezoneOffset(), i.e. the timezone of
   // the NODE PROCESS, not of the application. Every other function in this file
@@ -26,14 +39,7 @@ function formatDateString(dateObj) {
 
 // Converts a Unix timestamp to a YYYY-MM-DD date in the Europe/Warsaw timezone.
 function timestampToDateString(timestampSeconds) {
-  const date = new Date(timestampSeconds * 1000);
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Warsaw',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  });
-  return formatter.format(date);
+  return WARSAW_DATE_FORMATTER.format(new Date(timestampSeconds * 1000));
 }
 
 // Parses a date from the Apple Health webhook (the Health Auto Export app). The app
@@ -52,13 +58,7 @@ function parseHealthAutoExportDate(dateStr) {
 // Like timestampToDateString, but takes a Date object rather than Unix seconds -
 // used when grouping Apple Health webhook entries into calendar days in Europe/Warsaw.
 function dateObjToLocalDateString(date) {
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Warsaw',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  });
-  return formatter.format(date);
+  return WARSAW_DATE_FORMATTER.format(date);
 }
 
 // Returns "wall clock" weekday/hour/minute values in the Europe/Warsaw timezone,

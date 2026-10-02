@@ -6,6 +6,7 @@ const { aiRateLimiter } = require('../middleware/rateLimit');
 const { shiftDate, resolveQueryDate } = require('../utils/dates');
 const { escapeUserInputTag } = require('../utils/mealSanitize');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
+const { buildAppleHealthPromptContext } = require('../utils/appleHealthPrompt');
 const { generateContentWithFallback } = require('../config');
 const { getTargetCalories, getBmr, getTargetWaterMl } = require('../utils/defaultSettings');
 const { decrypt } = require('../utils/encryption');
@@ -243,6 +244,11 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
     const displayName = req.user.first_name || req.user.username;
     const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
     const language = langRow ? langRow.value : 'pl';
+    // Every other Apple Health metric of the day (SpO2, time in daylight, new watch metrics)
+    // plus symptoms, heart-rate notifications and cycle position. Without it the model would
+    // see only the dozen metrics that have their own health_metrics column, however much the
+    // phone sends. Never throws - see utils/appleHealthPrompt.js.
+    const appleExtrasLine = await buildAppleHealthPromptContext(db, req.user.id, queryDate, language);
 
     // Current weather and time of day (the model should know and account for both - see
     // utils/weatherContext.js). It never throws, so no extra try/catch is needed here.
@@ -288,7 +294,7 @@ Current User Stats for ${queryDate}:
 - Readiness Score: ${health.readiness_score !== null ? health.readiness_score : 'no data'}
 - Resting Heart Rate (RHR): ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms
 - Water intake: ${health.water_ml || 0}ml (target: ${getTargetWaterMl(settings)}ml)
-- Subjective state (user rating, scale 1-5): Energy: ${health.energy_level != null ? health.energy_level + '/5' : 'not rated'}, Mood: ${health.mood != null ? health.mood + '/5' : 'not rated'}
+- Subjective state (user rating, scale 1-5): Energy: ${health.energy_level != null ? health.energy_level + '/5' : 'not rated'}, Mood: ${health.mood != null ? health.mood + '/5' : 'not rated'}${appleExtrasLine ? '\n' + appleExtrasLine : ''}
 
 Current time and weather (context, not a user-provided metric):
 ${weatherTimeContext}
@@ -334,7 +340,7 @@ Aktualne statystyki użytkownika na dzień ${queryDate}:
 - Wynik Gotowości (Readiness): ${health.readiness_score !== null ? health.readiness_score : 'brak danych'}
 - Tętno spoczynkowe: ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms
 - Wypita woda: ${health.water_ml || 0}ml (cel: ${getTargetWaterMl(settings)}ml)
-- Samopoczucie (ręczna ocena użytkownika, skala 1-5): Energia: ${health.energy_level != null ? health.energy_level + '/5' : 'nie oceniono'}, Nastrój: ${health.mood != null ? health.mood + '/5' : 'nie oceniono'}
+- Samopoczucie (ręczna ocena użytkownika, skala 1-5): Energia: ${health.energy_level != null ? health.energy_level + '/5' : 'nie oceniono'}, Nastrój: ${health.mood != null ? health.mood + '/5' : 'nie oceniono'}${appleExtrasLine ? '\n' + appleExtrasLine : ''}
 
 Aktualny czas i pogoda (kontekst, nie metryka wpisana przez użytkownika):
 ${weatherTimeContext}

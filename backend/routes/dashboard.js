@@ -9,6 +9,7 @@ const { getCalorieBaseline, detectMealAnomalies } = require('../utils/mealAnomal
 const { DEFAULT_TARGET_WATER_ML, getTargetCalories, getBmr, getTargetWaterMl } = require('../utils/defaultSettings');
 const { genAI, generateContentWithFallback } = require('../config');
 const { buildGoalPaceAnalysis } = require('../services/summaries');
+const { buildAppleHealthPromptContext } = require('../utils/appleHealthPrompt');
 const { decrypt } = require('../utils/encryption');
 const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 // meals.raw_text is free text the user typed. It is sanitised on the way IN (see
@@ -677,6 +678,14 @@ router.get('/api/dashboard', async (req, res) => {
         const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
         const language = langRow ? langRow.value : 'pl';
 
+        // Everything else the phone sends through Health Auto Export: metrics without a card of
+        // their own (time in daylight, physical effort, new watch metrics) and events -
+        // symptoms, heart-rate notifications, menstrual cycle position. See
+        // utils/appleHealthSamples.js and utils/appleHealthEvents.js. Without these lines the
+        // advice would see none of it, however much the phone exports.
+        // Never throws - see utils/appleHealthPrompt.js.
+        const appleContext = await buildAppleHealthPromptContext(db, req.user.id, date, language);
+
         // Aktualna pogoda i pora dnia (Zadanie: algorytm ma znać i uwzględniać w
         // analizie bieżącą pogodę/czas - patrz utils/weatherContext.js). Ta porada
         // jest cache'owana do 4h (patrz hasValidCache powyżej), więc "aktualność"
@@ -724,7 +733,7 @@ ${weatherTimeContext}
 Oura Sleep/Readiness & Withings Body Composition:
 - Sleep Score: ${displaySleepScore !== null ? displaySleepScore + '/100' : 'no data'} (Duration: ${displaySleepDuration || 0}h, Deep: ${displaySleepDeep || 0}h, REM: ${displaySleepRem || 0}h)
 - Heart & Temp parameters: Resting HR (RHR): ${displayRhr || '-'} bpm, HRV: ${displayHrv || '-'} ms, Wrist temperature deviation: ${displayTempDev !== null ? displayTempDev + ' °C' : 'N/A'}
-- Respiration & SpO2: Respiratory rate: ${displayRespiratoryRate !== null ? displayRespiratoryRate + '/min' : 'N/A'}, SpO2: ${displaySpo2 !== null ? displaySpo2 + '%' : 'N/A'}, Wrist temperature: ${displayWristTemperature !== null ? displayWristTemperature + ' °C' : 'N/A'}
+- Respiration & SpO2: Respiratory rate: ${displayRespiratoryRate !== null ? displayRespiratoryRate + '/min' : 'N/A'}, SpO2: ${displaySpo2 !== null ? displaySpo2 + '%' : 'N/A'}, Wrist temperature: ${displayWristTemperature !== null ? displayWristTemperature + ' °C' : 'N/A'}${appleContext ? '\n' + appleContext : ''}
 - Stress (Oura): High stress: ${displayStressHighMinutes !== null ? displayStressHighMinutes + ' min' : 'no data'}, Recovery: ${displayStressRecoveryMinutes !== null ? displayStressRecoveryMinutes + ' min' : 'no data'}, Stress summary: ${displayStressSummary || 'N/A'}
 - Readiness Score: ${displayReadinessScore !== null ? displayReadinessScore + '/100' : 'no data'}
 - Body Composition: Weight: ${displayWeight !== null ? displayWeight + ' kg' : 'no data'}, Body fat percentage: ${displayFatRatio !== null ? displayFatRatio + '%' : 'no data'}, Muscle mass: ${displayMuscleMass !== null ? displayMuscleMass + ' kg' : 'no data'}
@@ -776,7 +785,7 @@ Your analysis MUST consider ALL data above (today's meals & micronutrients, acti
 4. Insights from weight, body composition, and circumference trends.
 5. Supplement intake: analyze supplement history and comment on regularity, timing, and usefulness.
 6. Blood pressure: evaluate if values are within range, and advise consulting a doctor if values are elevated (do not diagnose).
-7. Recovery and stress (Oura): SpO2, respiratory rate, wrist temperature, stress minutes.
+7. Recovery and stress (Oura): SpO2, respiratory rate, wrist temperature, stress minutes. If symptoms, heart-rate notifications or the menstrual cycle phase are listed, take them into account: do not read luteal-phase or menstrual weight gain as fat gain, adjust training intensity to symptoms, and for heart-rate notifications advise seeing a doctor if they recur - never diagnose.
 8. Calorie/sleep streaks: highlight consistency or suggest how to return to track.
 9. Body goal: assess if current trend, diet, and training are leading towards it.
 
@@ -823,7 +832,7 @@ ${weatherTimeContext}
 Dane gotowości, snu (Oura) i składu ciała (Withings):
 - Wynik Snu: ${displaySleepScore !== null ? displaySleepScore + '/100' : 'Brak danych'} (Czas trwania: ${displaySleepDuration || 0}h, Głęboki: ${displaySleepDeep || 0}h, REM: ${displaySleepRem || 0}h)
 - Parametry serca i temp: Tętno spoczynkowe: ${displayRhr || '-'} bpm, HRV: ${displayHrv || '-'} ms, Odchylenie temperatury ciała: ${displayTempDev !== null ? displayTempDev + ' °C' : 'brak'}
-- Oddech i utlenowanie krwi: Częstość oddechów: ${displayRespiratoryRate !== null ? displayRespiratoryRate + '/min' : 'brak'}, SpO2: ${displaySpo2 !== null ? displaySpo2 + '%' : 'brak'}, Temperatura nadgarstka: ${displayWristTemperature !== null ? displayWristTemperature + ' °C' : 'brak'}
+- Oddech i utlenowanie krwi: Częstość oddechów: ${displayRespiratoryRate !== null ? displayRespiratoryRate + '/min' : 'brak'}, SpO2: ${displaySpo2 !== null ? displaySpo2 + '%' : 'brak'}, Temperatura nadgarstka: ${displayWristTemperature !== null ? displayWristTemperature + ' °C' : 'brak'}${appleContext ? '\n' + appleContext : ''}
 - Stres (Oura): Wysoki stres: ${displayStressHighMinutes !== null ? displayStressHighMinutes + ' min' : 'brak danych'}, Regeneracja: ${displayStressRecoveryMinutes !== null ? displayStressRecoveryMinutes + ' min' : 'brak danych'}, Podsumowanie: ${displayStressSummary || 'brak'}
 - Wynik Gotowości (Readiness): ${displayReadinessScore !== null ? displayReadinessScore + '/100' : 'Brak danych'}
 - Skład Ciała: Waga: ${displayWeight !== null ? displayWeight + ' kg' : 'brak danych'}, Procent tłuszczu: ${displayFatRatio !== null ? displayFatRatio + '%' : 'brak danych'}, Masa mięśniowa: ${displayMuscleMass !== null ? displayMuscleMass + ' kg' : 'brak danych'}
@@ -874,7 +883,7 @@ Twoja analiza MUSI uwzględniać WSZYSTKIE dane podane powyżej (dzisiejsze posi
 4. Wnioski z trendu wagi, składu ciała i obwodów ciała z ostatnich pomiarów Withings oraz jakości snu, regeneracji i poziomu stresu z Oura (zwróć uwagę, czy obecny trend przybliża użytkownika do celu w dłuższej perspektywie 7/30 dni).
 5. Przyjęte suplementy: przeanalizuj CAŁĄ historię suplementów (nie tylko dziś/wczoraj, ale wszystkie dostępne wpisy z ostatnich dni) i skomentuj krótko ich przydatność, regularność przyjmowania i czas przyjmowania w odniesieniu do treningu i samopoczucia użytkownika.
 6. Ciśnienie tętnicze: jeśli dostępne są pomiary ciśnienia, oceń czy wartości są w normie (orientacyjnie <120/80 mmHg optymalnie, 120-129/<80 podwyższone prawidłowe, ≥130/80 nadciśnienie) i czy trend z ostatnich pomiarów jest stabilny, rosnący czy spadkowy - jeśli widzisz niepokojący trend lub wartości podwyższone, zalecaj konsultację lekarską (nie diagnozuj).
-7. Regeneracja i stres: jeśli dostępne są dane o stresie (Oura), SpO2, częstości oddechów czy temperaturze nadgarstka, skomentuj ogólny stan regeneracji organizmu i zasugeruj, czy potrzebny jest dzień odpoczynku.
+7. Regeneracja i stres: jeśli dostępne są dane o stresie (Oura), SpO2, częstości oddechów czy temperaturze nadgarstka, skomentuj ogólny stan regeneracji organizmu i zasugeruj, czy potrzebny jest dzień odpoczynku. Jeśli podano objawy, powiadomienia o tętnie lub fazę cyklu miesiączkowego, uwzględnij je: nie traktuj wzrostu wagi w fazie lutealnej lub w trakcie miesiączki jako przyrostu tkanki tłuszczowej, dostosuj intensywność treningu do objawów, a przy powiadomieniach o tętnie zalecaj konsultację z lekarzem, jeśli się powtarzają - nigdy nie stawiaj diagnozy.
 8. Konsekwencja (streaki): jeśli użytkownik ma passę trafiania w cel kaloryczny lub cel snu, doceń to krótko - jeśli passa jest przerwana lub bliska zera, zachęcająco zasugeruj, jak wrócić na właściwe tory.
 9. Cel sylwetki: jeśli użytkownik opisał swój cel sylwetki (i/lub dołączył zdjęcie referencyjne), odnieś dzisiejsze i historyczne dane DO TEGO CELU - oceń, czy obecne tempo, dieta i trening realnie do niego prowadzą, i jeśli nie, zaproponuj konkretną korektę. Jeśli cel nie został opisany, pomiń ten punkt bez komentowania jego braku.
 

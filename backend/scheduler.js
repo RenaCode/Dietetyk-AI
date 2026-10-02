@@ -280,6 +280,7 @@ async function runBackupThenCleanup(trigger) {
   console.log('[CRON] Running the periodic cleanup of old photos and logs...');
   await db.cleanupOldImages();
   await db.cleanupOldLogs();
+  await db.cleanupOldAppleHealthHours();
   return { ok: true, cleaned: true };
 }
 

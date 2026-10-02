@@ -787,6 +787,50 @@ const initDb = async () => {
     )
   `);
 
+  // Every Health Auto Export metric, whatever its name, folded into hourly buckets - see
+  // utils/appleHealthSamples.js for why buckets rather than raw samples. hour_start is the
+  // UTC hour as ISO text; `date` is the Warsaw calendar day of that hour, resolved once at
+  // write time, which is what every read filters on. `granularity` ('day' | 'sub') lets a
+  // change of time grouping on the phone replace the old rows instead of adding to them.
+  await run(`
+    CREATE TABLE IF NOT EXISTS apple_health_hourly (
+      user_id INTEGER NOT NULL,
+      metric TEXT NOT NULL,
+      hour_start TEXT NOT NULL,
+      date TEXT NOT NULL,
+      granularity TEXT NOT NULL DEFAULT 'sub',
+      sum REAL NOT NULL,
+      count INTEGER NOT NULL,
+      min REAL NOT NULL,
+      max REAL NOT NULL,
+      last REAL NOT NULL,
+      last_at TEXT NOT NULL,
+      units TEXT DEFAULT NULL,
+      PRIMARY KEY(user_id, metric, hour_start),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run('CREATE INDEX IF NOT EXISTS idx_apple_health_hourly_user_date ON apple_health_hourly(user_id, date)');
+
+  // Symptoms, heart-rate notifications and cycle tracking - see utils/appleHealthEvents.js.
+  // event_key is a hash of kind + start instant + name, so a re-sent export replaces events.
+  await run(`
+    CREATE TABLE IF NOT EXISTS apple_health_events (
+      user_id INTEGER NOT NULL,
+      event_key TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      start TEXT NOT NULL,
+      end TEXT DEFAULT NULL,
+      date TEXT NOT NULL,
+      name TEXT NOT NULL,
+      value TEXT DEFAULT NULL,
+      details_json TEXT DEFAULT NULL,
+      PRIMARY KEY(user_id, event_key),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  await run('CREATE INDEX IF NOT EXISTS idx_apple_health_events_user_date ON apple_health_events(user_id, kind, date)');
+
   // One-time backfill of health_metrics.water_ml_apple (see the column migration above).
   // The old webhook added each NEW sample to water_ml exactly once, so for a day that has
   // samples, the amount already inside water_ml that came from Apple is the sum of those
@@ -987,6 +1031,27 @@ const cleanupOldImages = async () => {
   }
 };
 
+// Hourly Apple Health buckets are kept for 180 days. The volume is 2 Gi and also holds 14
+// full backups, so the live database has to stay well under ~130 MB (audit 2026-10-02);
+// with every metric ticked, two users produce roughly 60-80 MB of buckets a year. Nothing
+// long-term is lost: the values the trends and insights use (SpO2, respiratory rate,
+// blood pressure, weight...) are copied into health_metrics, which is never pruned - only
+// the "other metrics" card for days older than half a year goes blank.
+const APPLE_HEALTH_HOURLY_RETENTION_DAYS = 180;
+const cleanupOldAppleHealthHours = async () => {
+  try {
+    const result = await run(
+      `DELETE FROM apple_health_hourly WHERE date < date('now', ?)`,
+      [`-${APPLE_HEALTH_HOURLY_RETENTION_DAYS} days`]
+    );
+    if (result.changes > 0) {
+      console.log(`[CLEANUP] Removed ${result.changes} Apple Health hourly buckets older than ${APPLE_HEALTH_HOURLY_RETENTION_DAYS} days.`);
+    }
+  } catch (err) {
+    console.error('[CLEANUP ERROR] Failed to clean up old Apple Health buckets:', err);
+  }
+};
+
 const cleanupOldLogs = async () => {
   try {
     const result = await run(`
@@ -1114,6 +1179,7 @@ module.exports = {
   cleanupExpiredSessions,
   cleanupOldImages,
   cleanupOldLogs,
+  cleanupOldAppleHealthHours,
   backupDatabase,
   run,
   get,

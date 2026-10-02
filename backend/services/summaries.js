@@ -3,6 +3,7 @@ const { genAI, generateContentWithFallback } = require('../config');
 const { getLocalDateString } = require('../utils/dates');
 const { sendMailgunEmail } = require('./mailgun');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
+const { buildAppleHealthPromptContext } = require('../utils/appleHealthPrompt');
 const { decrypt } = require('../utils/encryption');
 const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 // meals.raw_text is free text the user typed. It is sanitised on the way IN (see
@@ -693,6 +694,11 @@ async function sendDailySummaryForUser(userId, customEmail = null) {
 
   const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [userId]);
   const language = langRow ? langRow.value : 'pl';
+  // Every other Apple Health metric of the day (SpO2, time in daylight, new watch metrics) and
+  // the day's symptoms / heart-rate notifications / cycle position - see
+  // utils/appleHealthSamples.js and utils/appleHealthEvents.js. Without it the summary sees
+  // only the columned dozen, however much the phone sends. Never throws.
+  const appleExtrasLine = await buildAppleHealthPromptContext(db, userId, date, language);
 
     // Current weather and time of day (the model should know and account for both - see
     // utils/weatherContext.js), fetched automatically from Open-Meteo with nothing for the
@@ -725,7 +731,7 @@ ${weatherTimeContext}
 
 Oura Sleep/Readiness & Withings Body Composition:
 - Sleep Score: ${health.sleep_score !== null ? health.sleep_score + '/100' : 'no data'} (Duration: ${health.sleep_duration || 0}h, Deep: ${health.sleep_deep || 0}h, REM: ${health.sleep_rem || 0}h)
-- Heart & Temp parameters: Resting HR: ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms, Body temp deviation: ${health.temperature_deviation !== null ? health.temperature_deviation + ' °C' : 'none'}
+- Heart & Temp parameters: Resting HR: ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms, Body temp deviation: ${health.temperature_deviation !== null ? health.temperature_deviation + ' °C' : 'none'}${appleExtrasLine ? '\n' + appleExtrasLine : ''}
 - Readiness Score: ${health.readiness_score !== null ? health.readiness_score + '/100' : 'no data'}
 - Body Composition: Weight: ${health.weight !== null ? health.weight + ' kg' : 'no data'}, Body fat percentage: ${health.fat_ratio !== null ? health.fat_ratio + '%' : 'no data'}, Muscle mass: ${health.muscle_mass !== null ? health.muscle_mass + ' kg' : 'no data'}
 - Blood Pressure: ${health.blood_pressure_systolic !== null && health.blood_pressure_systolic !== undefined ? health.blood_pressure_systolic + '/' + health.blood_pressure_diastolic + ' mmHg' : 'no data'}
@@ -764,7 +770,7 @@ ${weatherTimeContext}
 
 Dane gotowości, snu (Oura) i składu ciała (Withings):
 - Wynik Snu: ${health.sleep_score !== null ? health.sleep_score + '/100' : 'Brak danych'} (Czas trwania: ${health.sleep_duration || 0}h, Głęboki: ${health.sleep_deep || 0}h, REM: ${health.sleep_rem || 0}h)
-- Parametry serca i temp: Tętno spoczynkowe: ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms, Odchylenie temperatury ciała: ${health.temperature_deviation !== null ? health.temperature_deviation + ' °C' : 'brak'}
+- Parametry serca i temp: Tętno spoczynkowe: ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms, Odchylenie temperatury ciała: ${health.temperature_deviation !== null ? health.temperature_deviation + ' °C' : 'brak'}${appleExtrasLine ? '\n' + appleExtrasLine : ''}
 - Wynik Gotowości (Readiness): ${health.readiness_score !== null ? health.readiness_score + '/100' : 'Brak danych'}
 - Skład Ciała: Waga: ${health.weight !== null ? health.weight + ' kg' : 'brak danych'}, Procent tłuszczu: ${health.fat_ratio !== null ? health.fat_ratio + '%' : 'brak danych'}, Masa mięśniowa: ${health.muscle_mass !== null ? health.muscle_mass + ' kg' : 'brak danych'}
 - Ciśnienie tętnicze: ${health.blood_pressure_systolic !== null && health.blood_pressure_systolic !== undefined ? health.blood_pressure_systolic + '/' + health.blood_pressure_diastolic + ' mmHg' : 'brak danych'}

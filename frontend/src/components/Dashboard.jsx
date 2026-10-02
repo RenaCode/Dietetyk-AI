@@ -4,6 +4,8 @@ import { formatHoursMins } from '../utils/format';
 import { t } from '../utils/i18n';
 import { useInsights } from '../utils/useInsights';
 import { getWarsawDateString } from '../utils/dates';
+import AppleHealthMetricsCard from './AppleHealthMetricsCard';
+import AppleHealthEventsCard from './AppleHealthEventsCard';
 
 // Insights are fetched with ONE batched request (/api/dashboard/insights).
 // Previously each of them had its own useEffect and its own fetch - opening the
@@ -4509,6 +4511,18 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             })()}
           </div>
         </div>
+
+        <AppleHealthMetricsCard
+          sessionToken={sessionToken}
+          selectedDate={selectedDate}
+          onSessionExpired={setSessionExpired}
+        />
+
+        <AppleHealthEventsCard
+          sessionToken={sessionToken}
+          selectedDate={selectedDate}
+          onSessionExpired={setSessionExpired}
+        />
 
         {/* TRENING (TRAINING) */}
         <div className="premium-card">

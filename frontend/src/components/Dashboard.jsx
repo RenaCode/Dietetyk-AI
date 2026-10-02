@@ -3886,6 +3886,15 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                 fontFamily: 'inherit'
               }}
             />
+            {/* Medications/supplements ticked "Taken" in Apple Health today. Read-only and kept
+                out of the textarea on purpose: saving the field must not copy them into the
+                manual list, where un-ticking them in Health could no longer remove them. The
+                backend merges both lists without duplicates (utils/supplementsMerge.js). */}
+            {summary?.supplements_apple && (
+              <div style={{ fontSize: '0.78rem', color: 'rgba(255,255,255,0.65)', lineHeight: 1.4 }}>
+                {t('Ze Zdrowia (przyjęte):')} <span style={{ color: '#fff' }}>{summary.supplements_apple}</span>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '0.75rem', color: supplementsMessage.type === 'success' ? 'var(--color-secondary)' : supplementsMessage.type === 'error' ? 'var(--danger)' : 'rgba(255,255,255,0.3)' }}>
                 {supplementsMessage.text || t('Zapisz, aby AI wzięło je pod uwagę')}

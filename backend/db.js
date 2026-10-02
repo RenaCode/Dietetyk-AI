@@ -722,6 +722,28 @@ const initDb = async () => {
 
   await addColumn("ALTER TABLE health_metrics ADD COLUMN supplements TEXT DEFAULT NULL");
 
+  // Supplements from two sources (2026-10-02): what the user types in Dietetyk
+  // (supplements_manual) and what they tick as "Taken" in the Apple Health Medications list
+  // (supplements_apple). `supplements` becomes their merged, de-duplicated value, so every
+  // existing reader of that column sees both - see utils/supplementsMerge.js. Rows written
+  // before this existed hold hand-typed text in `supplements`; it is copied into
+  // supplements_manual below, since the first Health sync of a day would otherwise recompute
+  // `supplements` from an empty manual list and erase what the user had typed.
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN supplements_manual TEXT DEFAULT NULL");
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN supplements_apple TEXT DEFAULT NULL");
+  // Run on every start, not only when the column is created: a row Apple Health has never
+  // touched (supplements_apple IS NULL) can only hold hand-typed text, so copying it is
+  // always correct, and repeating it is a no-op. A one-shot copy that failed or was skipped
+  // would have left the manual text to be erased by that day's first Health sync.
+  const copied = await run(
+    `UPDATE health_metrics SET supplements_manual = supplements
+     WHERE supplements_manual IS NULL AND supplements_apple IS NULL
+       AND supplements IS NOT NULL AND supplements != ''`
+  );
+  if (copied.changes > 0) {
+    console.log(`[DB MIGRATE] Copied ${copied.changes} supplements entries into supplements_manual.`);
+  }
+
   // Migration: blood pressure from Withings (the getmeas endpoint, meastype 9 = diastolic
   // and 10 = systolic; measured with a Withings blood pressure monitor synced through the
   // same account as weight and body composition, see syncWithings in services/sync.js).

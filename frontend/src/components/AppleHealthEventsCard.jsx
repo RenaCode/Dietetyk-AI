@@ -8,6 +8,11 @@ import { t } from '../utils/i18n';
 // a user who does not track a cycle or never gets a notification should not see empty boxes
 // for them.
 
+const MEDICATION_COLORS = {
+  Taken: 'var(--color-secondary, #34d399)',
+  Skipped: 'var(--warning, #fbbf24)'
+};
+
 const SEVERITY_COLORS = {
   Severe: 'var(--danger-light, #f87171)',
   Moderate: 'var(--warning, #fbbf24)'
@@ -63,13 +68,14 @@ export default function AppleHealthEventsCard({ sessionToken, selectedDate, onSe
   const symptoms = (data.events || []).filter((e) => e.kind === 'symptom' && e.value !== 'Not Present');
   const cycleEntries = (data.events || []).filter((e) => e.kind === 'cycle');
   const notifications = data.heartRateNotifications || [];
+  const medications = (data.events || []).filter((e) => e.kind === 'medication');
   const cycle = data.cycle;
-  if (symptoms.length === 0 && cycleEntries.length === 0 && notifications.length === 0 && !cycle) return null;
+  if (symptoms.length === 0 && cycleEntries.length === 0 && notifications.length === 0 && medications.length === 0 && !cycle) return null;
 
   return (
     <div className="premium-card">
       <div className="premium-title-row">
-        <span className="premium-title">{t("Objawy, cykl i serce")}</span>
+        <span className="premium-title">{t("Objawy, cykl, serce i leki")}</span>
       </div>
 
       {notifications.length > 0 && (
@@ -113,6 +119,23 @@ export default function AppleHealthEventsCard({ sessionToken, selectedDate, onSe
             </div>
           ))}
         </div>
+      )}
+
+      {medications.length > 0 && (
+        <>
+          <div style={sectionTitle}>{t('Leki i suplementy (Zdrowie)')}</div>
+          {medications.map((m) => (
+            <div key={`${m.start}-${m.name}`} style={row}>
+              <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                {m.name}
+                <span style={{ color: 'rgba(255,255,255,0.45)' }}> · {formatTime(m.start).split(', ').pop()}</span>
+              </span>
+              <span style={{ whiteSpace: 'nowrap', color: MEDICATION_COLORS[m.value] || 'rgba(255,255,255,0.5)' }}>
+                {m.value === 'Taken' ? '✓ ' : ''}{m.valueLabel || ''}
+              </span>
+            </div>
+          ))}
+        </>
       )}
 
       {symptoms.length > 0 && (

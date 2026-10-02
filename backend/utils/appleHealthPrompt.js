@@ -130,6 +130,28 @@ async function buildAppleHealthPeriodContext(db, userId, startDate, endDate, lan
         : `- Powiadomienia o tętnie z Apple Watch w okresie: ${notifications} (sygnał przesiewowy, nie diagnoza)`);
     }
 
+    // Adherence per medication/supplement over the period, from Health's dose log. Only
+    // doses the user actually answered (Taken/Skipped) count: "Not Logged" says nothing about
+    // whether the pill was taken, and counting it as missed would invent non-adherence.
+    const doses = await db.all(
+      `SELECT name, value FROM apple_health_events
+       WHERE user_id = ? AND kind = 'medication' AND date >= ? AND date <= ? AND value IN ('Taken', 'Skipped')`,
+      [userId, startDate, endDate]
+    );
+    if (doses.length > 0) {
+      const perMed = new Map();
+      for (const d of doses) {
+        const m = perMed.get(d.name) || { taken: 0, total: 0 };
+        m.total += 1;
+        if (d.value === 'Taken') m.taken += 1;
+        perMed.set(d.name, m);
+      }
+      const text = [...perMed].map(([n, m]) => `${n} ${m.taken}/${m.total}`).join(', ');
+      lines.push(en
+        ? `- Medications/supplements from Apple Health, doses taken/logged in the period: ${text}`
+        : `- Leki/suplementy z Apple Health, dawki przyjęte/zalogowane w okresie: ${text}`);
+    }
+
     const cycle = describeCycle(await getCycleDay(db, userId, endDate), language);
     if (cycle) {
       lines.push(en

@@ -12,8 +12,12 @@
 //   heartRateNotifications: { start, end, threshold?, heartRate: [{ hr, units, timestamp }],
 //                             heartRateVariation: [{ hrv, units, timestamp }] }
 //   cycleTracking:          { start, end, name: "Menstrual Flow", value: "Medium", isCycleStart? }
+//   medications:            { displayText: "Magnez 400 mg", nickname?, form: "Tablet", dosage?,
+//                             status: "Taken" | "Skipped" | "Not Logged" | ..., start,
+//                             scheduledDate?, isArchived, codings: [{ code, system }] }
 
 const crypto = require('crypto');
+const { recomputeSupplements, MAX_SUPPLEMENTS_LENGTH } = require('./supplementsMerge');
 const {
   parseHealthAutoExportDate,
   dateObjToLocalDateString,
@@ -23,7 +27,8 @@ const {
 const EVENT_KINDS = {
   symptoms: 'symptom',
   heartRateNotifications: 'heart_rate_notification',
-  cycleTracking: 'cycle'
+  cycleTracking: 'cycle',
+  medications: 'medication'
 };
 
 // Names and values come straight from the request body. The webhook is authenticated only by
@@ -91,9 +96,13 @@ function extractEvents(data) {
     if (!Array.isArray(list)) continue;
     for (const entry of list) {
       if (!entry || typeof entry !== 'object') continue;
-      const startParsed = parseHealthAutoExportDate(entry.start);
+      // A medication entry is one dose: `start` is when the medication was first added (it
+      // can be years ago) and `scheduledDate` is the dose this status belongs to. Dating the
+      // dose by `start` would file every "Taken" under the day the pill was set up.
+      const whenRaw = kind === 'medication' ? (entry.scheduledDate || entry.start) : entry.start;
+      const startParsed = parseHealthAutoExportDate(whenRaw);
       if (!startParsed) continue;
-      const endParsed = parseHealthAutoExportDate(entry.end);
+      const endParsed = kind === 'medication' ? null : parseHealthAutoExportDate(entry.end);
 
       let name;
       let value;
@@ -103,6 +112,17 @@ function extractEvents(data) {
       } else if (kind === 'symptom') {
         name = cleanText(entry.name);
         value = cleanText(entry.severity);
+      } else if (kind === 'medication') {
+        name = cleanText(entry.displayText);
+        value = cleanText(entry.status);
+        const coding = Array.isArray(entry.codings) ? entry.codings.find((c) => c && c.code) : null;
+        details = {
+          nickname: cleanText(entry.nickname),
+          form: cleanText(entry.form),
+          dosage: Number.isFinite(Number(entry.dosage)) ? Number(entry.dosage) : null,
+          code: coding ? cleanText(String(coding.code)) : null,
+          archived: entry.isArchived === true
+        };
       } else {
         name = cleanText(entry.name);
         value = cleanText(entry.value);
@@ -139,6 +159,30 @@ async function storeEvents(db, userId, events) {
       [userId, e.eventKey, e.kind, e.start, e.end, e.date, e.name, e.value,
         e.details ? JSON.stringify(e.details) : null]
     );
+  }
+}
+
+/**
+ * Rebuilds health_metrics.supplements_apple - the medications ticked "Taken" in Apple Health
+ * that day - for the given dates, then the merged `supplements` column (see
+ * utils/supplementsMerge.js). Always from the stored events, so a dose un-ticked on the phone
+ * and re-exported disappears instead of lingering.
+ */
+async function syncMedicationSupplements(db, userId, dates) {
+  for (const date of dates) {
+    const rows = await db.all(
+      `SELECT DISTINCT name FROM apple_health_events
+       WHERE user_id = ? AND kind = 'medication' AND date = ? AND value = 'Taken'
+       ORDER BY name`,
+      [userId, date]
+    );
+    const list = rows.map((r) => r.name).join(', ').slice(0, MAX_SUPPLEMENTS_LENGTH) || null;
+    await db.run(
+      `INSERT INTO health_metrics (user_id, date, supplements_apple) VALUES (?, ?, ?)
+       ON CONFLICT(user_id, date) DO UPDATE SET supplements_apple = excluded.supplements_apple`,
+      [userId, date, list]
+    );
+    await recomputeSupplements(db, userId, date);
   }
 }
 
@@ -203,6 +247,12 @@ const NAME_LABELS = {
 };
 
 const VALUE_LABELS = {
+  Taken: 'przyjęte',
+  Skipped: 'pominięte',
+  Snoozed: 'odłożone',
+  'Not Logged': 'niezalogowane',
+  'Not Interacted': 'niezalogowane',
+  'Notification Not Sent': 'niezalogowane',
   Mild: 'łagodne',
   Moderate: 'umiarkowane',
   Severe: 'silne',
@@ -390,8 +440,8 @@ async function getDailyEventsView(db, userId, date, language = 'pl') {
 }
 
 const KIND_PREFIX = {
-  pl: { symptom: 'Objawy', heart_rate_notification: 'Powiadomienia o tętnie', cycle: 'Cykl' },
-  en: { symptom: 'Symptoms', heart_rate_notification: 'Heart rate notifications', cycle: 'Cycle' }
+  pl: { symptom: 'Objawy', heart_rate_notification: 'Powiadomienia o tętnie', cycle: 'Cykl', medication: 'Pominięte dawki leków/suplementów' },
+  en: { symptom: 'Symptoms', heart_rate_notification: 'Heart rate notifications', cycle: 'Cycle', medication: 'Skipped medication/supplement doses' }
 };
 
 /**
@@ -404,6 +454,10 @@ function formatDailyEventsForPrompt({ events, cycle }, language = 'pl') {
   for (const kind of Object.keys(KIND_PREFIX[lang])) {
     const items = events
       .filter((e) => e.kind === kind && !ABSENCE_VALUES.has(e.value))
+      // Taken medications already reach the prompt through the supplements line (the
+      // merged health_metrics.supplements column); listing them here again would show the
+      // model every pill twice. Only doses the user explicitly skipped are worth adding.
+      .filter((e) => e.kind !== 'medication' || e.value === 'Skipped')
       .map((e) => {
         const name = lang === 'en' ? e.name : e.label;
         const value = lang === 'en' ? e.value : e.valueLabel;
@@ -432,6 +486,7 @@ module.exports = {
   describeCycle,
   getHeartRateNotifications,
   getDailyEventsView,
+  syncMedicationSupplements,
   formatDailyEventsForPrompt,
   cleanText
 };

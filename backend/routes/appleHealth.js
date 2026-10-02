@@ -11,7 +11,7 @@ const {
   activitySourceValues
 } = require('../utils/activitySources');
 const { extractSamples, storeSamples } = require('../utils/appleHealthSamples');
-const { extractEvents, storeEvents, EVENT_KINDS } = require('../utils/appleHealthEvents');
+const { extractEvents, storeEvents, EVENT_KINDS, syncMedicationSupplements } = require('../utils/appleHealthEvents');
 const { syncAppleColumns } = require('../utils/appleHealthColumns');
 
 // Webhook receiving data from the "Health Auto Export" iOS app - a bridge between Apple
@@ -828,6 +828,10 @@ router.post('/api/integrations/apple-health/:syncToken', async (req, res) => {
       const events = extractEvents(data);
       if (events.length > 0) await storeEvents(db, user.id, events);
       extras.events = events.length;
+      // Medications ticked "Taken" in Health feed the day's supplements list, which the
+      // advice, insights, summaries and PDF already read - see utils/supplementsMerge.js.
+      const medicationDates = [...new Set(events.filter((e) => e.kind === 'medication').map((e) => e.date))];
+      if (medicationDates.length > 0) await syncMedicationSupplements(db, user.id, medicationDates);
     };
 
     const dates = Object.keys(byDate);

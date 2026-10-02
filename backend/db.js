@@ -787,6 +787,11 @@ const initDb = async () => {
     )
   `);
 
+  // The value Apple Health last wrote into each health_metrics column it fills (JSON,
+  // {column: value}). Lets Apple refresh its own partial-day value while never overwriting a
+  // value Oura/Withings wrote - see the SOURCE RULE in utils/appleHealthColumns.js.
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN apple_columns_json TEXT DEFAULT NULL");
+
   // Every Health Auto Export metric, whatever its name, folded into hourly buckets - see
   // utils/appleHealthSamples.js for why buckets rather than raw samples. hour_start is the
   // UTC hour as ISO text; `date` is the Warsaw calendar day of that hour, resolved once at

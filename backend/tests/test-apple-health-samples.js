@@ -28,7 +28,8 @@ const express = require('express');
 const db = require('../db');
 const { getDailyMetrics, formatDailyMetricsForPrompt } = require('../utils/appleHealthSamples');
 const { columnBackedMetrics } = require('../utils/appleHealthColumns');
-const { buildAppleHealthPromptContext } = require('../utils/appleHealthPrompt');
+const { buildAppleHealthPromptContext, buildAppleHealthPeriodContext } = require('../utils/appleHealthPrompt');
+const { shiftDate } = require('../utils/dates');
 
 const USER_ID = 1;
 const DATE = '2026-09-20';
@@ -175,29 +176,38 @@ async function testRegroupingAndOffsetsDoNotDoubleCount(baseUrl, token) {
   assert(m && m.value === 30, `the same instant written with two UTC offsets counts once (got ${m && m.value})`);
 }
 
-async function testWatchFillsColumnsOnlyWithoutOwner(baseUrl, token) {
+async function testWatchFillsColumnsWithoutDuplicates(baseUrl, token) {
   // Existing cards and insights (spo2-trend, early-strain-alert...) read health_metrics, so
-  // watch SpO2 must land there - but never over Oura's value for a user who has Oura.
+  // watch SpO2 must land there - but never over a value Oura wrote, and never shown twice.
+  const read = () => db.get('SELECT spo2_percentage, respiratory_rate FROM health_metrics WHERE user_id = ? AND date = ?', [USER_ID, DATE]);
+  const spo2 = (a, b) => [{ name: 'blood_oxygen_saturation', units: '%', data: [{ date: AT('02:00:00'), qty: a }, { date: AT('03:00:00'), qty: b }] }];
   await clear();
   await db.run('DELETE FROM oauth_tokens WHERE user_id = ?', [USER_ID]);
-  await db.run('UPDATE health_metrics SET spo2_percentage = NULL, respiratory_rate = NULL WHERE user_id = ?', [USER_ID]);
-  const payload = [
-    { name: 'blood_oxygen_saturation', units: '%', data: [{ date: AT('02:00:00'), qty: 96 }, { date: AT('03:00:00'), qty: 98 }] },
-    { name: 'respiratory_rate', units: 'count/min', data: [{ date: AT('02:00:00'), qty: 14 }] }
-  ];
-  await postMetrics(baseUrl, token, payload);
-  let row = await db.get('SELECT spo2_percentage, respiratory_rate FROM health_metrics WHERE user_id = ? AND date = ?', [USER_ID, DATE]);
-  assert(row && row.spo2_percentage === 97 && row.respiratory_rate === 14, `without Oura the watch fills SpO2 and respiratory rate (got ${JSON.stringify(row)})`);
-  let others = await getDailyMetrics(db, USER_ID, DATE, { exclude: await columnBackedMetrics(db, USER_ID) });
-  assert(!others.some((m) => m.metric === 'blood_oxygen_saturation'), 'a column-backed metric is not listed twice in "other metrics"');
+  await db.run('UPDATE health_metrics SET spo2_percentage = NULL, respiratory_rate = NULL, apple_columns_json = NULL WHERE user_id = ?', [USER_ID]);
 
-  await db.run('UPDATE health_metrics SET spo2_percentage = 93 WHERE user_id = ? AND date = ?', [USER_ID, DATE]);
+  await postMetrics(baseUrl, token, [...spo2(96, 98), { name: 'respiratory_rate', units: 'count/min', data: [{ date: AT('02:00:00'), qty: 14 }] }]);
+  let row = await read();
+  assert(row && row.spo2_percentage === 97 && row.respiratory_rate === 14, `without Oura the watch fills SpO2 and respiratory rate (got ${JSON.stringify(row)})`);
+  const others = await getDailyMetrics(db, USER_ID, DATE, { exclude: await columnBackedMetrics(db, USER_ID) });
+  assert(!others.some((m) => m.metric === 'blood_oxygen_saturation' || m.metric === 'respiratory_rate'),
+    'a metric shown through its own card is never repeated in "other metrics"');
+
+  // Oura connected, but it delivered no SpO2 that day: the watch fills the gap...
   await db.run(`INSERT INTO oauth_tokens (user_id, service, access_token) VALUES (?, 'oura', 'x')`, [USER_ID]);
-  await postMetrics(baseUrl, token, payload);
-  row = await db.get('SELECT spo2_percentage FROM health_metrics WHERE user_id = ? AND date = ?', [USER_ID, DATE]);
-  assert(row.spo2_percentage === 93, `with Oura connected the watch never overwrites Oura's SpO2 (got ${row.spo2_percentage})`);
-  others = await getDailyMetrics(db, USER_ID, DATE, { exclude: await columnBackedMetrics(db, USER_ID) });
-  assert(others.some((m) => m.metric === 'blood_oxygen_saturation'), 'with Oura connected the watch SpO2 is still shown among "other metrics"');
+  await db.run('UPDATE health_metrics SET spo2_percentage = NULL, apple_columns_json = NULL WHERE user_id = ? AND date = ?', [USER_ID, DATE]);
+  await clear();
+  await postMetrics(baseUrl, token, spo2(94, 94));
+  row = await read();
+  assert(row.spo2_percentage === 94, `with Oura connected but silent, the watch fills an empty SpO2 (got ${row.spo2_percentage})`);
+  // ...and may refresh its OWN value as the day fills in...
+  await postMetrics(baseUrl, token, spo2(98, 98));
+  row = await read();
+  assert(row.spo2_percentage === 98, `the watch refreshes a value it wrote itself (got ${row.spo2_percentage})`);
+  // ...but once Oura writes its own value, the watch never touches it again.
+  await db.run('UPDATE health_metrics SET spo2_percentage = 93 WHERE user_id = ? AND date = ?', [USER_ID, DATE]);
+  await postMetrics(baseUrl, token, spo2(99, 99));
+  row = await read();
+  assert(row.spo2_percentage === 93, `after Oura wrote, the watch never overwrites it (got ${row.spo2_percentage})`);
   await db.run('DELETE FROM oauth_tokens WHERE user_id = ?', [USER_ID]);
 }
 
@@ -240,6 +250,36 @@ async function testAuditHardening(baseUrl, token) {
   }
 }
 
+async function testPeriodContext(baseUrl, token) {
+  // Training plan, weekly/monthly reports and long chat questions look at a PERIOD: they
+  // need daily means and a week-on-week trend, not one day's values.
+  await clear();
+  await db.run('DELETE FROM apple_health_events WHERE user_id = ?', [USER_ID]);
+  const days = [];
+  for (let i = 13; i >= 0; i--) days.push(new Date(Date.parse(`${DATE}T12:00:00Z`) - i * 86400000).toISOString().slice(0, 10));
+  const data = days.map((d, i) => ({ date: `${d} 10:00:00 +0200`, qty: i < 7 ? 100 : 130 }));
+  await postMetrics(baseUrl, token, [
+    { name: 'time_in_daylight', units: 'min', data },
+    { name: 'dietary_protein', units: 'g', data: [{ date: AT('08:00:00'), qty: 40 }] }
+  ]);
+  await fetch(`${baseUrl}/api/integrations/apple-health/${token}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: { symptoms: [
+      { start: AT('09:00:00'), end: AT('09:00:00'), name: 'Headache', severity: 'Mild' },
+      { start: AT('09:00:00', days[10]), end: AT('09:00:00', days[10]), name: 'Headache', severity: 'Moderate' }
+    ] } })
+  });
+  const ctx = await buildAppleHealthPeriodContext(db, USER_ID, days[0], DATE, 'pl');
+  assert(ctx && ctx.includes('śr. 115 min/dzień (14 dni)'), `period mean of daily totals (got: ${ctx})`);
+  assert(ctx.includes('ost. 7 dni vs poprzednie 7: +30%'), 'week-on-week trend is reported for a 14-day period');
+  assert(!ctx.includes('dietary_protein'), 'nutrients logged by other apps stay out of period prompts too');
+  assert(ctx.includes('Headache x2'), 'symptoms are counted over the period');
+  const short = await buildAppleHealthPeriodContext(db, USER_ID, shiftDate(DATE, -6), DATE, 'pl');
+  assert(short && !short.includes('vs poprzednie'), 'no trend claimed for a period shorter than two weeks');
+  const broken = { all: async () => { throw new Error('SQLITE_BUSY'); }, get: async () => { throw new Error('SQLITE_BUSY'); } };
+  assert(await buildAppleHealthPeriodContext(broken, USER_ID, days[0], DATE, 'pl') === null, 'period context returns null instead of throwing');
+}
+
 async function testLargeWeekIsAccepted(baseUrl, token) {
   await clear();
   // One week of per-minute samples for three series = 30 240 entries - above the old
@@ -280,8 +320,9 @@ async function main() {
     await testResendReplacesHour(started.baseUrl, user.sync_token);
     await testAggregationsAndUnits(started.baseUrl, user.sync_token);
     await testRegroupingAndOffsetsDoNotDoubleCount(started.baseUrl, user.sync_token);
-    await testWatchFillsColumnsOnlyWithoutOwner(started.baseUrl, user.sync_token);
+    await testWatchFillsColumnsWithoutDuplicates(started.baseUrl, user.sync_token);
     await testAuditHardening(started.baseUrl, user.sync_token);
+    await testPeriodContext(started.baseUrl, user.sync_token);
     await testLargeWeekIsAccepted(started.baseUrl, user.sync_token);
 
     console.log('\n🎉 APPLE HEALTH SAMPLE TESTS PASSED\n');

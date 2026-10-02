@@ -1,9 +1,9 @@
 const db = require('../db');
 const { genAI, generateContentWithFallback } = require('../config');
-const { getLocalDateString } = require('../utils/dates');
+const { getLocalDateString, shiftDate } = require('../utils/dates');
 const { sendMailgunEmail } = require('./mailgun');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
-const { buildAppleHealthPromptContext } = require('../utils/appleHealthPrompt');
+const { buildAppleHealthPromptContext, buildAppleHealthPeriodContext } = require('../utils/appleHealthPrompt');
 const { decrypt } = require('../utils/encryption');
 const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 // meals.raw_text is free text the user typed. It is sanitised on the way IN (see
@@ -504,6 +504,9 @@ async function sendWeeklySummaryForUser(userId, customEmail = null) {
 
   const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [userId]);
   const language = langRow ? langRow.value : 'pl';
+  // Every Apple Health metric averaged over the week, plus symptoms, heart-rate notifications
+  // and cycle position - see utils/appleHealthPrompt.js. Never throws.
+  const appleContext = await buildAppleHealthPeriodContext(db, userId, shiftDate(getLocalDateString(), -6), getLocalDateString(), language);
 
   let advicePrompt = '';
   if (language === 'en') {
@@ -541,7 +544,7 @@ Oura & Withings data (weekly averages):
 - Average weight: ${stats.avgWeight !== null ? stats.avgWeight + ' kg' : 'none'}
 - Average body fat percentage: ${stats.avgFatRatio !== null ? stats.avgFatRatio + '%' : 'none'}
 - Average muscle mass: ${stats.avgMuscleMass !== null ? stats.avgMuscleMass + ' kg' : 'none'}
-- Average blood pressure: ${stats.avgBpSystolic !== null ? `${stats.avgBpSystolic}/${stats.avgBpDiastolic} mmHg` : 'no data'}
+- Average blood pressure: ${stats.avgBpSystolic !== null ? `${stats.avgBpSystolic}/${stats.avgBpDiastolic} mmHg` : 'no data'}${appleContext ? '\n' + appleContext : ''}
 
 Write a professional, concise, and motivating weekly report in English, analyzing all the data provided above. Consider:
 1. Energy balance (adhering to targets).
@@ -589,7 +592,7 @@ Dane z Oura & Withings (średnie tygodniowe):
 - Średnia waga ciała: ${stats.avgWeight !== null ? stats.avgWeight + ' kg' : 'brak'}
 - Średni procent tłuszczu: ${stats.avgFatRatio !== null ? stats.avgFatRatio + '%' : 'brak'}
 - Średnia masa mięśniowa: ${stats.avgMuscleMass !== null ? stats.avgMuscleMass + ' kg' : 'brak'}
-- Średnie ciśnienie tętnicze: ${stats.avgBpSystolic !== null ? `${stats.avgBpSystolic}/${stats.avgBpDiastolic} mmHg` : 'brak danych'}
+- Średnie ciśnienie tętnicze: ${stats.avgBpSystolic !== null ? `${stats.avgBpSystolic}/${stats.avgBpDiastolic} mmHg` : 'brak danych'}${appleContext ? '\n' + appleContext : ''}
 
 Napisz profesjonalny, zwięzły i motywujący tygodniowy raport w języku polskim, analizując wszystkie dane podane powyżej. Weź pod uwagę:
 1. Bilans energetyczny (trzymanie celów).
@@ -860,6 +863,9 @@ async function sendMonthlySummaryForUser(userId, customEmail = null) {
 
   const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [userId]);
   const language = langRow ? langRow.value : 'pl';
+  // Every Apple Health metric averaged over the month, with the last-week trend,, plus symptoms, heart-rate notifications
+  // and cycle position - see utils/appleHealthPrompt.js. Never throws.
+  const appleContext = await buildAppleHealthPeriodContext(db, userId, shiftDate(getLocalDateString(), -29), getLocalDateString(), language);
 
   let advicePrompt = '';
   if (language === 'en') {
@@ -887,7 +893,7 @@ Oura & Withings data (monthly averages and change trend from start to end):
 - Average weight: ${stats.avgWeight !== null ? stats.avgWeight + ' kg' : 'none'} (change: ${stats.weightChange !== null ? (stats.weightChange > 0 ? '+' : '') + stats.weightChange + ' kg' : 'no data'})
 - Average body fat percentage: ${stats.avgFatRatio !== null ? stats.avgFatRatio + '%' : 'none'} (change: ${stats.fatRatioChange !== null ? (stats.fatRatioChange > 0 ? '+' : '') + stats.fatRatioChange + ' pp' : 'no data'})
 - Average muscle mass: ${stats.avgMuscleMass !== null ? stats.avgMuscleMass + ' kg' : 'none'} (change: ${stats.muscleMassChange !== null ? (stats.muscleMassChange > 0 ? '+' : '') + stats.muscleMassChange + ' kg' : 'no data'})
-- Average blood pressure: ${stats.avgBpSystolic !== null ? `${stats.avgBpSystolic}/${stats.avgBpDiastolic} mmHg` : 'no data'}
+- Average blood pressure: ${stats.avgBpSystolic !== null ? `${stats.avgBpSystolic}/${stats.avgBpDiastolic} mmHg` : 'no data'}${appleContext ? '\n' + appleContext : ''}
 
 Write a professional, concise, and motivating monthly report in English, analyzing all the data provided above. Consider:
 1. Overall monthly trend of energy balance (adhering to targets, consistency), including quality of diet (fiber, sugars, sodium).
@@ -922,7 +928,7 @@ Dane z Oura & Withings (średnie miesięczne i zmiana trendu od początku do ko�
 - Średnia waga ciała: ${stats.avgWeight !== null ? stats.avgWeight + ' kg' : 'brak'} (zmiana w miesiącu: ${stats.weightChange !== null ? (stats.weightChange > 0 ? '+' : '') + stats.weightChange + ' kg' : 'brak danych'})
 - Średni procent tłuszczu: ${stats.avgFatRatio !== null ? stats.avgFatRatio + '%' : 'brak'} (zmiana w miesiącu: ${stats.fatRatioChange !== null ? (stats.fatRatioChange > 0 ? '+' : '') + stats.fatRatioChange + ' pp' : 'brak danych'})
 - Średnia masa mięśniowa: ${stats.avgMuscleMass !== null ? stats.avgMuscleMass + ' kg' : 'brak'} (zmiana w miesiącu: ${stats.muscleMassChange !== null ? (stats.muscleMassChange > 0 ? '+' : '') + stats.muscleMassChange + ' kg' : 'brak danych'})
-- Średnie ciśnienie tętnicze w miesiącu: ${stats.avgBpSystolic !== null ? `${stats.avgBpSystolic}/${stats.avgBpDiastolic} mmHg` : 'brak danych'}
+- Średnie ciśnienie tętnicze w miesiącu: ${stats.avgBpSystolic !== null ? `${stats.avgBpSystolic}/${stats.avgBpDiastolic} mmHg` : 'brak danych'}${appleContext ? '\n' + appleContext : ''}
 
 Napisz profesjonalny, zwięzły i motywujący miesięczny raport w języku polskim, analizując wszystkie dane podane powyżej. Weź pod uwagę:
 1. Ogólny trend bilansu energetycznego w skali miesiąca (utrzymanie celów, konsekwencja), w tym jakość diety pod kątem błonnika, cukrów i sodu.

@@ -9,7 +9,7 @@ const { getCalorieBaseline, detectMealAnomalies } = require('../utils/mealAnomal
 const { DEFAULT_TARGET_WATER_ML, getTargetCalories, getBmr, getTargetWaterMl } = require('../utils/defaultSettings');
 const { genAI, generateContentWithFallback } = require('../config');
 const { buildGoalPaceAnalysis } = require('../services/summaries');
-const { buildAppleHealthPromptContext } = require('../utils/appleHealthPrompt');
+const { buildAppleHealthPromptContext, buildAppleHealthPeriodContext } = require('../utils/appleHealthPrompt');
 const { decrypt } = require('../utils/encryption');
 const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 // meals.raw_text is free text the user typed. It is sanitised on the way IN (see
@@ -683,8 +683,12 @@ router.get('/api/dashboard', async (req, res) => {
         // symptoms, heart-rate notifications, menstrual cycle position. See
         // utils/appleHealthSamples.js and utils/appleHealthEvents.js. Without these lines the
         // advice would see none of it, however much the phone exports.
-        // Never throws - see utils/appleHealthPrompt.js.
-        const appleContext = await buildAppleHealthPromptContext(db, req.user.id, date, language);
+        // Never throws - see utils/appleHealthPrompt.js. Today's values plus the 7-day picture,
+        // so the advice can tell a one-off from a trend.
+        const appleContext = [
+          await buildAppleHealthPromptContext(db, req.user.id, date, language),
+          await buildAppleHealthPeriodContext(db, req.user.id, shiftDate(date, -6), date, language)
+        ].filter(Boolean).join('\n');
 
         // Aktualna pogoda i pora dnia (Zadanie: algorytm ma znać i uwzględniać w
         // analizie bieżącą pogodę/czas - patrz utils/weatherContext.js). Ta porada
@@ -3891,7 +3895,7 @@ Available data from the last 24 hours (may or may not explain this deviation - O
 - Water today: ${context.waterMl ?? 'no data'} ml
 - Workouts (today/yesterday): ${JSON.stringify(context.workouts)}
 - Supplements today: ${context.supplements || 'no data'}
-
+${context.appleHealth ? '- Apple Health / Apple Watch:\n' + context.appleHealth + '\n' : ''}
 Write ONE to TWO concise sentences in English directly to the user, in the style "Your [metric] [dropped/increased] because [specific cause from data above]". If the data does not clearly point to a cause, write it openly (e.g., "Your [X] is lower than usual - today's data doesn't point to a clear cause, you might want to focus on recovery"). No headers, no lists, no generalities like "take care of your health".`;
   }
 
@@ -3905,7 +3909,7 @@ Dostępne dane z ostatniej doby (mogą, ale nie muszą wyjaśniać to odchylenie
 - Woda dziś: ${context.waterMl ?? 'brak danych'} ml
 - Treningi (dziś/wczoraj): ${JSON.stringify(context.workouts)}
 - Suplementy dziś: ${context.supplements || 'brak danych'}
-
+${context.appleHealth ? '- Apple Health / Apple Watch:\n' + context.appleHealth + '\n' : ''}
 Napisz JEDNO do DWÓCH zwięzłych zdań po polsku, bezpośrednio do użytkownika, w stylu "Twoja/Twój [metryka] [spadła/wzrosła], bo [konkretna przyczyna z danych powyżej]". Jeśli dane NIE wskazują jednoznacznie na przyczynę, napisz to otwarcie (np. "Twój [X] jest niższy niż zwykle - dane z dzisiaj nie wskazują jednoznacznej przyczyny, warto zwrócić uwagę na regenerację"). Bez nagłówków, bez list, bez ogólników typu "dbaj o zdrowie".`;
 }
 
@@ -3964,6 +3968,15 @@ router.get('/api/dashboard/ai-explanation-insight', async (req, res) => {
     const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
     const language = langRow ? langRow.value : 'pl';
     const context = await buildExplanationContext(req.user.id, today);
+    // Watch data from today and yesterday - symptoms, heart-rate notifications, cycle phase,
+    // SpO2, daylight - are often the actual cause of a bad night or a low HRV, and the
+    // explanation used to have no way to see them. Never throws. Part of the prompt, so part
+    // of the cache key: new watch data yields a fresh explanation.
+    context.appleHealth = [
+      await buildAppleHealthPromptContext(db, req.user.id, today, language),
+      await buildAppleHealthPromptContext(db, req.user.id, shiftDate(today, -1), language)
+    ].map((x, i) => (x ? `${i === 0 ? (language === 'en' ? 'Today' : 'Dziś') : (language === 'en' ? 'Yesterday' : 'Wczoraj')}:\n${x}` : null))
+      .filter(Boolean).join('\n');
     const prompt = buildExplanationPrompt(bestFinding, context, language);
     const promptKey = explanationPromptKey(prompt);
 
@@ -5246,6 +5259,11 @@ router.get('/api/dashboard/training-plan-insight', async (req, res) => {
     if (targetWeightKg) goalLines.push(language === 'en' ? `Weight target: ${targetWeightKg} kg` : `Cel wagowy: ${targetWeightKg} kg`);
     if (targetBodyFatPct) goalLines.push(language === 'en' ? `Target % body fat: ${targetBodyFatPct}%` : `Docelowy % tkanki tłuszczowej: ${targetBodyFatPct}%`);
 
+    // Everything the watch measured over the same lookback window (VO2 max, HRV RMSSD, heart
+    // rate, physical effort, walking speed, daylight...), plus symptoms, heart-rate
+    // notifications and cycle position - see utils/appleHealthPrompt.js. Never throws.
+    const appleContext = await buildAppleHealthPeriodContext(db, req.user.id, lookbackStart, today, language);
+
     const recoveryLines = [];
     if (avg7dReadiness != null) recoveryLines.push(language === 'en' ? `Oura Readiness (7d avg): ${avg7dReadiness} pts` : `Gotowość Oura (7d śr.): ${avg7dReadiness} pkt`);
     if (avg7dHrv != null) recoveryLines.push(language === 'en' ? `HRV (7d avg): ${avg7dHrv} ms` : `HRV (7d śr.): ${avg7dHrv} ms`);
@@ -5266,7 +5284,7 @@ Total: ${totalWorkouts} workouts (avg ${avgPerWeek}/week)
 ${workoutSummaryLines.length > 0 ? workoutSummaryLines.join('\n') : '- No workouts in this period'}
 
 === RECOVERY SIGNALS ===
-${recoveryLines.length > 0 ? recoveryLines.join('\n') : 'No recovery data'}
+${recoveryLines.length > 0 ? recoveryLines.join('\n') : 'No recovery data'}${appleContext ? '\n' + appleContext : ''}
 
 Respond EXCLUSIVELY in JSON format (no markdown, no explanation outside JSON):
 {
@@ -5295,7 +5313,7 @@ ${bodyLines.length > 0 ? bodyLines.join('\n') : 'Brak danych'}
 ${workoutSummaryLines.length > 0 ? workoutSummaryLines.join('\n') : '- Brak treningów w tym okresie'}
 
 === SYGNAŁY REGENERACJI ===
-${recoveryLines.length > 0 ? recoveryLines.join('\n') : 'Brak danych regeneracji'}
+${recoveryLines.length > 0 ? recoveryLines.join('\n') : 'Brak danych regeneracji'}${appleContext ? '\n' + appleContext : ''}
 
 Odpowiedz WYŁĄCZNIE w formacie JSON (bez markdown, bez objaśnień poza JSON):
 {

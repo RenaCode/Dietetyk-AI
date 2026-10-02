@@ -989,7 +989,12 @@ Używaj **pogrubienia** dla kluczowych liczb i fraz w Analizie i Rekomendacjach.
         stress_recovery_minutes: displayStressRecoveryMinutes,
         stress_summary: displayStressSummary,
         water_ml: health.water_ml || 0,
-        supplements: health.supplements || null,
+        // The editable field shows only what the user typed; Health medications are listed
+        // separately (read-only) so saving the field cannot copy them into the manual list.
+        // health.supplements (the merged value) is the fallback for a row written before the
+        // supplements_manual column existed and not yet migrated.
+        supplements: health.supplements_manual ?? (health.supplements_apple ? null : health.supplements) ?? null,
+        supplements_apple: health.supplements_apple || null,
         energy_level: health.energy_level ?? null,
         mood: health.mood ?? null,
         has_oura: !!hasOuraRow,

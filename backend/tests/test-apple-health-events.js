@@ -139,10 +139,59 @@ async function testPromptInjectionIsNeutralised(baseUrl, token) {
   assert(!/[<>]/.test(e.value), `value has no markup (got "${e.value}")`);
 }
 
+async function testMedications(baseUrl, token) {
+  await clear();
+  await db.run('UPDATE health_metrics SET supplements = NULL, supplements_manual = NULL, supplements_apple = NULL WHERE user_id = ?', [USER_ID]);
+  // The user also typed magnesium by hand in Dietetyk that day.
+  await db.run(`INSERT INTO health_metrics (user_id, date, supplements_manual) VALUES (?, ?, 'magnez, Kreatyna')
+                ON CONFLICT(user_id, date) DO UPDATE SET supplements_manual = excluded.supplements_manual`, [USER_ID, DATE]);
+  const dose = (status) => ({
+    medications: [
+      // `start` is when the medication was added to Health - years before the dose.
+      { displayText: 'Magnez 400 mg', start: '2024-01-10 08:00:00 +0100', scheduledDate: AT('08:00:00'), form: 'Tablet', status, isArchived: false, codings: [] },
+      { displayText: 'Witamina D3 2000 IU', start: '2024-01-10 08:00:00 +0100', scheduledDate: AT('08:00:00'), form: 'Capsule', status: 'Taken', isArchived: false, codings: [{ code: '11253', system: 'rxnorm' }] },
+      { displayText: 'Omega-3 1000 mg', start: '2024-01-10 08:00:00 +0100', scheduledDate: AT('20:00:00'), form: 'Capsule', status: 'Skipped', isArchived: false }
+    ]
+  });
+  const res = await post(baseUrl, token, dose('Taken'));
+  assert(res.status === 200 && res.body.events_stored === 3, `a medications-only payload is accepted (got ${res.status}, ${JSON.stringify(res.body)})`);
+
+  const { events } = await getDailyEvents(db, USER_ID, DATE);
+  assert(events.filter((e) => e.kind === 'medication').length === 3, 'each dose is filed under its SCHEDULED day, not the day the medication was added');
+
+  let row = await db.get('SELECT supplements, supplements_apple FROM health_metrics WHERE user_id = ? AND date = ?', [USER_ID, DATE]);
+  assert(row.supplements_apple === 'Magnez 400 mg, Witamina D3 2000 IU', `only "Taken" doses become the day's Health supplements (got ${row.supplements_apple})`);
+  assert(row.supplements === 'magnez, Kreatyna, Witamina D3 2000 IU',
+    `merged supplements keep the manual wording and count magnesium once (got ${row.supplements})`);
+
+  const line = formatDailyEventsForPrompt(await getDailyEvents(db, USER_ID, DATE), 'pl');
+  assert(line.includes('Omega-3 1000 mg (pominięte)') && !line.includes('Witamina D3'),
+    'the prompt adds skipped doses only - taken ones already reach it through the supplements line');
+
+  // Un-ticked on the phone and exported again: it must disappear, not linger.
+  await post(baseUrl, token, dose('Skipped'));
+  row = await db.get('SELECT supplements, supplements_apple FROM health_metrics WHERE user_id = ? AND date = ?', [USER_ID, DATE]);
+  assert(row.supplements_apple === 'Witamina D3 2000 IU', `a dose changed to Skipped leaves the Health list (got ${row.supplements_apple})`);
+  assert(row.supplements === 'magnez, Kreatyna, Witamina D3 2000 IU', 'the manual entry is untouched by Health changes');
+}
+
+async function testLegacySupplementsSurviveHealthSync(baseUrl, token) {
+  // A row from before the split: hand-typed text in `supplements` only.
+  const day = '2026-09-18';
+  await db.run(`INSERT INTO health_metrics (user_id, date, supplements) VALUES (?, ?, 'Ashwagandha')
+                ON CONFLICT(user_id, date) DO UPDATE SET supplements = excluded.supplements, supplements_manual = NULL, supplements_apple = NULL`, [USER_ID, day]);
+  await db.initDb(); // the startup migration copies it into supplements_manual
+  await post(baseUrl, token, { medications: [
+    { displayText: 'Magnez 400 mg', start: '2024-01-10 08:00:00 +0100', scheduledDate: `${day} 08:00:00 +0200`, status: 'Taken' }
+  ] });
+  const row = await db.get('SELECT supplements FROM health_metrics WHERE user_id = ? AND date = ?', [USER_ID, day]);
+  assert(row.supplements === 'Ashwagandha, Magnez 400 mg', `a pre-existing manual entry survives the first Health sync of its day (got ${row.supplements})`);
+}
+
 async function testUnknownArraysDoNotFail(baseUrl, token) {
   // ECG / State of Mind / Medications automations: not processed yet, but an export of them
   // must not be answered with an error that the phone reports as a failed export.
-  const res = await post(baseUrl, token, { stateOfMind: [{ start: AT('09:00:00'), valence: 0.3 }] });
+  const res = await post(baseUrl, token, { ecg: [{ start: AT('09:00:00'), classification: 'Sinus Rhythm' }] });
   assert(res.status === 200, `a payload of a not-yet-handled kind is acknowledged, not rejected (got ${res.status})`);
   const bad = await post(baseUrl, token, { nothing: 'here' });
   assert(bad.status === 400, `a payload with no array at all is still rejected (got ${bad.status})`);
@@ -161,6 +210,8 @@ async function main() {
     await testHeartRateNotifications(started.baseUrl, user.sync_token);
     await testCycleTracking(started.baseUrl, user.sync_token);
     await testPromptInjectionIsNeutralised(started.baseUrl, user.sync_token);
+    await testMedications(started.baseUrl, user.sync_token);
+    await testLegacySupplementsSurviveHealthSync(started.baseUrl, user.sync_token);
     await testUnknownArraysDoNotFail(started.baseUrl, user.sync_token);
 
     console.log('\n🎉 APPLE HEALTH EVENT TESTS PASSED\n');

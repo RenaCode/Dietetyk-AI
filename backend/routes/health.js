@@ -4,6 +4,7 @@ const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { invalidateAiExplanationCache } = require('../utils/aiExplanationCache');
 const { resolveQueryDate } = require('../utils/dates');
+const { recomputeSupplements } = require('../utils/supplementsMerge');
 const { getDailyMetrics } = require('../utils/appleHealthSamples');
 const { getDailyEventsView } = require('../utils/appleHealthEvents');
 const { columnBackedMetrics } = require('../utils/appleHealthColumns');
@@ -243,11 +244,14 @@ router.post('/api/supplements', requireAuth, async (req, res) => {
     return res.status(400).json({ error: `Lista suplementów jest za długa (maks. ${MAX_SUPPLEMENTS_LENGTH} znaków).` });
   }
   try {
+    // The user edits only their own list; the merged `supplements` column (manual + Apple
+    // Health medications) is recomputed from it - see utils/supplementsMerge.js.
     await db.run(`
-      INSERT INTO health_metrics (user_id, date, supplements)
+      INSERT INTO health_metrics (user_id, date, supplements_manual)
       VALUES (?, ?, ?)
-      ON CONFLICT(user_id, date) DO UPDATE SET supplements = excluded.supplements
+      ON CONFLICT(user_id, date) DO UPDATE SET supplements_manual = excluded.supplements_manual
     `, [req.user.id, date, trimmed]);
+    await recomputeSupplements(db, req.user.id, date);
     await invalidateAiExplanationCache(req.user.id, date);
     res.json({ success: true, supplements: trimmed });
   } catch (err) {

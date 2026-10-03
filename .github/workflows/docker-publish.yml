@@ -1,26 +1,24 @@
 name: Build and publish Docker images
 
 # Builds the backend and frontend images on every push to main and pushes them to the
-# GitHub Container Registry (ghcr.io). The production server only pulls them
-# (docker-compose pull) - it no longer holds source code or builds locally.
+# GitHub Container Registry (ghcr.io). Production (k3s) only pulls them - it holds no source
+# code and builds nothing.
 #
 # Building the backend and the frontend is split into two independent jobs
 # (build-backend, build-frontend). Thanks to the path filter (dorny/paths-filter) each
 # runs only when files belonging to that service changed - a backend-only change no longer
 # triggers a pointless rebuild and redeploy of the frontend image, and vice versa. A manual
-# run via workflow_dispatch always builds both images.
+# run via workflow_dispatch always builds both images. Both builds wait for their own tests
+# and for the E2E job (see test-e2e).
 #
-# After the images are built and pushed (CI), the deploy job (CD) connects over SSH to the
-# production server and refreshes the containers (docker compose pull + up -d).
-# Wymaga ustawienia w repo (Settings -> Secrets and variables -> Actions):
-#   VPS_HOST     - adres IP lub domena serwera (np. 185.201.112.104)
-#   VPS_USER     - a dedicated, UNPRIVILEGED SSH user (e.g. "deploy") belonging to the
-#                  "docker" group - deliberately NOT root. See the repository notes for
-#                  instructions on creating that account on the server.
-#   VPS_SSH_KEY  - the private SSH key (dedicated to CI/CD only), whose public counterpart
-#                  must be added to ~/.ssh/authorized_keys
-#                  konta "deploy" na serwerze)
-#   VPS_SSH_PORT - (optional) SSH port, 22 by default
+# There is no deploy job: update-git writes the new image tag into charts/dietetyk/values.yaml
+# and pushes it to main, and Argo CD syncs the cluster from there.
+#
+# Secrets (Settings -> Secrets and variables -> Actions):
+#   GITHUB_TOKEN - built in; logs in to ghcr.io to push the images.
+#   DEPLOY_PAT   - fine-grained PAT (Contents: Read & Write on this repository only) that
+#                  update-git pushes the tag bump with, because main is protected - see the
+#                  comment on that job.
 
 on:
   push:
@@ -75,7 +73,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       # A separate step purely to generate package-lock.json (needed by `npm audit`) - we do
       # not install the full node_modules, because it is not needed here: the Docker image
@@ -89,26 +87,20 @@ jobs:
       # --omit=dev - we audit production dependencies only (devDependencies such as nodemon
       # never reach the Docker image).
       #
-      # The result is filtered through scripts/check-npm-audit.js, because `npm audit` on its
-      # own does not distinguish a vulnerability in runtime code from one in tooling used only
-      # during `npm ci` to compile a native module (node-gyp, tar, http-proxy-agent,
-      # @tootallnate/once). An attempt to "fix" this by bumping sqlite3 to a new major version
-      # actually broke production: the prebuilt binary required a newer glibc than node:20-slim
-      # provides (ERR_DLOPEN_FAILED). Those specific packages are therefore explicitly
-      # whitelisted with a justification - any OTHER high or critical vulnerability, meaning a
-      # real runtime dependency, still blocks the pipeline.
-      #
-      # "sqlite3" is on that list too (alongside the node-gyp/tar tooling itself): `npm audit`
-      # propagates risk from the whole chain
-      # from a transitive dependency up to the direct dependency in package.json when the only
-      # suggested fix requires bumping that one. That is why sqlite3 itself comes out as
-      # "high" - still the same already-documented build-time-only problem, not a new, real
-      # runtime vulnerability.
+      # The result goes through scripts/check-npm-audit.js, which can whitelist a named
+      # package with a justification. The list is currently EMPTY: the exceptions it used to
+      # hold (tar, @tootallnate/once, http-proxy-agent, make-fetch-happen, cacache, node-gyp,
+      # sqlite3, brace-expansion, ip-address) all came from the sqlite3@5 -> node-gyp@8 chain
+      # and disappeared with sqlite3@6. They were also not "build-time only" as claimed - tar
+      # sits in the production image's /app/node_modules. sqlite3@6's prebuilt binary needs
+      # glibc 2.38, which is why the backend image is on node:24-trixie-slim, not the default
+      # (bookworm) node:24-slim - see docker/backend.Dockerfile. Any high/critical finding in a
+      # production dependency blocks the pipeline; add an exception only with a reason here.
       - name: npm audit (backend)
         working-directory: ./backend
         run: |
           npm audit --omit=dev --json > /tmp/audit-backend.json || true
-          node ../scripts/check-npm-audit.js /tmp/audit-backend.json "tar,@tootallnate/once,http-proxy-agent,make-fetch-happen,cacache,node-gyp,sqlite3,brace-expansion,ip-address"
+          node ../scripts/check-npm-audit.js /tmp/audit-backend.json ""
 
       # Testy jednostkowe backendu (tests/test-encryption.js, test-rate-limit.js,
       # test-chat.js, test-meals.js - see the "test" script in package.json). These files
@@ -151,10 +143,11 @@ jobs:
 
   build-backend:
     name: Build and push image (backend)
-    needs: [changes, test-backend]
+    needs: [changes, test-backend, test-e2e]
     if: |
       (needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') &&
-      needs.test-backend.result == 'success'
+      needs.test-backend.result == 'success' &&
+      needs.test-e2e.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kodu
@@ -226,7 +219,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install dependencies (lockfile)
         working-directory: ./frontend
@@ -245,10 +238,11 @@ jobs:
 
   build-frontend:
     name: Build and push image (frontend)
-    needs: [changes, test-frontend]
+    needs: [changes, test-frontend, test-e2e]
     if: |
       (needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch') &&
-      needs.test-frontend.result == 'success'
+      needs.test-frontend.result == 'success' &&
+      needs.test-e2e.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kodu
@@ -301,9 +295,17 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=frontend
 
+# E2E gates publishing: both build jobs list test-e2e in `needs` and require it to succeed,
+# so an image that failed E2E never reaches ghcr.io and never gets its tag written into
+# values.yaml (sha-73e4afe went to production from a run with red E2E, because this job used
+# to run alongside the builds and nothing waited for it). A failed or timed-out E2E skips
+# the builds, which in turn skips update-git through its own `if` - the run ends red instead
+# of waiting. timeout-minutes caps a hung browser or webServer (the default is 6 hours);
+# a clean run takes a few minutes, retries included.
   test-e2e:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout kodu
         uses: actions/checkout@v5
@@ -311,7 +313,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       - name: Install dependencies (backend)
         working-directory: ./backend

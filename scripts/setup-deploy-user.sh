@@ -14,7 +14,7 @@
 #   2. Moves (or clones, if it does not exist yet) the repository into /opt/dietetyk-ai - the
 #      same path that is hardcoded
 #   3. Sets the owner of /opt/dietetyk-ai to the "deploy" user, and the data directory to
-#      uid:gid 1000:1000 - the "node" user built into the node:20-slim image the backend runs
+#      uid:gid 1000:1000 - the "node" user built into the node:24-trixie-slim image the backend runs
 #      on (see docker/backend.Dockerfile) rather than to "deploy". Without this the backend
 #      has no write access
 #   4. Prepares the "deploy" user's ~/.ssh/ directory for the CI/CD key (it does not generate

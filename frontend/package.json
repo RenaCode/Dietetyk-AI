@@ -10,7 +10,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "check-i18n": "node scripts/check-i18n.js",
-    "test": "node --test src/utils/"
+    "test": "node --test src/utils/*.test.js"
   },
   "dependencies": {
     "react": "^18.3.1",

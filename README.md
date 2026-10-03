@@ -2,7 +2,7 @@
 
 An aesthetically designed web application that analyzes your diet based on meals you enter (using **Gemini AI**), tracks health metrics from **Oura Ring** and **Withings** (smart scale and body composition) sensors, and visualizes trends on interactive charts.
 
-The application supports full HTTPS encryption (SSL Let's Encrypt) and is ready to be deployed on a VPS server using Docker Compose.
+Production runs on k3s, deployed by Argo CD from the Helm chart in `charts/dietetyk` — see [Deployment](#️-deployment-k3s--argo-cd).
 
 ---
 
@@ -19,8 +19,8 @@ The application supports full HTTPS encryption (SSL Let's Encrypt) and is ready 
 5.  **Daily Gemini AI Analysis**: The model analyzes your meals, sleep metrics from Oura, and body composition from Withings to provide personalized recommendations.
 6.  **Admin Panel**: Allows dynamic configuration of API credentials for Oura and Withings directly from the user interface (no container restart required).
 7.  **Apple Health Synchronization**: Steps, active energy (calories), and active minutes can be imported from Apple Health via a webhook—configure this in the Settings tab.
-8.  **Google Fit Synchronization**: Similar to Apple Health, the app can fetch steps and calories from Google Fit (hourly sync via OAuth2, without needing an intermediate app)—connect your account from the Settings tab.
-9.  **Google Account Linking**: Connect an existing password-based account with your Google account in the Settings tab to sign in with a single click without losing your meal history and settings.
+8.  **Google Fit Synchronization**: Similar to Apple Health, the app can fetch steps and calories from Google Fit (hourly sync via OAuth2, without needing an intermediate app)—connect your account from the Settings tab. Needs the Google client configured in the Admin Panel; without it the option is hidden.
+9.  **Google Account Linking**: Connect an existing password-based account with your Google account in the Settings tab to sign in with a single click without losing your meal history and settings. Like Google Fit, this and the "Sign in with Google" button appear only once an administrator has configured the Google client.
 10. **Energy Battery**: A single 0–100 number at the top of the dashboard answering "how much fuel do I have today". It charges overnight from sleep quality, duration and readiness, drains through the day from actual training load (relative to your own 30-day median, not a population norm) and from time awake, takes a hit from accumulated **sleep debt** over the last 14 nights, and adjusts for stress vs. recovery minutes. Every card shows its own breakdown, so the number is checkable rather than magic. See `/api/dashboard/energy-battery`.
 
 > [!NOTE]
@@ -86,14 +86,14 @@ About 150 dictionary entries match no string in the code. They are pre-written t
 *   **Backend**: Node.js + Express
 *   **Database**: SQLite (local file in the `/data` directory mounted as a volume)
 *   **Frontend**: React (Vite) styled in a modern dark theme with glassmorphism effects
-*   **Containerization**: Docker + Docker Compose (Nginx with SSL reverse proxy + Node.js API + sqlite-web on port 8081)
+*   **Containerization**: two images on GHCR (Node.js API, nginx serving the SPA), deployed to k3s by a Helm chart and Argo CD
 
 ---
 
 ## 💻 How to Run Locally (Development)
 
 ### Requirements
-*   **Node.js** (version 18+) and **npm** installed
+*   **Node.js 24** (the version CI and the images use; sqlite3@6 needs at least 20.17) and **npm** installed
 
 ### Quick Start
 1.  Grant execution permissions to the startup script and run it:
@@ -114,135 +114,82 @@ About 150 dictionary entries match no string in the code. They are pre-written t
 
 ---
 
-## ☁️ Deployment on a VPS Server (Docker Compose)
+## ☸️ Deployment (k3s + Argo CD)
 
-The backend and frontend images are built and published automatically by GitHub Actions (`.github/workflows/docker-publish.yml`) on every push to `main` and pushed to `ghcr.io`. The production server **does not build code locally**—it only needs `docker-compose.yml`, environment configuration files (`.env`), and the `./data` directory to pull and start the pre-built images.
+Production runs on a single-node **k3s** cluster on the RenaCode VPS, deployed by **Argo CD** from the Helm chart in [`charts/dietetyk`](charts/dietetyk). Nothing is built or edited on the server: the code reaches production only through `main`.
 
-> [!IMPORTANT]
-> The application directory path on the server is always `/opt/dietetyk-ai` (lowercase), regardless of the fact that the repository on GitHub is named `Dietetyk-AI`.
-> Specify this path explicitly as an argument when cloning with `git clone` (as shown below)—never let git name the directory automatically based on the repository name, as it will create a casing mismatch. The `/opt/dietetyk-ai` path is hardcoded in the CD deployment jobs and in `scripts/setup-deploy-user.sh`.
+### Pipeline: push → images → tag bump → Argo CD
 
-### Step 0: First Run - Dedicated `deploy` User
-If this is the first server configuration (or you are migrating from an older, less secure setup where CI/CD logged in as `root`), run the script `scripts/setup-deploy-user.sh` as root on the VPS. It creates an unprivileged user `deploy` (in the `docker` group), moves the application to `/opt/dietetyk-ai`, and sets the permissions of the `./data` directory for the unprivileged `node` user inside the backend container. Details and subsequent manual steps (Secrets in GitHub, SSH key authorization) are described in the comments at the beginning of the script.
+1.  **CI** (`.github/workflows/docker-publish.yml`) runs on every push to `main`:
+    *   `test-backend` — `npm audit` of production dependencies (high/critical blocks the run, no exceptions are whitelisted) and `npm test`;
+    *   `test-frontend` — `npm audit` of the frontend;
+    *   `test-e2e` — Playwright against a throwaway database.
+2.  **Images**: `build-backend` / `build-frontend` start only when their own tests **and** E2E passed, and only for the service whose files changed (`dorny/paths-filter`; `workflow_dispatch` builds both). They push `ghcr.io/renacode/dietetyk-ai-{backend,frontend}` tagged `latest` and `sha-<commit>`. Base images are pinned by digest (Node 24 LTS on Debian trixie for the backend — see the comment in `docker/backend.Dockerfile` on why not bookworm).
+3.  **Tag bump**: `update-git` writes `sha-<commit>` into `charts/dietetyk/values.yaml` and pushes `chore: update image tags to sha-… [skip ci]` to `main` with the `DEPLOY_PAT` secret (`main` is protected; the PAT is the bypass).
+4.  **Argo CD** (Application `dietetyk` in the `renacode-infra` repo: `path: charts/dietetyk`, namespace `default`, automated sync with prune + self-heal) sees the new tag and rolls the pods.
 
-### Step 1: Clone the Repository on the VPS
-This is only needed to obtain `docker-compose.yml`, `docker/nginx.conf`, and `backend/.env`—the application code is already packaged inside the images on `ghcr.io`.
-```bash
-git clone https://github.com/RenaCode/Dietetyk-AI.git /opt/dietetyk-ai
-cd /opt/dietetyk-ai
-```
+A red E2E therefore stops the release before anything reaches the registry or `values.yaml`.
 
-### Step 2: Prepare Let's Encrypt Certificates
-Install `certbot` on the host VPS and generate a certificate for your domain:
-```bash
-apt-get update && apt-get install -y certbot
-certbot certonly --standalone -d dietetyk.renacode.com
-```
+### What the chart deploys
 
-### Step 3: Environment Configuration File `.env` on VPS
-Create `/opt/dietetyk-ai/.env` and define paths to the generated certificates:
+| Object | Notes |
+|---|---|
+| backend `Deployment` | Node API on :3000, runs as uid 1000, liveness/readiness on `GET /api/healthz`. Data on a PVC (`persistence`, `local-path`) mounted at `/app/data`. |
+| frontend `Deployment` | nginx serving the built SPA and proxying `/api` to the backend; its config is the ConfigMap in `templates/nginx-configmap.yaml`, **not** `docker/nginx.conf`. |
+| `Ingress` | Traefik, host `dietetyk.renacode.com`, TLS from cert-manager (`letsencrypt-prod`). |
+| `NetworkPolicy` | On by default (`networkPolicy.enabled`): the backend accepts only the frontend pod on :3000, the frontend only Traefik on :80. Egress (`networkPolicy.egress`) blocks the home network reachable through the node's WireGuard tunnel (`192.168.3.0/24`, `10.13.13.0/24`); everything else outbound is open. Rollback: `enabled: false` (or `egress.enabled: false` for egress alone) and let Argo CD sync. Covered by `backend/tests/test-chart.js`. |
+| sqlite-web sidecar | Opt-in (`dbImage.enabled`, off): it has no authentication. Enable only for a debugging session and reach it with `kubectl port-forward`. |
+
+### Backend configuration (secrets)
+
+The backend `.env` is the `dotenv` key of the Kubernetes Secret `dietetyk-backend-secret`, mounted at `/app/.env`. It is created by hand on the cluster, never committed:
+
 ```env
-SSL_CERT_PATH=/etc/letsencrypt/live/dietetyk.renacode.com/fullchain.pem
-SSL_KEY_PATH=/etc/letsencrypt/live/dietetyk.renacode.com/privkey.pem
-```
-In the directory `/opt/dietetyk-ai/backend/.env`, create the configuration for the backend:
-```env
-PORT=3000
 GEMINI_API_KEY=your_gemini_api_key
 GEMINI_MODEL=gemini-2.5-flash
-APP_PASSWORD=<a long random string, not a guessable phrase>
-OAUTH_STATE_SECRET=<a second, different random string>
+APP_PASSWORD=<openssl rand -hex 32>
+OAUTH_STATE_SECRET=<a second, different openssl rand -hex 32>
 ```
 
 > [!NOTE]
-> `GEMINI_MODEL` is optional — omit it and the backend uses `gemini-2.5-flash`. Earlier revisions of this README recommended `gemini-1.5-flash`, which returns 404 in the current SDK; `config.js` silently substitutes the working model and logs a warning at startup, so existing `.env` files keep working, but update the value to clear the warning.
+> `GEMINI_MODEL` is optional — omit it and the backend uses `gemini-2.5-flash`. Earlier revisions of this README recommended `gemini-1.5-flash`, which returns 404 in the current SDK; `config.js` substitutes the working model and logs a warning at startup.
 >
-> `APP_PASSWORD` is the key material for encrypting integration secrets at rest (`utils/encryption.js`) — **not** a login password. Changing it makes previously stored Oura/Withings/Gemini credentials undecryptable, so it is rotated together with a re-encryption pass: see [`backend/docs/secret-rotation.md`](backend/docs/secret-rotation.md).
+> `APP_PASSWORD` is the key material for encrypting integration secrets at rest (`utils/encryption.js`) — **not** a login password. Changing it makes stored Oura/Withings/Gemini credentials undecryptable, so it is rotated together with a re-encryption pass: see [`backend/docs/secret-rotation.md`](backend/docs/secret-rotation.md).
 >
-> `OAUTH_STATE_SECRET` signs the `state` parameter of the OAuth flow and is **required** — the backend refuses to start without it. Generate both with `openssl rand -hex 32`, and make them different values: they used to be one secret, which meant a single leaked string both decrypted the database and let an attacker forge an OAuth link onto someone else's account.
->
-> On the live deployment this file is **not** edited on the host: production runs on k3s, and the whole `.env` is the `dotenv` key of the Kubernetes Secret `dietetyk-backend-secret`, mounted at `/app/.env` (`charts/dietetyk/templates/backend-deployment.yaml`). Adding or changing either variable there — and the required re-encryption pass when `APP_PASSWORD` changes — is [`backend/docs/secret-rotation.md`](backend/docs/secret-rotation.md).
-The `./data` directory must be writable by uid 1000 (`chown -R 1000:1000 ./data`)—the backend container runs internally as the unprivileged `node` user, not root.
+> `OAUTH_STATE_SECRET` signs the `state` parameter of the OAuth flows and is **required** — the backend refuses to start without it. Keep it different from `APP_PASSWORD`.
 
-### Step 4: Run the Containers
-```bash
-docker compose pull
-docker compose up -d
-```
-After this step, every subsequent push to `main` will automatically refresh the containers via CI/CD (the `deploy` job in `docker-publish.yml`)—manual `docker compose pull/up` is only required for the first run.
-The application will run on ports `80` and `443` (with automatic redirection to HTTPS).
-The optional SQLite database web browser (sqlite-web) is only accessible **locally** on the VPS at `http://127.0.0.1:8081` (intentionally kept private as it does not have built-in authorization). Remote access requires an SSH tunnel from your computer:
-```bash
-ssh -L 8081:localhost:8081 deploy@<VPS_IP>
-```
-and then opening `http://localhost:8081` locally.
+### Images must stay pullable
 
-### Step 5: Database Backups
-The backend automatically creates backups of the SQLite database (at startup and every 24 hours, keeping the newest copy of each of the last 14 days) in `./data/backups` on the VPS — see `backupDatabase` in `backend/db.js`.
-
-**Every backup is verified before it counts.** Right after `VACUUM INTO` writes the copy, the backend reopens it read-only and runs `PRAGMA quick_check` plus a row-count sanity check. A copy that fails is deleted immediately and rotation is skipped, so a run of bad backups can never evict the last good ones. Without this, rotation would eventually leave you with 14 unreadable files and you'd only find out during a restore.
-
-### Offsite copies (required for real protection)
-
-Local backups sit on the same disk as the database, so they protect against corruption and bad migrations but **not** against host/disk failure. Point the backup script at a remote destination:
-
-```bash
-# /etc/cron.d/dietetyk-backup
-0 3 * * * root OFFSITE_DEST=user@backup-host:/backups/dietetyk-ai/ /opt/dietetyk-ai/scripts/vps_backup_db.sh >> /var/log/db_backup.log 2>&1
-```
-
-`scripts/vps_backup_db.sh` makes a consistent copy (`VACUUM INTO` — never a plain `cp` of a live database, which can produce a torn, unrestorable file), verifies it, ships it offsite, and only then rotates old copies. If `OFFSITE_DEST` is unset it still works, but prints a warning that copies exist in one place only.
-
-### Testing that a backup actually restores
-
-```bash
-scripts/verify_backup.sh                      # checks the newest backup
-scripts/verify_backup.sh /path/to/copy.db     # checks a specific file
-```
-
-Exit code 0 means the file opens, passes an integrity check, and its core tables (`users`, `meals`, `health_metrics`, `settings`) are readable and non-empty. Worth running from cron as an independent watchdog — a backup nobody has ever opened is not a backup:
-
-```bash
-0 6 * * * root /opt/dietetyk-ai/scripts/verify_backup.sh || mail -s "Dietetyk AI: BACKUP USZKODZONY" you@example.com
-```
-
----
-
-## ☸️ Kubernetes (Helm chart)
-
-The chart in `charts/dietetyk` deploys the backend and frontend. The sqlite-web browser is an opt-in sidecar (`dbImage.enabled`, off by default): it has no authentication and would be reachable from every pod in the cluster, so enable it only for a debugging session and reach it with `kubectl port-forward`. CI keeps the image tags in `values.yaml` pointing at the latest built `sha-<commit>`.
-
-### Registry credentials — required
-
-The `ghcr.io/renacode/*` packages are **private**. A private GHCR package issues no anonymous pull token, so without credentials the kubelet gets HTTP 401 and both pods sit in **`ImagePullBackOff`**.
-
-This is easy to misdiagnose as a wrong or missing image tag — the symptom looks identical. To tell them apart, check whether the registry answers at all:
+The cluster has **no** `imagePullSecrets` (`values.yaml`: `imagePullSecrets: []`): it relies on the `ghcr.io/renacode/dietetyk-ai-*` packages being **public**. If they turn private, new pods sit in `ImagePullBackOff` while the old ones keep serving — a failed deploy that does not look like an outage. To check:
 
 ```bash
 curl -s "https://ghcr.io/token?scope=repository:renacode/dietetyk-ai-backend:pull&service=ghcr.io"
 ```
 
-`{"errors":[{"code":"UNAUTHORIZED"...}]}` means the package is private (credentials problem). A response containing a `token` means the package is public and the problem is the tag instead.
-
-Docker Compose on the VPS does not hit this, because a one-off `docker login ghcr.io` leaves credentials in `~/.docker/config.json`. Kubernetes has no equivalent ambient login — every namespace needs its own pull secret:
-
-```bash
-kubectl create secret docker-registry ghcr-pull \
-  --docker-server=ghcr.io \
-  --docker-username=<github-username> \
-  --docker-password=<PAT with read:packages scope> \
-  --namespace=<release namespace>
-```
-
-The secret name is referenced by `imagePullSecrets` in `values.yaml`. If you would rather not manage a secret, make both packages public at `https://github.com/users/renacode/packages` and set `imagePullSecrets: null` — the images hold application code but no secrets, so this is a deliberate trade-off rather than a workaround.
+A `token` in the answer means the package is public and the problem is elsewhere (e.g. the tag); `UNAUTHORIZED` means it is private. Either make it public again, or create a pull secret (`scripts/create-ghcr-secret.sh`) and list it in `imagePullSecrets`.
 
 ### Verifying a deploy
 
 ```bash
-helm upgrade --install dietetyk charts/dietetyk -n <namespace>
-kubectl get pods -n <namespace> -w
-kubectl describe pod <pod> -n <namespace> | grep -A5 Events   # shows the real pull error
+kubectl -n default get pods -l app.kubernetes.io/instance=dietetyk -w
+kubectl -n default describe pod <pod> | grep -A5 Events   # the real pull/probe error
+kubectl -n default logs deploy/dietetyk-backend --tail=50
+curl -s https://dietetyk.renacode.com/api/healthz
 ```
+
+Argo CD shows the synced revision; it should match the last `chore: update image tags` commit on `main`.
+
+### Database backups
+
+The backend backs up its SQLite database at startup and every 24 hours to `/app/data/backups` on the PVC, keeping the newest copy of each of the last 14 days — see `backupDatabase` in `backend/db.js`.
+
+**Every backup is verified before it counts.** Right after `VACUUM INTO` writes the copy, the backend reopens it read-only and runs `PRAGMA quick_check` plus a row-count sanity check. A copy that fails is deleted immediately and rotation is skipped, so a run of bad backups can never evict the last good ones.
+
+Those copies sit on the same disk as the database. The **off-site** copy is the daily `renacode-kopia.timer` on the VPS (`backup/kopia.sh` in `renacode-infra`): it takes the newest verified backup out of the pod, encrypts it with `age` and pushes it to the private `RenaCode/renacode-backup` repository. Restoring is described in that repository's README; `scripts/verify_backup.sh <file>` checks that a copy opens, passes an integrity check and has non-empty core tables.
+
+### Local Docker Compose (not production)
+
+`docker-compose.yml` and `docker/nginx.conf` are the old single-VPS setup (certbot certificates, sqlite-web on :8081). Production no longer uses them, and neither does CI; they are kept only as a way to run the published images on one machine. The same goes for `scripts/setup-deploy-user.sh`, `deploy_pull.sh`, `deploy_sync.sh` and `vps_backup_db.sh`.
 
 ---
 

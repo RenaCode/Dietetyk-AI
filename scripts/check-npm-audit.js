@@ -3,15 +3,16 @@
 // Evaluates the output of `npm audit --json` and decides whether to block the pipeline.
 //
 // Why this script exists: `npm audit` treats ALL "high"/"critical" vulnerabilities alike,
-// regardless of whether they affect code that actually runs in production or only tooling
-// used by `npm ci` to compile a native binding (the sqlite3 -> node-gyp -> ... chain).
-// Build-time tooling NEVER reaches the running application and is never invoked at runtime -
-// it is used exactly once, during dependency installation. The only real way to "fix" those
-// findings would be bumping sqlite3 to a major version whose prebuilt binary needs a newer
-// glibc than the production image (node:20-slim) provides - which actually BROKE production
-// (ERR_DLOPEN_FAILED / GLIBC_2.38 not found) when that fix was attempted. Packages from that
-// specific, documented chain are therefore explicitly whitelisted below; any OTHER
-// high/critical vulnerability, meaning a real runtime dependency, still blocks the pipeline.
+// and occasionally a finding genuinely cannot be fixed yet (no patched release, or the fix
+// needs a breaking upgrade that has to be scheduled). This script lets CI whitelist such a
+// package BY NAME, with the justification written next to the call in
+// .github/workflows/docker-publish.yml; any other high/critical vulnerability still blocks
+// the pipeline.
+//
+// The backend list is empty since sqlite3@6: every former exception (tar, node-gyp,
+// make-fetch-happen, cacache, http-proxy-agent, @tootallnate/once, brace-expansion,
+// ip-address, sqlite3 itself) came from the sqlite3@5 -> node-gyp@8 chain. Note that those
+// were not "build-time only" either - tar ships in the production image's node_modules.
 //
 // Usage: node check-npm-audit.js <audit-file.json> [allowed-package,...]
 

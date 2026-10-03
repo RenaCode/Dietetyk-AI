@@ -9,7 +9,7 @@ const QRCode = require('qrcode');
 const { sendWeeklySummaryForUser, sendDailySummaryForUser, sendMonthlySummaryForUser } = require('../services/summaries');
 const { buildHealthReportPdf } = require('../services/pdfReport');
 const { createShareLink, listSharesForUser, revokeShare, revokeAllSharesForUser, VALIDITY_OPTIONS_HOURS } = require('../services/sharedReports');
-const { getAppConfig } = require('../services/oauthHelpers');
+const { getAppConfig, isGoogleConfigured } = require('../services/oauthHelpers');
 const { summaryEmailLimiter, pdfRateLimiter } = require('../middleware/rateLimit');
 const { revokeUserSessions } = require('../middleware/auth');
 const loginAttempts = require('../services/loginAttempts');
@@ -290,6 +290,7 @@ router.get('/api/user/profile', async (req, res) => {
     const hasOuraRow = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'oura'`, [req.user.id]);
     const hasWithingsRow = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'withings'`, [req.user.id]);
     const hasGoogleFitRow = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'google_fit'`, [req.user.id]);
+    const ouraSpo2ScopeMissingRow = await db.get(`SELECT 1 FROM settings WHERE user_id = ? AND key = 'oura_spo2_scope_missing' AND value = '1'`, [req.user.id]);
 
     res.json({
       username: user.username,
@@ -315,9 +316,15 @@ router.get('/api/user/profile', async (req, res) => {
       monthly_summary_time: monthlyTimeRow ? monthlyTimeRow.value : '09:00',
       language: langRow ? langRow.value : 'pl',
       has_oura: !!hasOuraRow,
+      // The Oura connection predates the `spo2` scope - see OURA_SPO2_SCOPE_MISSING_KEY in
+      // services/sync.js. Settings asks the user to reconnect Oura.
+      oura_needs_reconnect: !!hasOuraRow && !!ouraSpo2ScopeMissingRow,
       has_withings: !!hasWithingsRow,
       has_google: !!user.google_id,
-      has_google_fit: !!hasGoogleFitRow
+      has_google_fit: !!hasGoogleFitRow,
+      // Whether the instance has a Google OAuth client at all - Settings hides "Connect with
+      // Google" and "Connect Google Fit" without one (they would end on a 400 page).
+      google_configured: await isGoogleConfigured()
     });
   } catch (err) {
     console.error(err);

@@ -10,7 +10,16 @@ const {
   activitySourceValues
 } = require('../utils/activitySources');
 
-const { getOrRefreshToken } = require('./oauthHelpers');
+const { getOrRefreshToken, getUserSetting } = require('./oauthHelpers');
+const logger = require('./logger');
+
+// Per-user flag (settings table): the stored Oura token was granted without the `spo2` scope.
+// Oura answers daily_spo2 with 401 for such a token while every other endpoint on the same
+// token returns 200 - so a 401 there means a missing scope, not an expired token, and asking
+// again every hour cannot fix it. Older connections were made with `daily heartrate personal`
+// only; the flag stops the hourly 401, and Settings shows "reconnect Oura" while it is set.
+// It is cleared when the user reconnects (routes/integrations.js, Oura callback).
+const OURA_SPO2_SCOPE_MISSING_KEY = 'oura_spo2_scope_missing';
 
 const OURA_RANK = getActivitySourceRank('oura');
 const GOOGLE_FIT_RANK = getActivitySourceRank('google_fit');
@@ -101,16 +110,29 @@ async function syncOura(userId) {
     // Daily SpO2 (Oura Gen 3+) - a separate endpoint, NOT part of the /sleep response.
     // For rings older than Gen 3, Oura simply returns an empty `data` array rather than a
     // 4xx error - spo2_percentage then stays null for every date.
-    const spo2Res = await fetchWithTimeout(`https://api.ouraring.com/v2/usercollection/daily_spo2?start_date=${startDate}&end_date=${endDate}`, {
-      headers: { 'Authorization': `Bearer ${accessToken}` }
-    });
+    // A token known to lack the `spo2` scope is not asked at all - see
+    // OURA_SPO2_SCOPE_MISSING_KEY.
     let spo2Data = null;
-    if (spo2Res.ok) {
-      spo2Data = await spo2Res.json();
-    } else {
-      // We deliberately do not fail the whole sync on an SpO2 error - it is an extra,
-      // optional metric. Log it and carry on without it.
-      console.warn(`[SYNC OURA] Skipped SpO2 (status ${spo2Res.status}) - continuing without that metric.`);
+    const spo2ScopeMissing = (await getUserSetting(userId, OURA_SPO2_SCOPE_MISSING_KEY)) === '1';
+    if (!spo2ScopeMissing) {
+      const spo2Res = await fetchWithTimeout(`https://api.ouraring.com/v2/usercollection/daily_spo2?start_date=${startDate}&end_date=${endDate}`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      if (spo2Res.ok) {
+        spo2Data = await spo2Res.json();
+      } else if (spo2Res.status === 401 || spo2Res.status === 403) {
+        // The sleep/activity/readiness calls above just succeeded with this same token, so
+        // this is the scope, not the token. Remember it and stop asking until a reconnect.
+        await db.run(`
+          INSERT INTO settings (user_id, key, value) VALUES (?, ?, '1')
+          ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
+        `, [userId, OURA_SPO2_SCOPE_MISSING_KEY]);
+        logger.warn(`Oura token has no spo2 scope (status ${spo2Res.status}) - SpO2 skipped until Oura is reconnected`, 'SYNC', null, null, userId);
+      } else {
+        // We deliberately do not fail the whole sync on an SpO2 error - it is an extra,
+        // optional metric. Log it and carry on without it.
+        console.warn(`[SYNC OURA] Skipped SpO2 (status ${spo2Res.status}) - continuing without that metric.`);
+      }
     }
 
     // Real stress level (the /v2/usercollection/daily_stress endpoint) - available only on
@@ -632,14 +654,30 @@ async function syncGoogleFit(userId) {
 // row). That exception used to escape into the syncAll* catch below and abort the whole
 // loop, so every user after the broken one silently stopped syncing - every hour - with one
 // generic "[CRON ERROR]" line as the only trace. tests/test-sync-all-isolation.js.
+//
+// Returns { ok, failed }. A per-user sync reports most failures as a { success: false } result
+// rather than a throw, and those used to be counted as synced: "[CRON OURA] Synced 2 user(s)"
+// was printed with both users failing, and the failures reached only the console. Every
+// failure now goes to app_logs (WARN, category SYNC), which the weekly admin report reads.
 async function syncEachUser(label, tokens, syncOne) {
+  let ok = 0;
+  let failed = 0;
   for (const t of tokens) {
+    let error = null;
     try {
-      await syncOne(t.user_id);
+      const result = await syncOne(t.user_id);
+      if (result && result.success === false) error = result.error || 'unknown error';
     } catch (err) {
-      console.error(`[CRON ERROR] ${label} sync failed for user ${t.user_id}:`, err.message);
+      error = err.message;
+    }
+    if (error) {
+      failed += 1;
+      logger.warn(`${label} sync failed: ${error}`, 'SYNC', null, null, t.user_id);
+    } else {
+      ok += 1;
     }
   }
+  return { ok, failed };
 }
 
 // Oura sync for every user (invoked by the shared hourly scheduler, 05:00-22:00)
@@ -647,10 +685,10 @@ async function syncAllOura() {
   console.log('[CRON OURA] Syncing data...');
   try {
     const tokens = await db.all(`SELECT DISTINCT user_id FROM oauth_tokens WHERE service = 'oura'`);
-    await syncEachUser('Oura', tokens, syncOura);
-    console.log(`[CRON OURA] Synced ${tokens.length} user(s).`);
+    const { ok, failed } = await syncEachUser('Oura', tokens, syncOura);
+    console.log(`[CRON OURA] Synced ${ok}/${tokens.length} user(s)${failed ? `, ${failed} failed (see app_logs, category SYNC)` : ''}.`);
   } catch (err) {
-    console.error('[CRON ERROR] Oura sync failed:', err);
+    logger.error(`Oura sync failed: ${err.message}`, 'SYNC', err);
   }
 }
 
@@ -659,10 +697,10 @@ async function syncAllWithings() {
   console.log('[CRON WITHINGS] Syncing data...');
   try {
     const tokens = await db.all(`SELECT DISTINCT user_id FROM oauth_tokens WHERE service = 'withings'`);
-    await syncEachUser('Withings', tokens, syncWithings);
-    console.log(`[CRON WITHINGS] Synced ${tokens.length} user(s).`);
+    const { ok, failed } = await syncEachUser('Withings', tokens, syncWithings);
+    console.log(`[CRON WITHINGS] Synced ${ok}/${tokens.length} user(s)${failed ? `, ${failed} failed (see app_logs, category SYNC)` : ''}.`);
   } catch (err) {
-    console.error('[CRON ERROR] Withings sync failed:', err);
+    logger.error(`Withings sync failed: ${err.message}`, 'SYNC', err);
   }
 }
 
@@ -671,14 +709,15 @@ async function syncAllGoogleFit() {
   console.log('[CRON GOOGLE FIT] Syncing data...');
   try {
     const tokens = await db.all(`SELECT DISTINCT user_id FROM oauth_tokens WHERE service = 'google_fit'`);
-    await syncEachUser('Google Fit', tokens, syncGoogleFit);
-    console.log(`[CRON GOOGLE FIT] Synced ${tokens.length} user(s).`);
+    const { ok, failed } = await syncEachUser('Google Fit', tokens, syncGoogleFit);
+    console.log(`[CRON GOOGLE FIT] Synced ${ok}/${tokens.length} user(s)${failed ? `, ${failed} failed (see app_logs, category SYNC)` : ''}.`);
   } catch (err) {
-    console.error('[CRON ERROR] Google Fit sync failed:', err);
+    logger.error(`Google Fit sync failed: ${err.message}`, 'SYNC', err);
   }
 }
 
 module.exports = {
+  OURA_SPO2_SCOPE_MISSING_KEY,
   syncOura,
   syncWithings,
   syncGoogleFit,

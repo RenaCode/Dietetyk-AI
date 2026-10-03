@@ -1401,7 +1401,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             {/* Linking an account with Google - independent of Google sign-in (which links
                 accounts automatically only when the e-mail matches). This lets an account
                 created with a password be linked to Google without changing or matching
-                the e-mail address. */}
+                the e-mail address. Hidden while the instance has no Google client
+                (google_configured) unless the account is already linked, so it can still
+                be unlinked. */}
+            {(userProfile.google_configured || userProfile.has_google) && (
             <div style={{
               display: 'flex',
               alignItems: 'center',
@@ -1442,6 +1445,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 </button>
               )}
             </div>
+            )}
 
             <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -2224,7 +2228,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
           {/* Google Fit - the source of step, calorie and activity data, analogous to
               Oura/Withings but without its own Client ID/Secret (it uses the global Google
-              configuration set by the admin - the same one as Google sign-in). */}
+              configuration set by the admin - the same one as Google sign-in). Hidden without
+              that configuration unless already connected, as with the Google account above. */}
+          {(userProfile.google_configured || userProfile.has_google_fit) && (
           <div style={{
             display: 'flex',
             flexDirection: 'column',
@@ -2267,6 +2273,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               </div>
             </div>
           </div>
+          )}
 
           {/* Oura Ring */}
           <div style={{
@@ -2286,6 +2293,13 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   <span style={{ fontSize: '0.8rem', color: userProfile.has_oura ? 'var(--success-light)' : 'var(--text-dim)' }}>
                     {userProfile.has_oura ? t('✅ Połączono z kontem Oura') : t('❌ Brak połączenia')}
                   </span>
+                  {/* The connection was granted without the `spo2` scope, so SpO2 is not synced
+                      (backend: OURA_SPO2_SCOPE_MISSING_KEY in services/sync.js). */}
+                  {userProfile.oura_needs_reconnect && (
+                    <span data-testid="oura-needs-reconnect" style={{ display: 'block', fontSize: '0.8rem', color: 'var(--color-orange)', marginTop: '4px' }}>
+                      {t('⚠️ Wymaga ponownego połączenia Oury - brak uprawnienia do SpO2. Odłącz i połącz ponownie.')}
+                    </span>
+                  )}
                 </div>
               </div>
               <div>

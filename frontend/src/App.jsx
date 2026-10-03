@@ -53,6 +53,10 @@ export default function App() {
 
   // Public registration states
   const [isPublicRegister, setIsPublicRegister] = useState(false);
+  // Whether to offer "Sign in with Google" - false until the backend confirms a Google client
+  // is configured (GET /api/auth/google/enabled), so an unconfigured instance never shows a
+  // button that ends on a bare 400 page.
+  const [googleLoginEnabled, setGoogleLoginEnabled] = useState(false);
   const [registerUsernameInput, setRegisterUsernameInput] = useState('');
   const [registerPasswordInput, setRegisterPasswordInput] = useState('');
   const [registerConfirmPasswordInput, setRegisterConfirmPasswordInput] = useState('');
@@ -171,6 +175,18 @@ export default function App() {
 // The set of meal IDs that already have a delete request in flight - see the comment in
 // handleDeleteMeal (protection against a double click sending a duplicate DELETE).
   const deletingMealIdsRef = useRef(new Set());
+
+// The login screen's Google button - asked only while signed out, which is the only time the
+// button is rendered.
+  useEffect(() => {
+    if (sessionToken) return;
+    let cancelled = false;
+    fetch('/api/auth/google/enabled')
+      .then(res => (res.ok ? res.json() : { enabled: false }))
+      .then(data => { if (!cancelled) setGoogleLoginEnabled(data.enabled === true); })
+      .catch(() => { if (!cancelled) setGoogleLoginEnabled(false); });
+    return () => { cancelled = true; };
+  }, [sessionToken]);
 
 // Fetch the data on load and whenever the date or the session changes
   useEffect(() => {
@@ -1099,25 +1115,29 @@ export default function App() {
                     Dalej
                   </button>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0' }}>
-                    <div style={{ flex: 1, height: '1px', background: 'var(--border-glass)' }} />
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>lub</span>
-                    <div style={{ flex: 1, height: '1px', background: 'var(--border-glass)' }} />
-                  </div>
+                  {googleLoginEnabled && (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0' }}>
+                        <div style={{ flex: 1, height: '1px', background: 'var(--border-glass)' }} />
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>lub</span>
+                        <div style={{ flex: 1, height: '1px', background: 'var(--border-glass)' }} />
+                      </div>
 
-                  <button
-                    type="button"
-                    onClick={() => { window.location.href = '/api/auth/google'; }}
-                    style={{ width: '100%', padding: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', background: '#fff', color: '#1f1f1f', border: '1px solid var(--border-glass)', borderRadius: '8px', fontWeight: 500, fontSize: '0.9rem', cursor: 'pointer' }}
-                  >
-                    <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
-                      <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/>
-                      <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
-                      <path fill="#FBBC05" d="M3.964 10.706A5.41 5.41 0 0 1 3.682 9c0-.592.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z"/>
-                      <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 7.294C4.672 5.167 6.656 3.58 9 3.58z"/>
-                    </svg>
-                    Zaloguj się przez Google
-                  </button>
+                      <button
+                        type="button"
+                        onClick={() => { window.location.href = '/api/auth/google'; }}
+                        style={{ width: '100%', padding: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', background: '#fff', color: '#1f1f1f', border: '1px solid var(--border-glass)', borderRadius: '8px', fontWeight: 500, fontSize: '0.9rem', cursor: 'pointer' }}
+                      >
+                        <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+                          <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/>
+                          <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
+                          <path fill="#FBBC05" d="M3.964 10.706A5.41 5.41 0 0 1 3.682 9c0-.592.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z"/>
+                          <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 7.294C4.672 5.167 6.656 3.58 9 3.58z"/>
+                        </svg>
+                        Zaloguj się przez Google
+                      </button>
+                    </>
+                  )}
 
                   <button
                     type="button"

@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
 const path = require('path');
+const fs = require('fs');
 const logger = require('./services/logger');
 const { requireAuth } = require('./middleware/auth');
 const { apiRateLimiter } = require('./middleware/rateLimit');
@@ -204,8 +205,17 @@ app.use(require('./routes/dashboard'));
 app.use(require('./routes/chat'));
 
 // Serve index.html for every remaining route (React SPA routing)
+//
+// The production backend image has no public/ (the frontend is its own nginx image, see
+// docker/frontend.Dockerfile), so sendFile failed with ENOENT and every stray non-API request
+// - a scanner, a probe of `/` - became a "WARN HTTP error 404 ... /app/public/index.html" row
+// in app_logs and the admin report. Without the build there is nothing to serve: a plain 404.
+const SPA_INDEX = path.join(__dirname, 'public', 'index.html');
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  if (!fs.existsSync(SPA_INDEX)) {
+    return res.status(404).json({ error: 'Nie znaleziono.' });
+  }
+  res.sendFile(SPA_INDEX);
 });
 
 // Central error handler - must be registered as the last middleware. It ensures that

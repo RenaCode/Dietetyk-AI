@@ -42,6 +42,17 @@ async function getAppConfig(key) {
   return row ? decrypt(row.value) : null;
 }
 
+// Whether the Google OAuth client (shared by Google sign-in and Google Fit) is set up in the
+// Admin Panel. Both halves are required: without the secret every callback fails on the code
+// exchange, so offering the button with only a Client ID just moves the error one step later.
+async function isGoogleConfigured() {
+  const [clientId, clientSecret] = await Promise.all([
+    getAppConfig('google_client_id'),
+    getAppConfig('google_client_secret')
+  ]);
+  return !!clientId && !!clientSecret;
+}
+
 // Helper for reading a specific user's settings - decrypt() as above, safe for non-secret
 // values (a no-op without the enc:v1: prefix).
 async function getUserSetting(userId, key) {
@@ -427,6 +438,7 @@ async function loadOrRefreshToken(userId, service) {
 
 module.exports = {
   getAppConfig,
+  isGoogleConfigured,
   getUserSetting,
   generateOAuthState,
   verifyOAuthState,

@@ -2,6 +2,7 @@ const app = require('./app');
 const db = require('./db');
 const { PORT } = require('./config');
 const logger = require('./services/logger');
+const { installProcessErrorHandlers } = require('./services/processErrors');
 const { runHourlySyncIfDue, runBackupThenCleanup } = require('./scheduler');
 
 // Start the server.
@@ -91,20 +92,9 @@ if (require.main === module) {
     setTimeout(() => process.exit(1), 1000);
   });
 
-  // Global process-level error handling
-  process.on('uncaughtException', (err) => {
-    logger.error(`Uncaught exception: ${err.message}`, 'SYSTEM', err);
-    // Give the logs time to flush before exiting the process
-    setTimeout(() => process.exit(1), 1000);
-  });
-
-  process.on('unhandledRejection', (reason) => {
-    logger.error(
-      `Unhandled promise rejection: ${reason}`,
-      'SYSTEM',
-      reason instanceof Error ? reason : new Error(String(reason))
-    );
-  });
+  // Global process-level error handling - see services/processErrors.js for the EPIPE loop
+  // these handlers guard against.
+  installProcessErrorHandlers({ logger });
 }
 
 module.exports = { start };

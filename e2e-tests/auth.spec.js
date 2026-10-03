@@ -53,4 +53,21 @@ test.describe('Autoryzacja (Login i Logout)', () => {
     await expect(page.locator('.alert-error')).toBeVisible();
     await expect(page.locator('.alert-error')).toContainText('Niepoprawny użytkownik lub hasło');
   });
+
+  // Audit D1: without a Google client the button led to a bare 400 page. The E2E database has
+  // no Google configuration, so the button must not be rendered at all; with the flag mocked
+  // to true it appears - which proves the hiding comes from the flag, not a broken render.
+  test('Nie powinno pokazywać logowania przez Google, gdy klient Google nie jest skonfigurowany', async ({ page }) => {
+    const flag = page.waitForResponse('**/api/auth/google/enabled');
+    await page.goto('/');
+    expect(await (await flag).json()).toEqual({ enabled: false });
+    await expect(page.locator('button:has-text("Dalej")')).toBeVisible();
+    await expect(page.locator('button:has-text("Zaloguj się przez Google")')).toHaveCount(0);
+  });
+
+  test('Powinno pokazać logowanie przez Google, gdy backend zgłasza konfigurację', async ({ page }) => {
+    await page.route('**/api/auth/google/enabled', route => route.fulfill({ json: { enabled: true } }));
+    await page.goto('/');
+    await expect(page.locator('button:has-text("Zaloguj się przez Google")')).toBeVisible();
+  });
 });

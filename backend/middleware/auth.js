@@ -34,6 +34,7 @@ async function requireAuth(req, res, next) {
     req.path === '/auth/withings/callback' ||
     req.path === '/auth/google-fit/callback' ||
     req.path === '/auth/google' ||
+    req.path === '/auth/google/enabled' ||
     req.path === '/auth/google/callback' ||
     req.path === '/auth/google/exchange' ||
     // Routes that INITIATE a connection to Oura/Withings/Google Fit, plus Google account

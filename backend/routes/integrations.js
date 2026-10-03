@@ -4,7 +4,7 @@ const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { getAppConfig, getUserSetting, startBrowserBoundOAuthState, verifyBrowserBoundOAuthState } = require('../services/oauthHelpers');
 const { consumeTicket } = require('../services/authTickets');
-const { syncOura, syncWithings, syncGoogleFit } = require('../services/sync');
+const { syncOura, syncWithings, syncGoogleFit, OURA_SPO2_SCOPE_MISSING_KEY } = require('../services/sync');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const { encrypt } = require('../utils/encryption');
 
@@ -46,7 +46,7 @@ router.get('/api/auth/oura', async (req, res) => {
     const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
     const redirectUri = `${base}/api/auth/oura/callback`;
 
-    const authUrl = `https://cloud.ouraring.com/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=daily%20heartrate%20personal`;
+    const authUrl = `https://cloud.ouraring.com/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=daily%20heartrate%20personal%20spo2`;
     res.redirect(authUrl);
   } catch (err) {
     console.error(err);
@@ -167,6 +167,9 @@ router.get('/api/auth/oura/callback', async (req, res) => {
         refresh_token = excluded.refresh_token,
         expires_at = excluded.expires_at
     `, [userId, encrypt(data.access_token), encrypt(data.refresh_token), expiresAt]);
+    // A fresh grant (now asking for `spo2`) - let the sync try SpO2 again. If the user
+    // unticked that scope on Oura's consent screen, the first sync sets the flag back.
+    await db.run(`DELETE FROM settings WHERE user_id = ? AND key = ?`, [userId, OURA_SPO2_SCOPE_MISSING_KEY]);
 
     await syncOura(userId);
     res.redirect('/?tab=setup&success=oura');
@@ -180,6 +183,7 @@ router.get('/api/auth/oura/callback', async (req, res) => {
 router.post('/api/auth/oura/disconnect', requireAuth, async (req, res) => {
   try {
     await db.run(`DELETE FROM oauth_tokens WHERE user_id = ? AND service = 'oura'`, [req.user.id]);
+    await db.run(`DELETE FROM settings WHERE user_id = ? AND key = ?`, [req.user.id, OURA_SPO2_SCOPE_MISSING_KEY]);
     res.json({ success: true, message: 'Rozłączono z Oura Ring.' });
   } catch (err) {
     console.error(err);

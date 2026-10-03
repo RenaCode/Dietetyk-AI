@@ -38,7 +38,9 @@ function stubModule(relativePath, exports) {
 const ouraResponses = {};
 
 stubModule('services/oauthHelpers.js', {
-  getOrRefreshToken: async () => 'fake-oura-access-token'
+  getOrRefreshToken: async () => 'fake-oura-access-token',
+  // syncOura reads the per-user "token lacks the spo2 scope" flag (services/sync.js).
+  getUserSetting: async () => null
 });
 stubModule('utils/fetchWithTimeout.js', {
   fetchWithTimeout: async (url) => {

@@ -158,6 +158,20 @@ async function testSharedReportHeadersAndLimit(baseUrl) {
   assert(other.status === 404, 'a different link is not affected by the first one\'s limit');
 }
 
+// L-D11 (audit 2026-10-03): without backend/public (the production image) the SPA fallback
+// failed inside sendFile and logged a WARN row per stray request. With or without a frontend
+// build in public/, a non-API path must not write to app_logs.
+async function testSpaFallbackDoesNotLog(baseUrl) {
+  console.log('\n--- TEST: SPA fallback ---');
+  const before = (await db.get(`SELECT COUNT(*) AS n FROM app_logs WHERE level IN ('WARN', 'ERROR')`)).n;
+  const res = await fetch(`${baseUrl}/some/spa/route`);
+  const hasBuild = fs.existsSync(path.join(__dirname, '..', 'public', 'index.html'));
+  assert(res.status === (hasBuild ? 200 : 404), `SPA fallback answers ${hasBuild ? 200 : 404} (frontend build ${hasBuild ? 'present' : 'absent'})`);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const after = (await db.get(`SELECT COUNT(*) AS n FROM app_logs WHERE level IN ('WARN', 'ERROR')`)).n;
+  assert(after === before, 'the SPA fallback writes no WARN/ERROR row to app_logs');
+}
+
 async function run() {
   await db.initDb();
   const { server, baseUrl } = await startServer();
@@ -166,6 +180,7 @@ async function run() {
     await testSharedReportHeadersAndLimit(baseUrl);
     await testBodyLimits(baseUrl);
     await testHealthzOutsideLimiter(baseUrl);
+    await testSpaFallbackDoesNotLog(baseUrl);
   } finally {
     server.close();
   }

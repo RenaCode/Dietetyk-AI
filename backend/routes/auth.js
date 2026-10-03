@@ -8,7 +8,7 @@ const QRCode = require('qrcode');
 const crypto = require('crypto');
 const loginAttempts = require('../services/loginAttempts');
 const logger = require('../services/logger');
-const { getAppConfig, generateOAuthState, verifyOAuthState, readCookie, isSecureRequest, startBrowserBoundOAuthState, verifyBrowserBoundOAuthState } = require('../services/oauthHelpers');
+const { getAppConfig, isGoogleConfigured, generateOAuthState, verifyOAuthState, readCookie, isSecureRequest, startBrowserBoundOAuthState, verifyBrowserBoundOAuthState } = require('../services/oauthHelpers');
 const { consumeTicket } = require('../services/authTickets');
 const { isValidUsername, USERNAME_RULE_MESSAGE } = require('../utils/username');
 const { revokeUserSessions } = require('../middleware/auth');
@@ -253,6 +253,18 @@ async function completeLogin(user) {
 // ===== Google sign-in =====
 // configured globally by an administrator (Admin Panel), because sign-in applies to the
 // whole application rather than being a per-user integration like Oura or Withings.
+// Public (see middleware/auth.js): the login screen asks this before showing "Sign in with
+// Google", so an instance without a configured Google client does not offer a button that
+// ends on a bare 400 page. Returns only a boolean - never the Client ID itself.
+router.get('/api/auth/google/enabled', async (req, res) => {
+  try {
+    res.json({ enabled: await isGoogleConfigured() });
+  } catch (err) {
+    console.error('[GOOGLE LOGIN] Failed to read the Google configuration:', err);
+    res.json({ enabled: false });
+  }
+});
+
 router.get('/api/auth/google', async (req, res) => {
   try {
     const clientId = await getAppConfig('google_client_id');

@@ -590,6 +590,7 @@ const TRANSLATIONS = {
   "🔄 Wymuś ręczną synchronizację": "🔄 Force a manual sync",
   "Aktualnie: domyślna lokalizacja serwera": "Currently: the server's default location",
   "✅ Połączono z Google Fit": "✅ Connected to Google Fit",
+  "⚠️ Wymaga ponownego połączenia Oury - brak uprawnienia do SpO2. Odłącz i połącz ponownie.": "⚠️ Oura needs reconnecting - no permission for SpO2. Disconnect and connect again.",
   "✅ Połączono z kontem Oura": "✅ Connected to Oura account",
   "Wpisz Client ID i Secret, aby połączyć": "Enter the Client ID and Secret to connect",
   "▲ Zwiń ustawienia Oura": "▲ Collapse Oura settings",

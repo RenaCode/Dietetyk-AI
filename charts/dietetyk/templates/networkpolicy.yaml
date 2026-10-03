@@ -4,11 +4,12 @@
 # Without this, every pod in the cluster - any other application, anything compromised in
 # it - could reach the backend on :3000 directly, skipping nginx (its body-size limit, its
 # header handling) and, with the sqlite-web sidecar enabled, :8080 with no authentication at
-# all. Kubelet probes and `kubectl port-forward` are not subject to NetworkPolicy, so the
-# health checks and the documented db-viewer workflow keep working.
+# all. Port 8080 is deliberately not listed, so the sidecar stays reachable only through
+# `kubectl port-forward`.
 #
-# Off by default (values.yaml) until it has been switched on once under observation: if
-# anything else in the cluster legitimately talks to the backend, this is what breaks it.
+# Kubelet probes and `kubectl port-forward` keep working: k3s' NetworkPolicy controller
+# (kube-router) accepts traffic whose source is the node itself (`-m addrtype --src-type
+# LOCAL`) before it evaluates any policy - checked in the node's iptables on 2026-10-03.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -30,5 +31,34 @@ spec:
               app.kubernetes.io/component: frontend
       ports:
         - port: 3000
+          protocol: TCP
+---
+# Only Traefik may open connections to the frontend - it is the Ingress backend for
+# dietetyk.renacode.com. Traefik proxies from its own pod address (the hostPort goes through
+# svclb to the traefik Service first), so the source is the traefik pod in kube-system, not
+# the node.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "dietetyk.fullname" . }}-frontend
+  labels:
+    {{- include "dietetyk.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "dietetyk.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.traefik.namespace }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.traefik.podLabels | nindent 14 }}
+      ports:
+        - port: 80
           protocol: TCP
 {{- end }}

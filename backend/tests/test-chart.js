@@ -8,6 +8,8 @@
 //   L3  nginx passes on Traefik's X-Forwarded-Proto instead of overwriting it with `http`.
 //   M4  nginx logs neither query strings nor the token-bearing paths, and the registration
 //       page (whose URL carries the invitation token) sends no Referer.
+//   NetworkPolicy (2026-10-03) on by default: backend :3000 only from the frontend, frontend
+//       :80 only from Traefik in kube-system, ingress only.
 //
 // Needs the `helm` binary. Where it is missing (a CI image without it) the test says so and
 // passes, rather than failing the whole backend suite for a tool it does not otherwise use.
@@ -24,10 +26,10 @@ function assert(condition, message) {
   console.log(`✅ ${message}`);
 }
 
-function render() {
+function render(...args) {
   const chartDir = path.join(__dirname, '..', '..', 'charts', 'dietetyk');
   try {
-    return execFileSync('helm', ['template', 'dietetyk', chartDir], { encoding: 'utf8' });
+    return execFileSync('helm', ['template', 'dietetyk', chartDir, ...args], { encoding: 'utf8' });
   } catch (err) {
     if (err.code === 'ENOENT') return null;
     throw err;
@@ -57,6 +59,19 @@ function run() {
   assert(!/proxy_set_header X-Forwarded-Proto \$scheme;/.test(nginx), 'X-Forwarded-Proto is no longer overwritten with $scheme');
   assert(/access_log \S+ dietetyk_safe;/.test(nginx), 'the access log uses the query-free format');
   assert(!/log_format dietetyk_safe[^;]*\$request[ "']/.test(nginx) && !/log_format dietetyk_safe[^;]*\$http_referer/.test(nginx), 'that format contains neither $request nor $http_referer');
+
+  console.log('\n--- TEST: NetworkPolicy ---');
+  const backendPolicy = find('NetworkPolicy', 'dietetyk-backend');
+  const frontendPolicy = find('NetworkPolicy', 'dietetyk-frontend');
+  assert(backendPolicy && frontendPolicy, 'both NetworkPolicies render by default (networkPolicy.enabled: true)');
+  assert(/podSelector:\s*\n\s*matchLabels:[^]*?app\.kubernetes\.io\/component: backend\s*\n\s*policyTypes/.test(backendPolicy), 'the backend policy selects the backend pod');
+  assert(/from:\s*\n\s*- podSelector:\s*\n\s*matchLabels:[^]*?app\.kubernetes\.io\/component: frontend\s*\n\s*ports:/.test(backendPolicy) && !/namespaceSelector/.test(backendPolicy), 'the backend admits only the frontend pod from its own namespace');
+  assert((backendPolicy.match(/- port: \d+/g) || []).join() === '- port: 3000', 'the backend admits port 3000 only - not the sqlite-web sidecar on 8080');
+  assert(/namespaceSelector:\s*\n\s*matchLabels:\s*\n\s*kubernetes\.io\/metadata\.name: kube-system\s*\n\s*podSelector:\s*\n\s*matchLabels:\s*\n\s*app\.kubernetes\.io\/name: traefik/.test(frontendPolicy), 'the frontend admits Traefik from kube-system (one peer: namespace AND pod)');
+  assert((frontendPolicy.match(/- port: \d+/g) || []).join() === '- port: 80', 'the frontend admits port 80 only');
+  assert(![backendPolicy, frontendPolicy].some(p => /Egress|egress:/.test(p)), 'the policies restrict ingress only');
+  const disabled = render('--set', 'networkPolicy.enabled=false');
+  assert(!/^kind: NetworkPolicy$/m.test(disabled), 'networkPolicy.enabled=false renders no policy (quick rollback)');
 }
 
 try {

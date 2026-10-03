@@ -41,9 +41,10 @@ frontend:
 # sqlite-web sidecar in the backend pod. OFF by default: sqlite-web has no authentication,
 # the image listens on 0.0.0.0:8080, and it mounts the database read-write - so with it on,
 # ANY pod in the cluster can reach the pod IP and read or edit every table, including the
-# `sessions` table (live session tokens = log in as any user, admins included). There is no
-# NetworkPolicy in this chart to stop that. The README's "only reachable locally" promise
-# held for the docker-compose setup (bound to 127.0.0.1 on the VPS), not for k8s.
+# `sessions` table (live session tokens = log in as any user, admins included), unless
+# `networkPolicy.enabled` is on - the backend policy admits :3000 only. The README's "only
+# reachable locally" promise held for the docker-compose setup (bound to 127.0.0.1 on the
+# VPS), not for k8s.
 # Enable it only for a debugging session and turn it off again:
 #   helm upgrade ... --set dbImage.enabled=true
 #   kubectl port-forward deploy/<release>-backend 8080:8080
@@ -60,11 +61,20 @@ dbImage:
       cpu: 50m
       memory: 128Mi
 
-# Restrict who may connect to the backend pod (templates/networkpolicy.yaml): only the
-# frontend's nginx. OFF until it has been enabled once under observation - k3s enforces
-# NetworkPolicy, and anything else that talks to the backend directly would stop working.
+# Restrict who may connect to the pods (templates/networkpolicy.yaml), ingress only:
+#   backend  :3000 <- the frontend's nginx (`location /api`), nothing else
+#   frontend :80   <- Traefik in kube-system (Ingress dietetyk.renacode.com)
+# Checked on the cluster on 2026-10-03 (`ss` inside the pods' network namespaces): Traefik
+# was the only peer of the frontend and nothing but the frontend talked to the backend.
+# Monitoring, the notification gateway (bramka) and Argo CD do not connect to these pods.
+# Kubelet probes and `kubectl port-forward` are not affected (see the template header).
+# Quick rollback: set `enabled: false` and let Argo CD sync - the policies are deleted.
 networkPolicy:
-  enabled: false
+  enabled: true
+  traefik:
+    namespace: kube-system
+    podLabels:
+      app.kubernetes.io/name: traefik
 
 ingress:
   enabled: true

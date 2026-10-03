@@ -72,3 +72,41 @@ imagePullSecrets:
 {{- end }}
 {{- end }}
 {{- end }}
+
+{{/*
+EGRESS RULES - EVERYTHING EXCEPT THE HOME NETWORK (2026-10-03).
+
+The node routes 192.168.3.0/24 and 10.13.13.0/24 through wg0 (the tunnel home), and the
+UDM accepts all of 10.13.13.0/24 - without this policy every pod reached the UDM, the TV
+and Fibaro. Three rules, OR-ed:
+
+  1. DNS to CoreDNS (UDP and TCP 53),
+  2. any pod in the cluster (`namespaceSelector: {}`) - in-cluster traffic unchanged;
+     kube-router evaluates egress AFTER kube-proxy's DNAT, so a ClusterIP is already a
+     pod address by then,
+  3. every IPv4 address outside `networkPolicy.egress.siecDomowa` - the internet and the
+     NODE address that the API server ClusterIP (10.43.0.1:443 -> :6443) is DNAT-ed to.
+
+In kube-router an ipBlock matches ANY destination address, pod addresses included (hash:net
+ipset, exceptions as `nomatch` entries, /0 split into two /1 - pkg/controllers/netpol/
+policy.go, evalIPBlockPeer). Rule 2 stays anyway: the NetworkPolicy spec does not promise
+that ipBlock covers pods, so in-cluster traffic should not depend on it.
+*/}}
+{{- define "dietetyk.regulyEgress" -}}
+- to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+  ports:
+    - { protocol: UDP, port: 53 }
+    - { protocol: TCP, port: 53 }
+- to:
+    - namespaceSelector: {}
+- to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except: {{- toYaml .Values.networkPolicy.egress.siecDomowa | nindent 10 }}
+{{- end -}}

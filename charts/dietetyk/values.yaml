@@ -75,6 +75,19 @@ networkPolicy:
     namespace: kube-system
     podLabels:
       app.kubernetes.io/name: traefik
+  # Egress (2026-10-03): the pods must not reach the home network. The node routes
+  # 192.168.3.0/24 (home LAN: UDM, TV, Fibaro) and 10.13.13.0/24 (WireGuard tunnel;
+  # 10.13.13.1 is the node's own wg0) through wg0, and the UDM accepts all of
+  # 10.13.13.0/24 - the 2026-10-03 audit reached the UDM, the TV and Fibaro from pods.
+  # Everything else outbound is unchanged: DNS, cluster pods, the internet, the API
+  # server. No pod uses 10.13.13.1 (it only carries traffic FROM home to Traefik), so the
+  # whole /24 is blocked. Rules: `dietetyk.regulyEgress` in _helpers.tpl.
+  # Quick rollback of egress alone: `egress.enabled: false`.
+  egress:
+    enabled: true
+    siecDomowa:
+      - 192.168.3.0/24
+      - 10.13.13.0/24
 
 ingress:
   enabled: true

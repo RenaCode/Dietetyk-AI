@@ -9,7 +9,7 @@
 //   M4  nginx logs neither query strings nor the token-bearing paths, and the registration
 //       page (whose URL carries the invitation token) sends no Referer.
 //   NetworkPolicy (2026-10-03) on by default: backend :3000 only from the frontend, frontend
-//       :80 only from Traefik in kube-system, ingress only.
+//       :80 only from Traefik in kube-system; egress everywhere except the home network.
 //
 // Needs the `helm` binary. Where it is missing (a CI image without it) the test says so and
 // passes, rather than failing the whole backend suite for a tool it does not otherwise use.
@@ -70,6 +70,14 @@ function run() {
   assert(/namespaceSelector:\s*\n\s*matchLabels:\s*\n\s*kubernetes\.io\/metadata\.name: kube-system\s*\n\s*podSelector:\s*\n\s*matchLabels:\s*\n\s*app\.kubernetes\.io\/name: traefik/.test(frontendPolicy), 'the frontend admits Traefik from kube-system (one peer: namespace AND pod)');
   assert((frontendPolicy.match(/- port: \d+/g) || []).join() === '- port: 80', 'the frontend admits port 80 only');
   assert(![backendPolicy, frontendPolicy].some(p => /Egress|egress:/.test(p)), 'the policies restrict ingress only');
+  const egressPolicy = find('NetworkPolicy', 'dietetyk-egress');
+  assert(/podSelector:\s*\n\s*matchLabels:\s*\n\s*app\.kubernetes\.io\/name: dietetyk\s*\n\s*app\.kubernetes\.io\/instance: dietetyk\s*\n\s*policyTypes:\s*\n\s*- Egress\s*\n/.test(egressPolicy), 'one egress policy covers both pods (no component label in the selector)');
+  assert(/protocol: UDP, port: 53/.test(egressPolicy) && /protocol: TCP, port: 53/.test(egressPolicy), 'egress allows DNS over UDP and TCP');
+  assert(/- to:\s*\n\s*- namespaceSelector: \{\}/.test(egressPolicy), 'egress allows every pod in the cluster');
+  assert(/cidr: 0\.0\.0\.0\/0\s*\n\s*except:\s*\n\s*- 192\.168\.3\.0\/24\s*\n\s*- 10\.13\.13\.0\/24/.test(egressPolicy), 'egress allows the internet except the home LAN and the WireGuard range');
+  assert(!/cidr: (192\.168\.3|10\.13\.13)\./.test(egressPolicy), 'no rule opens any home address');
+  const noEgress = render('--set', 'networkPolicy.egress.enabled=false');
+  assert(!/name: dietetyk-egress/.test(noEgress) && /name: dietetyk-backend\n/.test(noEgress), 'networkPolicy.egress.enabled=false drops only the egress policy');
   const disabled = render('--set', 'networkPolicy.enabled=false');
   assert(!/^kind: NetworkPolicy$/m.test(disabled), 'networkPolicy.enabled=false renders no policy (quick rollback)');
 }

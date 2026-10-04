@@ -1,0 +1,24 @@
+# Dependency updates arrive as pull requests with a reviewable lockfile diff. Since
+# 04.10.2026 CI builds images from the COMMITTED package-lock.json (audit D-4) instead of
+# re-resolving `^` ranges on every run, so this is now the only way new versions get in.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+  # Actions are pinned to commit SHAs (D-5); Dependabot bumps the SHA and the `# vN` comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

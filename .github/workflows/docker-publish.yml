@@ -29,9 +29,14 @@ env:
   REGISTRY: ghcr.io
   IMAGE_OWNER: ${{ github.repository_owner }}
 
+# Least privilege (audit 04.10.2026, D-5). This used to grant `contents: write` and
+# `packages: write` to EVERY job, and `npm ci` runs the install scripts of hundreds of
+# packages in the test jobs: one compromised dependency could have pushed an image to
+# ghcr.io under an existing sha- tag, or created branches and tags here. Now the default is
+# read-only, `packages: write` exists only in the two build jobs (which install nothing on
+# the runner - npm runs inside the Docker build), and update-git pushes with DEPLOY_PAT.
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
 # Detects which parts of the repository changed, so the backend and frontend build jobs can
@@ -42,10 +47,12 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       frontend: ${{ steps.filter.outputs.frontend }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - name: Detect changed paths
         id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         with:
           filters: |
             backend:
@@ -68,19 +75,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kodu
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
-
-      # A separate step purely to generate package-lock.json (needed by `npm audit`) - we do
-      # not install the full node_modules, because it is not needed here: the Docker image
-      # installs dependencies itself, in its own builder.
-      - name: Install dependencies (lockfile)
-        working-directory: ./backend
-        run: npm install --package-lock-only
 
       # Vulnerability scan of the npm dependencies. It runs here in CI rather than locally in
       # a development environment or sandbox, because CI has real access to the npm registry.
@@ -102,15 +104,17 @@ jobs:
           npm audit --omit=dev --json > /tmp/audit-backend.json || true
           node ../scripts/check-npm-audit.js /tmp/audit-backend.json ""
 
-      # Testy jednostkowe backendu (tests/test-encryption.js, test-rate-limit.js,
-      # test-chat.js, test-meals.js - see the "test" script in package.json). These files
-      # existed in tests/ before, but nothing ever ran them in CI and there was no npm "test"
-      # script - a bug in the chat, meal analysis, encryption or rate limiter logic would have
-      # gone unnoticed all the way to production. A separate `npm ci` (a full install), because
-      # the audit step above deliberately installs only the lockfile, without node_modules.
-      - name: Install dependencies (full install for tests)
+      # Unit tests need node_modules; `npm audit` above reads only the lockfile.
+      #
+      # --ignore-scripts, then a rebuild of sqlite3 alone: sqlite3 is the one dependency
+      # whose install script matters (it fetches the prebuilt native binding), and running
+      # every package's postinstall is exactly the supply-chain hook D-5 is about. Any other
+      # package that ever needs its install script has to be named here on purpose.
+      - name: Install dependencies (for tests)
         working-directory: ./backend
-        run: npm ci
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild sqlite3
 
       # Test secrets are generated per run instead of being written into this file. A constant
       # here would be the same mistake as the constant that used to sit in backend/.env.example:
@@ -129,18 +133,6 @@ jobs:
         working-directory: ./backend
         run: npm test
 
-      # Pass the freshly regenerated lockfile to the build-backend job (a separate runner means
-      # a separate checkout, which cannot see files from this job). This way `npm ci` inside
-      # Docker always receives a lockfile consistent with the current package.json, generated
-      # here in CI where there is real access to the npm registry - nobody has to refresh it by
-      # hand locally.
-      - name: Pass the updated lockfile to build-backend
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-lockfile
-          path: backend/package-lock.json
-          retention-days: 1
-
   build-backend:
     name: Build and push image (backend)
     needs: [changes, test-backend, test-e2e]
@@ -149,29 +141,28 @@ jobs:
       needs.test-backend.result == 'success' &&
       needs.test-e2e.result == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout kodu
-        uses: actions/checkout@v5
-
-      - name: Fetch the updated lockfile from the test-backend job
-        uses: actions/download-artifact@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          name: backend-lockfile
-          path: backend
+          persist-credentials: false
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Image metadata (tags)
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/dietetyk-ai-backend
           tags: |
@@ -184,7 +175,7 @@ jobs:
       # failure from a
       # logowania/publikacji do ghcr.io.
       - name: Build backend image (no push)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ./docker/backend.Dockerfile
@@ -196,7 +187,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=backend
 
       - name: Push obrazu backendu do registry
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ./docker/backend.Dockerfile
@@ -214,27 +205,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kodu
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
-
-      - name: Install dependencies (lockfile)
-        working-directory: ./frontend
-        run: npm install --package-lock-only
 
       - name: npm audit (frontend)
         working-directory: ./frontend
         run: npm audit --audit-level=high --omit=dev
 
-      - name: Pass the updated lockfile to build-frontend
-        uses: actions/upload-artifact@v4
-        with:
-          name: frontend-lockfile
-          path: frontend/package-lock.json
-          retention-days: 1
+      # Until 04.10.2026 this job ran only the audit (D-9): the unit tests in
+      # src/utils/*.test.js (dates in Europe/Warsaw, number formatting, charts), the i18n
+      # drift check and lint existed, but nothing ran them. No install scripts are needed:
+      # vite/esbuild work from their prebuilt optional packages.
+      - name: Install dependencies
+        working-directory: ./frontend
+        run: npm ci --ignore-scripts
+
+      - name: Unit tests, i18n check, lint (frontend)
+        working-directory: ./frontend
+        run: |
+          npm test
+          npm run check-i18n
+          npm run lint
 
   build-frontend:
     name: Build and push image (frontend)
@@ -244,29 +241,28 @@ jobs:
       needs.test-frontend.result == 'success' &&
       needs.test-e2e.result == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout kodu
-        uses: actions/checkout@v5
-
-      - name: Fetch the updated lockfile from the test-frontend job
-        uses: actions/download-artifact@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          name: frontend-lockfile
-          path: frontend
+          persist-credentials: false
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
       - name: Image metadata (tags)
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/dietetyk-ai-frontend
           tags: |
@@ -274,7 +270,7 @@ jobs:
             type=sha,format=short
 
       - name: Build frontend image (no push)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ./docker/frontend.Dockerfile
@@ -286,7 +282,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=frontend
 
       - name: Push obrazu frontendu do registry
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           file: ./docker/frontend.Dockerfile
@@ -308,25 +304,32 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout kodu
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
 
+      # The COMMITTED lockfiles, the same ones the Docker builds use - until 04.10.2026 the
+      # images were built from a lockfile regenerated in CI (D-4), so E2E tested a different
+      # dependency tree from the one shipped. Install scripts: see test-backend.
       - name: Install dependencies (backend)
         working-directory: ./backend
-        run: npm ci
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild sqlite3
 
       - name: Install dependencies and build (frontend)
         working-directory: ./frontend
         run: |
-          npm ci
+          npm ci --ignore-scripts
           npm run build
 
       - name: Install dependencies (root)
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
@@ -360,6 +363,18 @@ jobs:
       always() &&
       (needs.build-backend.result == 'success' || needs.build-frontend.result == 'success')
     runs-on: ubuntu-latest
+    # D-8 (audit 04.10.2026): two pushes A then B, A's build finishing last - A's update-git
+    # reset to origin/main (already tagged sha-B), wrote sha-A and pushed, and Argo CD rolled
+    # production back while the run showed green. Two guards: tag writes never run in
+    # parallel (queued, not cancelled), and the step below refuses to write a tag older than
+    # the one already there.
+    #
+    # Deliberately NOT a workflow-level `concurrency` with cancel-in-progress: the path filter
+    # compares each push only with its own parent, so cancelling a backend-only run in favour
+    # of a following frontend-only one would drop the backend build for good.
+    concurrency:
+      group: update-git-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       # Round 19 (audit): main is now protected by a rule requiring a PR (see the repository
       # ruleset "protect-main") - the default GITHUB_TOKEN pushes as github-actions[bot], which
@@ -368,10 +383,12 @@ jobs:
       # We therefore use a dedicated, narrowly scoped PAT (permissions: Contents: Read & Write
       # on this repository only) owned by the repository owner - a push with that token counts
       # as an admin push, so the rule lets it through.
+      # fetch-depth 0: the ancestry checks below need the history, not just the tip.
       - name: Checkout kodu
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           token: ${{ secrets.DEPLOY_PAT }}
+          fetch-depth: 0
 
       - name: Get short SHA
         id: vars
@@ -398,14 +415,33 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
 
-            if [ "${{ needs.build-backend.result }}" = "success" ]; then
+            # This run's commit must still be on main (a force-push may have dropped it).
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "$GITHUB_SHA is no longer on main - not writing its tag."
+              exit 0
+            fi
+
+            # Never replace a tag with an OLDER one: if the commit in the current tag already
+            # contains this run's commit, a later run got here first and its tag stays.
+            newer_tag_present() {
+              current="$(sed -n -E "/^[[:space:]]*$1:/,/^[[:space:]]*tag: \"sha-/ { s|^[[:space:]]*tag: \"sha-([0-9a-f]+)\"$|\1|p; }" charts/dietetyk/values.yaml | head -1)"
+              [ -n "$current" ] || return 1
+              [ "$current" != "${{ steps.vars.outputs.sha_short }}" ] || return 1
+              git merge-base --is-ancestor "$GITHUB_SHA" "$current" 2>/dev/null
+            }
+
+            if [ "${{ needs.build-backend.result }}" = "success" ] && newer_tag_present backend; then
+              echo "backend: values.yaml already points at a newer commit - leaving it."
+            elif [ "${{ needs.build-backend.result }}" = "success" ]; then
               # Zakres konczy sie na PRAWDZIWYM tagu, nie na pierwszej linii
               # zawierajacej "tag:" - komentarz z takim ciagiem przejmowalby
               # podmiane na siebie, zostawiajac prawdziwy tag nietkniety.
               sed -i -E "/^[[:space:]]*backend:/,/^[[:space:]]*tag: \"sha-/ { s|^([[:space:]]*)tag: \"sha-[^\"]*\"$|\1tag: \"sha-${{ steps.vars.outputs.sha_short }}\"| }" charts/dietetyk/values.yaml
               grep -q 'tag: "sha-${{ steps.vars.outputs.sha_short }}"' charts/dietetyk/values.yaml || { echo "::error::sed nie podmienil tagu backendu"; exit 1; }
             fi
-            if [ "${{ needs.build-frontend.result }}" = "success" ]; then
+            if [ "${{ needs.build-frontend.result }}" = "success" ] && newer_tag_present frontend; then
+              echo "frontend: values.yaml already points at a newer commit - leaving it."
+            elif [ "${{ needs.build-frontend.result }}" = "success" ]; then
               sed -i -E "/^[[:space:]]*frontend:/,/^[[:space:]]*tag: \"sha-/ { s|^([[:space:]]*)tag: \"sha-[^\"]*\"$|\1tag: \"sha-${{ steps.vars.outputs.sha_short }}\"| }" charts/dietetyk/values.yaml
               grep -q 'tag: "sha-${{ steps.vars.outputs.sha_short }}"' charts/dietetyk/values.yaml || { echo "::error::sed nie podmienil tagu frontendu"; exit 1; }
             fi

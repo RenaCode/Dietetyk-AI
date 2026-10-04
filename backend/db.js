@@ -278,9 +278,9 @@ const initDb = async () => {
 
 
   // Migration: first and last name - used to personalise the AI dietician's phrasing
-  // ("Hi Marcin, ..." rather than an impersonal tone) and shown in the profile.
+  // ("Hi Anna, ..." rather than an impersonal tone) and shown in the profile.
   // Kept separate from `username`, the immutable technical login: a user may log in as
-  // "mbeczynski" while the name they want to be called is "Marcin".
+  // "akowalska" while the name they want to be called is "Anna".
   await addColumn("ALTER TABLE users ADD COLUMN first_name TEXT");
 
   await addColumn("ALTER TABLE users ADD COLUMN last_name TEXT");

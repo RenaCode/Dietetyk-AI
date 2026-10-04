@@ -80,6 +80,22 @@ Encrypted columns (the full list, from `utils/secretKeys.js` and `oauth_tokens`)
 
 So nobody is logged out by a rotation, and no password has to be reset.
 
+### Sync tokens that reached the logs (04.10.2026)
+
+Until 04.10.2026 the frontend's nginx left its error log at the default `warn` level, and the
+"client request body is buffered to a temporary file" warning prints the raw request line —
+`POST /api/integrations/apple-health/<sync_token>` — for every webhook body over the 16 KB
+buffer. The access log was redacted; the error log was not. So the sync token of every account
+that used the Apple Health webhook before that date may sit in old pod logs, and that token is
+the webhook's only credential (it allows writing that account's health data, not reading it).
+The chart now sets `error_log /dev/stderr error;` and a 1 MB body buffer
+(`charts/dietetyk/templates/nginx-configmap.yaml`).
+
+Old log lines do not disappear with the fix, so the affected tokens are rotated: Settings →
+Apple Health → regenerate (or `rotateSyncToken` in `routes/account.js`), then paste the new
+URL into the Health Auto Export automation. This is the owner's step once the fix is live. A
+token never goes into this document, a commit or an issue — only the fact that it was rotated.
+
 ## Why this is being done at all
 
 The committed value was `APP_PASSWORD=dietetyk-admin`. It is still recoverable from this

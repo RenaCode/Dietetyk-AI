@@ -524,7 +524,11 @@ router.post('/api/integrations/apple-health/:syncToken', requireKnownSyncToken, 
       return res.status(400).json({ error: `Za dużo zdarzeń w jednym żądaniu (limit: ${MAX_EVENTS_PER_REQUEST}).` });
     }
 
-    if (metrics) {
+    // Opt-in only. Metric names are not values, but which kinds of health data a person
+    // records (medications, menstrual cycle, ECG) is itself health data, and this line used
+    // to go to the pod log on every sync. The per-request counters in the "saved data" line
+    // below are enough for day-to-day diagnostics.
+    if (metrics && process.env.APPLE_HEALTH_DEBUG === '1') {
       console.log(`[APPLE HEALTH DEBUG] User ${user.id} sent metrics: [${metrics.filter(m => m && m.name).map(m => m.name).join(', ')}]`);
     }
 
@@ -561,10 +565,11 @@ router.post('/api/integrations/apple-health/:syncToken', requireKnownSyncToken, 
         
       // Special parser for sleep analysis (sleep_analysis), because it is a categorical metric
         if (name === 'sleep_analysis') {
+          // No logging of entries here: a debug line used to print the first sleep entry
+          // verbatim - bed and wake times, deep/REM/core phases and `source`, which carries
+          // the watch owner's first name - into the pod log on every sync (audit 04.10.2026).
+          // Never log entry contents from this route; counts only.
           if (!Array.isArray(metric.data)) continue;
-          if (metric.data.length > 0) {
-            console.log(`[APPLE HEALTH DEBUG SLEEP] Pierwszy wpis: ${JSON.stringify(metric.data[0])}`);
-          }
           for (const entry of metric.data) {
             // A null entry used to throw on `entry.startDate` and fail the whole request with a
             // 500, which the phone answers by retrying the same payload for ever.

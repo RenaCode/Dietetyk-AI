@@ -14,6 +14,11 @@ spec:
       app.kubernetes.io/component: frontend
   template:
     metadata:
+      annotations:
+        # The config is mounted with subPath, which never sees ConfigMap updates, and nginx
+        # reads it only at start. Without this a change to nginx-configmap.yaml (say, a log
+        # redaction fix) syncs "green" in Argo CD while the old config keeps running.
+        checksum/nginx-config: {{ include (print $.Template.BasePath "/nginx-configmap.yaml") . | sha256sum }}
       labels:
         {{- include "dietetyk.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: frontend

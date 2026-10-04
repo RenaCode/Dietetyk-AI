@@ -288,6 +288,40 @@ async function testWaterIsIdempotentAndLossless(baseUrl, syncToken) {
   assert(row.water_ml === 1200, `a new sample is added once (got ${row.water_ml}, expected 1200)`);
 }
 
+// Audit 04.10.2026: a debug line printed the first sleep entry verbatim (times, phases and
+// `source` with the watch owner's first name) on every sync, and another listed every metric
+// name. Both reached the pod log, which the access-log redaction never covered. This captures
+// everything the route writes to the console while it processes a sleep payload and checks
+// that no entry content made it out; with APPLE_HEALTH_DEBUG unset not even metric names.
+async function testSleepPayloadLeavesNoContentInLogs(baseUrl, syncToken) {
+  console.log('\n--- TEST 6: a sleep payload writes no entry content to the console ---');
+  await clearDay();
+  const marker = 'Apple Watch (LogCanary)';
+  const captured = [];
+  const originals = { log: console.log, warn: console.warn, error: console.error, info: console.info };
+  for (const level of Object.keys(originals)) {
+    console[level] = (...args) => { captured.push(args.map(String).join(' ')); };
+  }
+  let res;
+  try {
+    res = await postPayload(baseUrl, syncToken, {
+      metrics: [{
+        name: 'sleep_analysis',
+        data: [{
+          startDate: AT('00:30:00'), endDate: AT('07:30:00'),
+          inBed: 7.5, deep: 1.2, rem: 1.6, core: 4.2, source: marker
+        }]
+      }]
+    });
+  } finally {
+    Object.assign(console, originals);
+  }
+  assert(res.status === 200, `the sleep payload is accepted (status ${res.status})`);
+  const leaked = captured.filter((line) => /LogCanary|inBed|"deep"|"rem"|00:30:00/.test(line));
+  assert(leaked.length === 0, `no captured log line contains entry content (${leaked.length} did)`);
+  assert(!captured.some((line) => line.includes('sleep_analysis')), 'metric names are not logged without APPLE_HEALTH_DEBUG=1');
+}
+
 async function main() {
   console.log('=== APPLE HEALTH WEBHOOK TESTS ===');
   let server;
@@ -302,6 +336,7 @@ async function main() {
     await testWorkoutsDoNotEraseTheDay(started.baseUrl, user.sync_token);
     await testWorkoutOnlyDayStillCounts(started.baseUrl, user.sync_token);
     await testWaterIsIdempotentAndLossless(started.baseUrl, user.sync_token);
+    await testSleepPayloadLeavesNoContentInLogs(started.baseUrl, user.sync_token);
 
     console.log('\n🎉 APPLE HEALTH WEBHOOK TESTS PASSED\n');
     server.close();

@@ -473,9 +473,8 @@ const initDb = async () => {
     await run(`INSERT OR IGNORE INTO settings (user_id, key, value) VALUES (1, ?, ?)`, [s.key, s.value]);
   }
 
-  // NOTE: the hardcoded default settings for user_id = 2 ("Paulina") were removed.
-  // That account is deleted on every start (see above) and new users join exclusively
-  // through the invitation/registration flow (routes/auth.js), which inserts its own
+  // NOTE: the hardcoded default settings for user_id = 2 were removed. New users join
+  // exclusively through the invitation/registration flow (routes/auth.js), which inserts its own
   // defaults for the newly created user_id. Leaving the hardcoded insert for user_id = 2
   // caused a real bug: the first new user registered on a fresh installation received
   // id = 2 (AUTOINCREMENT) and, because of the "INSERT OR IGNORE" in register-public,

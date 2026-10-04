@@ -172,6 +172,13 @@ async function testSpaFallbackDoesNotLog(baseUrl) {
   assert(after === before, 'the SPA fallback writes no WARN/ERROR row to app_logs');
 }
 
+// D-10 (audit 2026-10-04): API responses carried `X-Powered-By: Express`.
+async function testNoPoweredByHeader(baseUrl) {
+  console.log('\n--- TEST: no X-Powered-By header ---');
+  const res = await fetch(`${baseUrl}/api/healthz`);
+  assert(res.headers.get('x-powered-by') === null, `no X-Powered-By (got ${res.headers.get('x-powered-by')})`);
+}
+
 async function run() {
   await db.initDb();
   const { server, baseUrl } = await startServer();
@@ -181,6 +188,7 @@ async function run() {
     await testBodyLimits(baseUrl);
     await testHealthzOutsideLimiter(baseUrl);
     await testSpaFallbackDoesNotLog(baseUrl);
+    await testNoPoweredByHeader(baseUrl);
   } finally {
     server.close();
   }

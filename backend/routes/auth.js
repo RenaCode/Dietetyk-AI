@@ -552,7 +552,11 @@ router.post('/api/login', async (req, res) => {
     // before that. The response is the same 429 the typed-identifier lockout produces, so an
     // attacker cannot tell the two counters apart, and a legitimate user sees one consistent
     // message whichever name they signed in with.
-    const userLockedMs = await loginAttempts.reserveAttempt(req.ip, loginAttemptKeyForUser(user.id));
+    //
+    // Third counter: the same account key without the IP (see ACCOUNT_MAX_ATTEMPTS in
+    // services/loginAttempts.js) - the only one a botnet cannot multiply by its address count.
+    const userLockedMs = await loginAttempts.reserveAttempt(req.ip, loginAttemptKeyForUser(user.id))
+      || await loginAttempts.reserveAccountAttempt(loginAttemptKeyForUser(user.id));
     if (userLockedMs > 0) {
       return res.status(429).json({
         error: `Za dużo nieudanych prób logowania. Spróbuj ponownie za ${Math.ceil(userLockedMs / 60000)} min.`
@@ -567,6 +571,7 @@ router.post('/api/login', async (req, res) => {
 
     await loginAttempts.recordSuccess(req.ip, username);
     await loginAttempts.recordSuccess(req.ip, loginAttemptKeyForUser(user.id));
+    await loginAttempts.recordAccountSuccess(loginAttemptKeyForUser(user.id));
 
     res.json(await completeLogin(user));
   } catch (err) {
@@ -606,7 +611,9 @@ router.post('/api/verify-2fa-setup', async (req, res) => {
       return res.status(401).json({ error: 'Tymczasowa sesja wygasła. Zaloguj się ponownie.' });
     }
 
-    const lockedMs = await loginAttempts.reserveAttempt(req.ip, twoFactorAttemptKey(session.user_id));
+    // Per IP, then account-wide - the same pair as /api/login, see there.
+    const lockedMs = await loginAttempts.reserveAttempt(req.ip, twoFactorAttemptKey(session.user_id))
+      || await loginAttempts.reserveAccountAttempt(twoFactorAttemptKey(session.user_id));
     if (lockedMs > 0) {
       return res.status(429).json({
         error: `Za dużo nieudanych prób. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.`
@@ -622,6 +629,7 @@ router.post('/api/verify-2fa-setup', async (req, res) => {
     }
 
     await loginAttempts.recordSuccess(req.ip, twoFactorAttemptKey(session.user_id));
+    await loginAttempts.recordAccountSuccess(twoFactorAttemptKey(session.user_id));
 
     // Activate 2FA for the user
     await db.run(`UPDATE users SET totp_enabled = 1, force_2fa = 0 WHERE id = ?`, [session.user_id]);
@@ -661,7 +669,9 @@ router.post('/api/login-2fa', async (req, res) => {
       return res.status(401).json({ error: 'Tymczasowa sesja wygasła. Zaloguj się ponownie.' });
     }
 
-    const lockedMs = await loginAttempts.reserveAttempt(req.ip, twoFactorAttemptKey(session.user_id));
+    // Per IP, then account-wide - the same pair as /api/login, see there.
+    const lockedMs = await loginAttempts.reserveAttempt(req.ip, twoFactorAttemptKey(session.user_id))
+      || await loginAttempts.reserveAccountAttempt(twoFactorAttemptKey(session.user_id));
     if (lockedMs > 0) {
       return res.status(429).json({
         error: `Za dużo nieudanych prób. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.`
@@ -677,6 +687,7 @@ router.post('/api/login-2fa', async (req, res) => {
     }
 
     await loginAttempts.recordSuccess(req.ip, twoFactorAttemptKey(session.user_id));
+    await loginAttempts.recordAccountSuccess(twoFactorAttemptKey(session.user_id));
 
     // Issue a permanent session token (valid 7 days), already 2FA-verified
     const permanentToken = await createSession(session.user_id, true);

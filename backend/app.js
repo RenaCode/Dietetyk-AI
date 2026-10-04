@@ -51,34 +51,26 @@ const app = express();
 // tests/test-trust-proxy.js pins this down, and reads the number straight out of this
 // file so that changing it here cannot silently pass.
 //
-// WHAT THIS NUMBER CANNOT FIX (measured on production, 2026-09-12). The hop count above is
-// correct and spoofing is genuinely dead, but req.ip is still NOT the caller's address: every
-// request from the internet arrives here as 10.42.0.1, the node's cni0 gateway. Proof - two
-// requests to https://dietetyk.renacode.com/api/login from a machine whose public address was
-// 83.4.148.167, the second one carrying a forged `X-Forwarded-For: 9.9.9.7`; both were logged
-// by services/logger.js as `(IP: 10.42.0.1)`.
+// WHAT THIS NUMBER COULD NOT FIX UNTIL 03.10.2026. The hop count was already correct and
+// spoofing dead, but every request from the internet arrived here as 10.42.0.1, the node's
+// cni0 gateway (measured on production 2026-09-12, a forged X-Forwarded-For included). k3s
+// fronts Traefik with klipper-lb, which DNATs and MASQUERADEs, and the traefik Service ran
+// with `externalTrafficPolicy: Cluster`, so the client address never entered the chain. In
+// that period the rate limiter, the registration lockout and the per-IP brute-force keys were
+// all effectively global, and app_logs recorded 10.42.0.1 for everyone.
 //
-// The cause is upstream of every header decision made here. k3s fronts Traefik with klipper-lb
-// (the svclb DaemonSet), which DNATs and then MASQUERADEs incoming connections, and the traefik
-// Service in kube-system runs with `externalTrafficPolicy: Cluster`. Traefik therefore sees the
-// node, not the client, and the X-Forwarded-For chain it starts is truthful about what it saw
-// and useless to us. No value of this setting can recover an address that never entered the
-// chain: the comment above is right that 1 would collapse everyone onto the Traefik pod, and
-// what is actually happening is the same collapse one hop further out.
-//
-// The practical consequences, all live today:
-//   - middleware/rateLimit.js keeps ONE bucket for the whole internet. 121 requests in a minute
-//     from anybody returns 429 to everybody for the rest of that minute.
-//   - the per-IP registration lockout in routes/auth.js ('register_endpoint') is likewise
-//     global: five attempts from anyone freeze registration for 15 minutes for all.
-//   - the brute-force key in services/loginAttempts.js is `10.42.0.1::<username>`, so it still
-//     limits guessing per account, but no longer per source.
-//   - every `ip` column in app_logs and every SECURITY log line records 10.42.0.1.
-// The fix is in the cluster, not in this file: `externalTrafficPolicy: Local` on the traefik
-// Service (or the PROXY protocol between klipper-lb and Traefik). Until that lands, treat
-// req.ip as "the cluster", not "the caller". Do NOT raise the number below to compensate - at 3
-// the forged left-hand entry becomes the one Express believes, which is the original hole.
+// Since 03.10.2026 the traefik Service runs with `externalTrafficPolicy: Local`, and req.ip
+// is the real client: middleware/rateLimit.js and the 'register_endpoint' lockout are per
+// client again, and the IP columns mean what they say. The flip side (audit 04.10.2026, D-3):
+// every brute-force key in services/loginAttempts.js contained the IP, so the per-account key
+// stopped acting as an accidental global limit and an attacker with N addresses got N times
+// the guesses. That is why login and 2FA now also reserve an account-wide, IP-independent
+// slot (reserveAccountAttempt). Do NOT raise the number below - at 3 the forged left-hand
+// entry becomes the one Express believes, which is the original hole.
 app.set('trust proxy', 2);
+
+// `X-Powered-By: Express` only tells a scanner which CVE list to try (audit 04.10.2026, D-10).
+app.disable('x-powered-by');
 
 // Middleware
 // CORS restricted to the configured application URL (APP_URL). A bare cors() used to
@@ -116,8 +108,8 @@ app.use(morgan(':method :safe-url :status :response-time ms - :res[content-lengt
 // since the 2026-10 audit - before the rate limiter as well.
 //
 // It used to sit behind apiRateLimiter on the assumption that 120 req/min per IP left plenty
-// of room for probes. That assumption died with the discovery that every request reaches this
-// process as 10.42.0.1 (see the trust-proxy note above): the kubelet's probes share ONE bucket
+// of room for probes. That assumption died with the discovery that every request then reached
+// this process as 10.42.0.1 (see the trust-proxy note above): the kubelet's probes shared ONE bucket
 // with the whole internet. Measured with the audit PoC: after 121 anonymous requests to
 // /api/healthz in a minute the probe itself got 429. At ~2 req/s from anybody, readiness
 // takes the pod out of the Service (full outage) and liveness restarts it every 90 s - and
@@ -134,8 +126,8 @@ app.use(require('./routes/healthcheck'));
 // registration order. The Apple Health webhook in particular is authorised solely by the
 // token in its URL (sync_token) - without the limiter mounted before it, that endpoint had
 // no protection whatsoever against request floods or token guessing.
-// Until the cluster forwards real client addresses (see the trust-proxy note above), this is
-// effectively ONE global bucket, not a per-client limit.
+// Per client since 03.10.2026 (see the trust-proxy note above); before that it was one
+// global bucket.
 app.use('/api', apiRateLimiter);
 
 // Request bodies. The global parser used to be `express.json({ limit: '20mb' })`, mounted

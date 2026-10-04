@@ -115,12 +115,9 @@ async function requireAuth(req, res, next) {
     // read from the session row rather than computed here: only the row knows when the
     // session was born.
     //
-    // DEPENDENCY: `sessions.absolute_expires_at` does not exist yet - adding it belongs to
-    // db.js (schema + backfill), which this change deliberately does not touch. Until that
-    // migration lands the column reads as undefined and the code below behaves exactly as
-    // before; once it lands, the same code starts enforcing the cap with no further edit
-    // here. The column is expected to hold the same 'YYYY-MM-DD HH:MM:SS' UTC text format as
-    // expires_at, written once when the session is created.
+    // `sessions.absolute_expires_at` is created and backfilled in db.js and written once by
+    // createSession() in routes/auth.js, in the same 'YYYY-MM-DD HH:MM:SS' UTC text format as
+    // expires_at. A row without it (NULL) gets no cap - the branch below is kept for that case.
     const expiresAtMs = new Date(session.expires_at.replace(' ', 'T') + 'Z').getTime();
     const nowMs = Date.now();
     const remainingTimeMs = expiresAtMs - nowMs;

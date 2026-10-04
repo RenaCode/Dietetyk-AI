@@ -14,6 +14,17 @@ const MAX_ATTEMPTS = 5;
 const WINDOW_MS = 15 * 60 * 1000;   // window over which failed attempts are counted
 const LOCKOUT_MS = 15 * 60 * 1000;  // how long the block lasts once the limit is exceeded
 
+// Account-wide counter, independent of the client IP (audit 04.10.2026, D-3). Every other key
+// here contains the IP. Until 03.10 that IP was always Traefik's 10.42.0.1, so the per-account
+// key happened to work as a global limit; since Traefik runs with externalTrafficPolicy: Local
+// req.ip is the real client, and an attacker with N addresses got 5*N guesses per account per
+// 15 minutes (~480k a day from 1000 proxies). 30 is the trade-off: high enough that a user
+// fumbling a password from phone and laptop never meets it, low enough to cap a distributed
+// guess. It also means anyone can lock a known account for 15 minutes - a deliberate choice
+// over unlimited guessing; 2FA (force_2fa) is the real protection for accounts with health data.
+const ACCOUNT_MAX_ATTEMPTS = 30;
+const ACCOUNT_SCOPE = '*';
+
 function buildKey(ip, identifier) {
   return `${ip || 'unknown'}::${(identifier || '').toString().toLowerCase()}`;
 }
@@ -52,7 +63,10 @@ async function isLocked(ip, identifier) {
 // never shortened by a fresh attempt. The lock itself starts at the first refused attempt
 // (count = MAX_ATTEMPTS + 1), i.e. after exactly MAX_ATTEMPTS attempts that reached the
 // comparison - the same number the old code allowed sequentially.
-async function reserveAttempt(ip, identifier) {
+//
+// `maxAttempts` / `lockoutMs` default to the per-IP limits; reserveAccountAttempt() passes
+// the account-wide ones.
+async function reserveAttempt(ip, identifier, { maxAttempts = MAX_ATTEMPTS, lockoutMs = LOCKOUT_MS } = {}) {
   const key = buildKey(ip, identifier);
   const now = Date.now();
   const windowStart = now - WINDOW_MS;
@@ -73,15 +87,16 @@ async function reserveAttempt(ip, identifier) {
     windowStart, now,
     windowStart, now, now,
     windowStart, now,
-    MAX_ATTEMPTS, now, now + LOCKOUT_MS
+    maxAttempts, now, now + lockoutMs
   ]);
 
-  if (rec.count === MAX_ATTEMPTS + 1) {
+  if (rec.count === maxAttempts + 1) {
     const logger = require('./logger');
-    logger.security(`Brute-force lockout for: ${identifier}`, 'AUTH_LOCKOUT', { key, count: rec.count }, ip);
+    const distributed = ip === ACCOUNT_SCOPE ? ' (distributed: account-wide limit, any IP)' : '';
+    logger.security(`Brute-force lockout for: ${identifier}${distributed}`, 'AUTH_LOCKOUT', { key, count: rec.count }, ip);
   }
 
-  if (rec.count > MAX_ATTEMPTS) {
+  if (rec.count > maxAttempts) {
     return Math.max(rec.locked_until - now, 1);
   }
   return 0;
@@ -89,6 +104,17 @@ async function reserveAttempt(ip, identifier) {
 
 async function recordSuccess(ip, identifier) {
   await db.run(`DELETE FROM login_attempts WHERE key = ?`, [buildKey(ip, identifier)]);
+}
+
+// The account-wide gate: same atomic reservation, keyed without the IP. Callers use it AFTER
+// their per-IP reservation passed, so a request already refused per IP does not also spend
+// an account-wide slot.
+function reserveAccountAttempt(identifier) {
+  return reserveAttempt(ACCOUNT_SCOPE, identifier, { maxAttempts: ACCOUNT_MAX_ATTEMPTS });
+}
+
+function recordAccountSuccess(identifier) {
+  return recordSuccess(ACCOUNT_SCOPE, identifier);
 }
 
 // Periodic cleanup of expired entries so the table does not grow without bound
@@ -105,6 +131,9 @@ module.exports = {
   isLocked,
   reserveAttempt,
   recordSuccess,
+  reserveAccountAttempt,
+  recordAccountSuccess,
   MAX_ATTEMPTS,
+  ACCOUNT_MAX_ATTEMPTS,
   LOCKOUT_MS
 };

@@ -57,7 +57,7 @@ const twoFactorAttemptKey = (userId) => `2fa_user:${userId}`;
 // (`WHERE username = ? OR email = ?`), and services/loginAttempts.js keys its counter on the
 // submitted string - so one account has as many independent counters as it has ways of being
 // named. An attacker guessing Alice's password gets 5 tries as `alice`, then 5 more as
-// `alice@firma.pl`: ten guesses where the limit says five, and more still if a second address
+// `alice@example.com`: ten guesses where the limit says five, and more still if a second address
 // ever reaches that row. The account id is the one identifier that does not multiply.
 const loginAttemptKeyForUser = (userId) => `login_user:${userId}`;
 

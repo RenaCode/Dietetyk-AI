@@ -189,6 +189,7 @@ const TRANSLATIONS = {
   "Opcje Integracji": "Integration Options",
   "Token synchronizacji": "Sync Token",
   "Klucz API Gemini (opcjonalny dla admina)": "Gemini API Key (optional for admin)",
+  "Uwaga: przy kluczu z darmowego planu Gemini Google może wykorzystać przesyłane dane (posiłki, wskaźniki zdrowotne) do ulepszania swoich usług. Używaj klucza z projektu z włączonym rozliczaniem.": "Note: with a free-tier Gemini key, Google may use the data you send (meals, health metrics) to improve its services. Use a key from a project with billing enabled.",
   "Zapisz ustawienia integracji": "Save integration settings",
   "Cele Dietetyczne": "Dietary Targets",
   "Domyślny cel kaloryczny (kcal)": "Default calorie target (kcal)",

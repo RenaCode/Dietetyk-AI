@@ -251,7 +251,7 @@ an image built from the commit that added it.
 > kubectl exec "$POD" -n default -c backend -- node -e "
 >   require('dotenv').config({ path: '/app/.env' });
 >   require('/app/services/mailgun').sendMailgunEmail({
->     to: 'mbeczynski@gmail.com',
+>     to: '<alert-address>',
 >     subject: '[TEST] rotacja APP_PASSWORD - kanal alarmowy dziala',
 >     html: '<pre>post-rotation check</pre>' })
 >     .then(r => { console.log('OK', r.id); process.exit(0); })

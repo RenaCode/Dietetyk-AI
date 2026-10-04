@@ -5,7 +5,7 @@
 // one - the value the client typed. nginx in front of the backend uses
 // $proxy_add_x_forwarded_for (charts/dietetyk/templates/nginx-configmap.yaml), which only
 // APPENDS, so a header forged outside the cluster arrives here intact. Every per-IP
-// defence keys off req.ip, so an attacker rotating `X-Forwarded-For: 9.9.9.<n>` got a
+// defence keys off req.ip, so an attacker rotating `X-Forwarded-For: 192.0.2.<n>` got a
 // fresh brute-force key (services/loginAttempts.js) and a fresh limiter bucket
 // (middleware/rateLimit.js) on every request - unlimited password guessing.
 //
@@ -127,7 +127,7 @@ async function run() {
     let blocked = 0;
 
     for (let i = 1; i <= MAX_REQUESTS + 1; i++) {
-      const forwardedFor = `9.9.9.${i}, ${REAL_CLIENT}, ${TRAEFIK_POD}`;
+      const forwardedFor = `192.0.2.${i}, ${REAL_CLIENT}, ${TRAEFIK_POD}`;
       const res = await request(port, forwardedFor);
       if (res.status === 429) {
         blocked++;
@@ -155,7 +155,7 @@ async function run() {
     // The opposite failure mode: too few trusted hops would make EVERY client resolve to
     // the Traefik pod address, so the attacker above would have just locked out the whole
     // internet. A genuinely different client must still get through with its own identity.
-    const otherClient = await request(port, `9.9.9.1, ${OTHER_CLIENT}, ${TRAEFIK_POD}`);
+    const otherClient = await request(port, `192.0.2.1, ${OTHER_CLIENT}, ${TRAEFIK_POD}`);
     assert(
       otherClient.status === 200 && otherClient.ip === OTHER_CLIENT,
       `a different real client keeps its own counter and is not collateral damage of the ` +

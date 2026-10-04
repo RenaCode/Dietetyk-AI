@@ -250,10 +250,10 @@ const initDb = async () => {
   //    `WHERE username = ? OR email = ?` in the login path cannot match on '' either.
   // 3. CASE-INSENSITIVE AND TRIMMED (lower(TRIM(email))). Mailbox names are effectively
   //    case-insensitive at every real provider, while the login lookup above compares
-  //    exactly - so 'Marcin@x.pl' registered after 'marcin@x.pl' is a second account owning
+  //    exactly - so 'Alice@example.com' registered after 'alice@example.com' is a second account owning
   //    the same inbox, which is the same impersonation vector plus a password-reset mail
   //    landing in the victim's mailbox. Two genuinely different people never share a case
-  //    variant. TRIM is in the indexed expression for the same reason: ' a@b.pl ' must not
+  //    variant. TRIM is in the indexed expression for the same reason: ' a@example.com ' must not
   //    be able to slip past the constraint as a different string.
   //
   // Duplicates that ALREADY exist are not merged or nulled out here. Picking which of two

@@ -126,10 +126,10 @@ async function seedLogs() {
     'Gemini API query failed - 404 Model Not Found',
     'GEMINI_AI',
     new Error('models/gemini-1.5-flash is not found or is not supported for generateContent.'),
-    '192.168.1.50',
+    '192.0.2.50',
     1
   );
-  await logger.error('Invalid session authorisation token', 'HTTP_SERVER', 'Error: jwt expired at Object.verify...', '185.201.112.5', 1);
+  await logger.error('Invalid session authorisation token', 'HTTP_SERVER', 'Error: jwt expired at Object.verify...', '198.51.100.25', 1);
 
   // Repeated, to exercise the grouping into the top-10 table.
   for (let i = 0; i < 3; i++) {
@@ -137,9 +137,9 @@ async function seedLogs() {
   }
 
   // The three categories that are the entire point of the report.
-  await logger.security('Failed login attempt for account: admin (user does not exist)', 'AUTH_LOGIN_FAILURE', { username: 'admin' }, '80.50.23.14');
-  await logger.security('Brute-force lockout for: admin', 'AUTH_LOCKOUT', { key: '80.50.23.14::admin', count: 5 }, '80.50.23.14');
-  await logger.security('API request limit exceeded (121/120)', 'RATE_LIMIT', { path: '/api/meals', method: 'POST' }, '45.67.234.12');
+  await logger.security('Failed login attempt for account: admin (user does not exist)', 'AUTH_LOGIN_FAILURE', { username: 'admin' }, '203.0.113.14');
+  await logger.security('Brute-force lockout for: admin', 'AUTH_LOCKOUT', { key: '203.0.113.14::admin', count: 5 }, '203.0.113.14');
+  await logger.security('API request limit exceeded (121/120)', 'RATE_LIMIT', { path: '/api/meals', method: 'POST' }, '203.0.113.12');
 
   await waitForLog('RATE_LIMIT', /121\/120/);
 }

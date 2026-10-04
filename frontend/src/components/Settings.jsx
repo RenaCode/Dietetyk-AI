@@ -2582,6 +2582,11 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   onChange={handleInputChange}
                   placeholder={t("Wpisz swój klucz API Gemini...")}
                 />
+                {/* Free-tier Gemini keys let Google use prompts to improve its products, and the
+                    prompts carry meals and health metrics (privacy policy, section 5). */}
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '6px', display: 'block' }}>
+                  {t("Uwaga: przy kluczu z darmowego planu Gemini Google może wykorzystać przesyłane dane (posiłki, wskaźniki zdrowotne) do ulepszania swoich usług. Używaj klucza z projektu z włączonym rozliczaniem.")}
+                </span>
               </div>
             </div>
           </div>

@@ -137,7 +137,7 @@ A red E2E therefore stops the release before anything reaches the registry or `v
 | backend `Deployment` | Node API on :3000, runs as uid 1000, liveness/readiness on `GET /api/healthz`. Data on a PVC (`persistence`, `local-path`) mounted at `/app/data`. |
 | frontend `Deployment` | nginx serving the built SPA and proxying `/api` to the backend; its config is the ConfigMap in `templates/nginx-configmap.yaml`, **not** `docker/nginx.conf`. |
 | `Ingress` | Traefik, host `dietetyk.renacode.com`, TLS from cert-manager (`letsencrypt-prod`). |
-| `NetworkPolicy` | On by default (`networkPolicy.enabled`): the backend accepts only the frontend pod on :3000, the frontend only Traefik on :80. Egress (`networkPolicy.egress`) blocks the home network reachable through the node's WireGuard tunnel (`192.168.3.0/24`, `10.13.13.0/24`); everything else outbound is open. Rollback: `enabled: false` (or `egress.enabled: false` for egress alone) and let Argo CD sync. Covered by `backend/tests/test-chart.js`. |
+| `NetworkPolicy` | On by default (`networkPolicy.enabled`): the backend accepts only the frontend pod on :3000, the frontend only Traefik on :80. Egress (`networkPolicy.egress`) blocks the private networks listed in `networkPolicy.egress.siecDomowa`, which is empty in this public repository and set by the cluster operator in the Argo CD Application's `valuesObject`; everything else outbound is open. Rollback: `enabled: false` (or `egress.enabled: false` for egress alone) and let Argo CD sync. Covered by `backend/tests/test-chart.js`. |
 | sqlite-web sidecar | Opt-in (`dbImage.enabled`, off): it has no authentication. Enable only for a debugging session and reach it with `kubectl port-forward`. |
 
 ### Backend configuration (secrets)

@@ -36,7 +36,7 @@ const app = express();
 // `true` - what this used to be - was a real, exploited hole: it trusts EVERY entry, so
 // Express takes the LEFTMOST one, which is whatever the client typed. nginx uses
 // $proxy_add_x_forwarded_for, which only APPENDS, so a header forged outside survives all
-// the way here. An attacker rotating `X-Forwarded-For: 9.9.9.<n>` got a fresh brute-force
+// the way here. An attacker rotating `X-Forwarded-For: 192.0.2.<n>` got a fresh brute-force
 // key (`${ip}::${username}`) and a fresh limiter bucket on every single request: 12 wrong
 // passwords in a row, 12 let through, 0 lockouts, against MAX_ATTEMPTS=5.
 //
@@ -46,8 +46,8 @@ const app = express();
 //   too low   - every user collapses onto the proxy's own address (with 1 here, that is
 //               the Traefik pod IP), giving the entire internet ONE shared counter: the
 //               first attacker to trip the 120 req/min limiter locks out everybody else.
-// Verified against express 4 / proxy-addr with a forged prefix `9.9.9.7, <client>,
-// <traefik>`: 2 yields <client>, `true` yields 9.9.9.7, 1 yields <traefik>.
+// Verified against express 4 / proxy-addr with a forged prefix `192.0.2.7, <client>,
+// <traefik>`: 2 yields <client>, `true` yields 192.0.2.7, 1 yields <traefik>.
 // tests/test-trust-proxy.js pins this down, and reads the number straight out of this
 // file so that changing it here cannot silently pass.
 //

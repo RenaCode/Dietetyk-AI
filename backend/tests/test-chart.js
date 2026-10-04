@@ -93,8 +93,14 @@ function run() {
   assert(/podSelector:\s*\n\s*matchLabels:\s*\n\s*app\.kubernetes\.io\/name: dietetyk\s*\n\s*app\.kubernetes\.io\/instance: dietetyk\s*\n\s*policyTypes:\s*\n\s*- Egress\s*\n/.test(egressPolicy), 'one egress policy covers both pods (no component label in the selector)');
   assert(/protocol: UDP, port: 53/.test(egressPolicy) && /protocol: TCP, port: 53/.test(egressPolicy), 'egress allows DNS over UDP and TCP');
   assert(/- to:\s*\n\s*- namespaceSelector: \{\}/.test(egressPolicy), 'egress allows every pod in the cluster');
-  assert(/cidr: 0\.0\.0\.0\/0\s*\n\s*except:\s*\n\s*- 192\.168\.3\.0\/24\s*\n\s*- 10\.13\.13\.0\/24/.test(egressPolicy), 'egress allows the internet except the home LAN and the WireGuard range');
-  assert(!/cidr: (192\.168\.3|10\.13\.13)\./.test(egressPolicy), 'no rule opens any home address');
+  // P-D4 (2026-10-04): the repository is public, so the blocked CIDRs are NOT in values.yaml -
+  // the cluster operator sets them in the Argo CD valuesObject. The default renders a plain
+  // 0.0.0.0/0 (no `except: []`, which is pointless at best), and a list renders as `except`.
+  assert(/cidr: 0\.0\.0\.0\/0\s*\n(?!\s*except)/.test(egressPolicy), 'with the default empty list the internet rule has no except');
+  const withPrivate = render('--set-json', 'networkPolicy.egress.siecDomowa=["192.0.2.0/24","198.51.100.0/24"]');
+  const egressWithPrivate = withPrivate.split(/^---$/m).find(d => /^ {2}name: dietetyk-egress$/m.test(d)) || '';
+  assert(/cidr: 0\.0\.0\.0\/0\s*\n\s*except:\s*\n\s*- 192\.0\.2\.0\/24\s*\n\s*- 198\.51\.100\.0\/24/.test(egressWithPrivate), 'an operator list renders as except on the internet rule');
+  assert(!/cidr: (192\.0\.2|198\.51\.100)\./.test(egressWithPrivate), 'no rule opens any of the listed networks');
   const noEgress = render('--set', 'networkPolicy.egress.enabled=false');
   assert(!/name: dietetyk-egress/.test(noEgress) && /name: dietetyk-backend\n/.test(noEgress), 'networkPolicy.egress.enabled=false drops only the egress policy');
   const disabled = render('--set', 'networkPolicy.enabled=false');

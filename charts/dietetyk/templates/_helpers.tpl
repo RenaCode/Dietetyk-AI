@@ -74,11 +74,12 @@ imagePullSecrets:
 {{- end }}
 
 {{/*
-EGRESS RULES - EVERYTHING EXCEPT THE HOME NETWORK (2026-10-03).
+EGRESS RULES - EVERYTHING EXCEPT THE OPERATOR'S PRIVATE NETWORKS (2026-10-03).
 
-The node routes 192.168.3.0/24 and 10.13.13.0/24 through wg0 (the tunnel home), and the
-UDM accepts all of 10.13.13.0/24 - without this policy every pod reached the UDM, the TV
-and Fibaro. Three rules, OR-ed:
+The node can route private networks that are not the cluster's (for example over a VPN
+tunnel); without this policy every pod could reach the devices behind it. The CIDRs come
+from `networkPolicy.egress.siecDomowa`, which the cluster operator sets outside this public
+repository. Three rules, OR-ed:
 
   1. DNS to CoreDNS (UDP and TCP 53),
   2. any pod in the cluster (`namespaceSelector: {}`) - in-cluster traffic unchanged;
@@ -108,5 +109,7 @@ that ipBlock covers pods, so in-cluster traffic should not depend on it.
 - to:
     - ipBlock:
         cidr: 0.0.0.0/0
-        except: {{- toYaml .Values.networkPolicy.egress.siecDomowa | nindent 10 }}
+      {{- with .Values.networkPolicy.egress.siecDomowa }}
+        except: {{- toYaml . | nindent 10 }}
+      {{- end }}
 {{- end -}}

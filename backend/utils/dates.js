@@ -133,6 +133,30 @@ function getWarsawDayStartMillis(date = new Date(), deltaDays = 0) {
   return utcMidnight;
 }
 
+// Returns the timestamp (ms) of the next moment, strictly after `now`, when the Warsaw wall
+// clock reads `hhmm` ('HH:MM'). Used by the daily backup (server.js), which has to land at a
+// fixed hour before the off-site copy picks it up - a setInterval(24 h) counted from process
+// start drifted with every restart (audit 04.10.2026, D-12).
+//
+// Daylight saving: starts from Warsaw midnight of the right calendar day
+// (getWarsawDayStartMillis) and then corrects by whatever the wall clock actually shows, so on
+// the 23- and 25-hour days 04:30 is still 04:30. A time inside the spring-forward gap
+// (02:00-03:00 on the last Sunday of March) does not exist and lands an hour early on that one
+// day - harmless for a backup, and the default is outside the gap.
+function nextWarsawTimeMillis(hhmm, now = new Date()) {
+  const [hours, minutes] = hhmm.split(':').map(Number);
+  const targetMinutes = hours * 60 + minutes;
+  for (let delta = 0; delta <= 2; delta++) {
+    let candidate = getWarsawDayStartMillis(now, delta) + targetMinutes * 60 * 1000;
+    const wall = getWarsawWallClock(new Date(candidate));
+    const wallMinutes = wall.getUTCHours() * 60 + wall.getUTCMinutes();
+    candidate += (targetMinutes - wallMinutes) * 60 * 1000;
+    if (candidate > now.getTime()) return candidate;
+  }
+  // Unreachable for a valid HH:MM: tomorrow's slot is always in the future.
+  return now.getTime() + 24 * 60 * 60 * 1000;
+}
+
 // Shifts a 'YYYY-MM-DD' string by N days (negative goes back) using pure calendar
 // arithmetic through Date.UTC, so no timezone offset and no daylight-saving hour can move
 // the result onto a neighbouring day. Date.UTC normalises the month and year rollover, so
@@ -201,6 +225,7 @@ module.exports = {
   dateObjToLocalDateString,
   getWarsawWallClock,
   getWarsawDayStartMillis,
+  nextWarsawTimeMillis,
   shiftDate,
   isCalendarDateString,
   resolveQueryDate

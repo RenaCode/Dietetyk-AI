@@ -1211,6 +1211,9 @@ const backupDatabase = async () => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const backupPath = path.join(backupDir, `dietetyk-${timestamp}.db`);
     await run('VACUUM INTO ?', [backupPath]);
+    // VACUUM INTO creates the file with the process umask (0644): every backup was readable by
+    // any local user of the host, while dietetyk.db itself is 0600 (audit 04.10.2026, D-11).
+    await fs.promises.chmod(backupPath, 0o600);
 
     const verdict = await verifyBackupFile(backupPath);
     if (!verdict.ok) {
@@ -1240,6 +1243,37 @@ const backupDatabase = async () => {
   }
 };
 
+// Brings every existing backup to 0600 - a one-off alignment for the copies written before
+// backupDatabase() started doing it itself, run at every start because it is cheap (at most
+// one file per day for BACKUP_RETENTION_DAYS) and idempotent.
+const tightenBackupPermissions = async () => {
+  if (!fs.existsSync(backupDir)) return 0;
+  let changed = 0;
+  for (const f of await fs.promises.readdir(backupDir)) {
+    if (!f.startsWith('dietetyk-') || !f.endsWith('.db')) continue;
+    const full = path.join(backupDir, f);
+    const { mode } = await fs.promises.stat(full);
+    if ((mode & 0o777) !== 0o600) {
+      await fs.promises.chmod(full, 0o600);
+      changed += 1;
+    }
+  }
+  return changed;
+};
+
+// Age in ms of the newest backup (by mtime), or null when there is none. server.js uses it to
+// skip the startup backup when the scheduled one is recent.
+const newestBackupAgeMs = async () => {
+  if (!fs.existsSync(backupDir)) return null;
+  let newest = 0;
+  for (const f of await fs.promises.readdir(backupDir)) {
+    if (!f.startsWith('dietetyk-') || !f.endsWith('.db')) continue;
+    const { mtimeMs } = await fs.promises.stat(path.join(backupDir, f));
+    newest = Math.max(newest, mtimeMs);
+  }
+  return newest ? Date.now() - newest : null;
+};
+
 module.exports = {
   initDb,
   cleanupExpiredSessions,
@@ -1247,6 +1281,8 @@ module.exports = {
   cleanupOldLogs,
   cleanupOldAppleHealthHours,
   backupDatabase,
+  tightenBackupPermissions,
+  newestBackupAgeMs,
   selectBackupsToDelete,
   run,
   get,

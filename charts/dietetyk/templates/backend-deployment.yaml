@@ -33,6 +33,11 @@ spec:
         app.kubernetes.io/component: backend
     spec:
       {{- include "dietetyk.imagePullSecrets" . | nindent 6 }}
+      # Nothing in this pod talks to the Kubernetes API. The default ServiceAccount has no RBAC
+      # today, but its token in /var/run/secrets/... is still a free foothold for
+      # reconnaissance after an RCE, and the egress policy lets traffic reach the API server
+      # (audit 04.10.2026, D-14).
+      automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault

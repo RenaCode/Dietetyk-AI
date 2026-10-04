@@ -181,7 +181,7 @@ Argo CD shows the synced revision; it should match the last `chore: update image
 
 ### Database backups
 
-The backend backs up its SQLite database at startup and every 24 hours to `/app/data/backups` on the PVC, keeping the newest copy of each of the last 14 days — see `backupDatabase` in `backend/db.js`.
+The backend backs up its SQLite database every day at 04:30 Europe/Warsaw (`BACKUP_HOUR_LOCAL`, `HH:MM`) — before the host's off-site copy job picks up the newest file — and at startup when the newest copy is older than 24 hours. Copies go to `/app/data/backups` on the PVC with mode `0600`, keeping the newest copy of each of the last 14 days — see `backupDatabase` in `backend/db.js` and `scheduleDailyBackup` in `backend/server.js`.
 
 **Every backup is verified before it counts.** Right after `VACUUM INTO` writes the copy, the backend reopens it read-only and runs `PRAGMA quick_check` plus a row-count sanity check. A copy that fails is deleted immediately and rotation is skipped, so a run of bad backups can never evict the last good ones.
 

@@ -97,6 +97,8 @@ ingress:
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
   host: dietetyk.renacode.com
   tlsSecret: dietetyk-tls-cert
+  # Second Ingress on port 80 that only redirects to HTTPS (templates/middleware.yaml).
+  redirectToHttps: true
 
 persistence:
   size: 2Gi

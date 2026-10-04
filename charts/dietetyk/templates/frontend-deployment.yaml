@@ -24,6 +24,11 @@ spec:
         app.kubernetes.io/component: frontend
     spec:
       {{- include "dietetyk.imagePullSecrets" . | nindent 6 }}
+      # Nothing in this pod talks to the Kubernetes API. The default ServiceAccount has no RBAC
+      # today, but its token in /var/run/secrets/... is still a free foothold for
+      # reconnaissance after an RCE, and the egress policy lets traffic reach the API server
+      # (audit 04.10.2026, D-14).
+      automountServiceAccountToken: false
       securityContext:
         seccompProfile:
           type: RuntimeDefault
@@ -39,6 +44,24 @@ spec:
             allowPrivilegeEscalation: false
           ports:
             - containerPort: 80
+          # Until 04.10.2026 the frontend had no probes (D-14): the pod got traffic before nginx
+          # was listening, and a hung nginx was never restarted. `/` is the SPA's index.html,
+          # served by nginx alone - it does not touch the backend, so a backend restart
+          # (Recreate, ~20 s) does not take the frontend out of the Service with it.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 10
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 6
           volumeMounts:
             - name: nginx-config-volume
               mountPath: /etc/nginx/conf.d/default.conf

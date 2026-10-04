@@ -57,6 +57,7 @@ async function testListenBeforeSlowWork() {
     db: fakeDb,
     port: 0,
     schedule: () => {},
+    scheduleBackup: () => {},
     runBackupThenCleanup: async () => { events.push('backup'); },
     // A sync that hangs (Gemini without a timeout) must not keep the port closed.
     runHourlySyncIfDue: async () => { events.push('sync'); await syncGate; }

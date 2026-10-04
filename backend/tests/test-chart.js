@@ -59,6 +59,25 @@ function run() {
   assert(!/proxy_set_header X-Forwarded-Proto \$scheme;/.test(nginx), 'X-Forwarded-Proto is no longer overwritten with $scheme');
   assert(/access_log \S+ dietetyk_safe;/.test(nginx), 'the access log uses the query-free format');
   assert(!/log_format dietetyk_safe[^;]*\$request[ "']/.test(nginx) && !/log_format dietetyk_safe[^;]*\$http_referer/.test(nginx), 'that format contains neither $request nor $http_referer');
+  // D-1 (2026-10-04): the error log printed the raw request line with the sync_token.
+  assert(/^\s*error_log \/dev\/stderr error;/m.test(nginx), 'the error log is at level error (no request-line warnings)');
+  assert(/location \/api \{[^}]*client_body_buffer_size 1m;/.test(nginx), 'webhook bodies up to 1 MB stay in memory');
+  const frontend = find('Deployment', 'dietetyk-frontend');
+  assert(/checksum\/nginx-config: [0-9a-f]{64}/.test(frontend), 'a config change rolls the frontend pod (subPath mounts never update)');
+
+  // D-14 (2026-10-04).
+  console.log('\n--- TEST: pod hardening ---');
+  assert(/automountServiceAccountToken: false/.test(backend) && /automountServiceAccountToken: false/.test(frontend), 'neither pod mounts a ServiceAccount token');
+  assert(/readinessProbe:\s*\n\s*httpGet:\s*\n\s*path: \/\s*\n\s*port: 80/.test(frontend), 'the frontend has a readinessProbe on / :80');
+  assert(/livenessProbe:[^]*?failureThreshold: 6/.test(frontend), 'the frontend has a tolerant livenessProbe');
+
+  // D-13 (2026-10-04): port 80 answered a bare 404.
+  console.log('\n--- TEST: HTTP -> HTTPS redirect ---');
+  const redirect = find('Middleware', 'dietetyk-redirect-https');
+  assert(/redirectScheme:\s*\n\s*scheme: https\s*\n\s*permanent: true/.test(redirect), 'a redirectScheme middleware exists');
+  const httpIngress = find('Ingress', 'dietetyk-http-redirect');
+  assert(/router\.entrypoints: web\n/.test(httpIngress) && /router\.middlewares: default-dietetyk-redirect-https@kubernetescrd/.test(httpIngress), 'a web-entrypoint Ingress uses it');
+  assert(!/tls:/.test(httpIngress), 'the redirect Ingress requests no second certificate');
 
   console.log('\n--- TEST: NetworkPolicy ---');
   const backendPolicy = find('NetworkPolicy', 'dietetyk-backend');

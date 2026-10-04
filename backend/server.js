@@ -4,6 +4,37 @@ const { PORT } = require('./config');
 const logger = require('./services/logger');
 const { installProcessErrorHandlers } = require('./services/processErrors');
 const { runHourlySyncIfDue, runBackupThenCleanup } = require('./scheduler');
+const { nextWarsawTimeMillis } = require('./utils/dates');
+
+// Daily backup at a fixed Warsaw time (audit 04.10.2026, D-12). It used to be setInterval(24 h)
+// from process start, so the copy was taken whenever the pod last restarted (09:32 for weeks),
+// and renacode-kopia on the host, which ships the newest backup off-site at ~05:50, always took
+// the one from the day before: up to ~44 h of data lost with the disk. 04:30 lands ~1.5 h
+// before that, and outside the 05:00-22:00 sync window.
+const DEFAULT_BACKUP_TIME = '04:30';
+const BACKUP_TIME_LOCAL = /^([01]\d|2[0-3]):[0-5]\d$/.test(process.env.BACKUP_HOUR_LOCAL || '')
+  ? process.env.BACKUP_HOUR_LOCAL
+  : DEFAULT_BACKUP_TIME;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Runs `task` at the next BACKUP_TIME_LOCAL and then again at each following one. A chain of
+// setTimeouts rather than one interval, so every run re-reads the clock (DST changes the gap
+// between two 04:30s). unref(): the HTTP server is what keeps the process alive, not this timer.
+function scheduleDailyBackup(task, hhmm = BACKUP_TIME_LOCAL) {
+  const arm = () => {
+    const at = nextWarsawTimeMillis(hhmm);
+    console.log(`[BACKUP] Next scheduled backup at ${new Date(at).toISOString()} (${hhmm} Europe/Warsaw)`);
+    const timer = setTimeout(async () => {
+      try {
+        await task();
+      } finally {
+        arm();
+      }
+    }, Math.max(at - Date.now(), 1000));
+    if (timer && typeof timer.unref === 'function') timer.unref();
+  };
+  arm();
+}
 
 // Start the server.
 //
@@ -32,7 +63,8 @@ async function start(deps = {}) {
     runHourlySyncIfDue: hourlySync = runHourlySyncIfDue,
     runBackupThenCleanup: backupThenCleanup = runBackupThenCleanup,
     port = PORT,
-    schedule = setInterval
+    schedule = setInterval,
+    scheduleBackup = scheduleDailyBackup
   } = deps;
 
   await database.initDb();
@@ -55,10 +87,25 @@ async function start(deps = {}) {
   // Data sync (Oura, Withings) and summary checks: hourly, and only within the 05:00-22:00
   // window. We check every 5 minutes whether a new clock hour has begun - which also makes
   // this robust to a restart mid-day, since the first check runs right after startup.
+  //
+  // The startup backup runs only when the newest copy is a day old or missing (first start,
+  // or the pod was down at 04:30) - a restart in the afternoon does not need a second copy of
+  // a database already backed up this morning.
   const background = (async () => {
     try {
       await database.cleanupExpiredSessions();
-      await backupThenCleanup('startup');
+      if (typeof database.tightenBackupPermissions === 'function') {
+        const tightened = await database.tightenBackupPermissions();
+        if (tightened > 0) console.log(`[BACKUP] Set 0600 on ${tightened} existing backup file(s)`);
+      }
+      const age = typeof database.newestBackupAgeMs === 'function'
+        ? await database.newestBackupAgeMs()
+        : null;
+      if (age === null || age >= DAY_MS) {
+        await backupThenCleanup('startup');
+      } else {
+        console.log(`[BACKUP] Startup: newest backup is ${Math.round(age / 60000)} min old - no startup backup.`);
+      }
     } catch (err) {
       logger.error(`Startup backup/cleanup failed: ${err.message}`, 'SYSTEM', err);
     }
@@ -69,10 +116,14 @@ async function start(deps = {}) {
     }
   })();
 
-  schedule(async () => {
-    await database.cleanupExpiredSessions();
-    await backupThenCleanup('cron');
-  }, 24 * 60 * 60 * 1000);
+  scheduleBackup(async () => {
+    try {
+      await database.cleanupExpiredSessions();
+      await backupThenCleanup('cron');
+    } catch (err) {
+      logger.error(`Scheduled backup/cleanup failed: ${err.message}`, 'SYSTEM', err);
+    }
+  });
   schedule(hourlySync, 5 * 60 * 1000);
 
   return { background };
@@ -97,4 +148,4 @@ if (require.main === module) {
   installProcessErrorHandlers({ logger });
 }
 
-module.exports = { start };
+module.exports = { start, scheduleDailyBackup };

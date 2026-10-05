@@ -1,5 +1,6 @@
 const db = require('../db');
-const { formatDateString, timestampToDateString, getWarsawDayStartMillis } = require('../utils/dates');
+const { formatDateString, timestampToDateString, getWarsawDayStartMillis, toWarsawIsoString } = require('../utils/dates');
+const { ouraMainSleepTimes, sleepTimesUpdateSql } = require('../utils/sleepTimes');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const {
   ACTIVITY_METRIC_COLUMNS,
@@ -172,6 +173,8 @@ async function syncOura(userId) {
         // makes "no sleep data at all" a value somebody can see in a debugger and reason
         // about, rather than a hole in the object.
         has_long_sleep: false,
+        sleep_start: null,
+        sleep_end: null,
         active_minutes: null,
         respiratory_rate: null,
         spo2_percentage: null,
@@ -226,6 +229,15 @@ async function syncOura(userId) {
           metricsByDate[dateStr].sleep_deep = totalDeepSec ? Math.round((totalDeepSec / 3600) * 10) / 10 : null;
           metricsByDate[dateStr].sleep_rem = totalRemSec ? Math.round((totalRemSec / 3600) * 10) / 10 : null;
           metricsByDate[dateStr].has_long_sleep = hasLongSleep;
+
+          // Bedtime / wake time come from the long_sleep records only, never from a nap -
+          // a day with naps only leaves them NULL, and the upsert then keeps whatever the
+          // Apple Health webhook stored for that night (see utils/sleepTimes.js).
+          const mainSleep = ouraMainSleepTimes(items);
+          if (mainSleep) {
+            metricsByDate[dateStr].sleep_start = toWarsawIsoString(mainSleep.start);
+            metricsByDate[dateStr].sleep_end = toWarsawIsoString(mainSleep.end);
+          }
 
           if (primaryRecord) {
             metricsByDate[dateStr].rhr = primaryRecord.lowest_heart_rate || null;
@@ -372,9 +384,10 @@ async function syncOura(userId) {
             readiness_score, hrv, rhr, temperature_deviation, active_minutes,
             respiratory_rate, spo2_percentage, distance_meters, sedentary_minutes,
             low_activity_minutes, stress_high_minutes, stress_recovery_minutes,
-            stress_summary, activity_source, ${OURA_SOURCE_COLUMNS.join(', ')}, last_sync
+            stress_summary, sleep_start, sleep_end, sleep_times_source,
+            activity_source, ${OURA_SOURCE_COLUMNS.join(', ')}, last_sync
           )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${OURA_SOURCE_COLUMNS.map(() => '?').join(', ')}, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${OURA_SOURCE_COLUMNS.map(() => '?').join(', ')}, ?)
           ON CONFLICT(user_id, date) DO UPDATE SET
             ${preserveHigherPriority('steps', OURA_RANK)},
             ${preserveHigherPriority('active_calories', OURA_RANK)},
@@ -396,6 +409,7 @@ async function syncOura(userId) {
             stress_high_minutes = COALESCE(excluded.stress_high_minutes, stress_high_minutes),
             stress_recovery_minutes = COALESCE(excluded.stress_recovery_minutes, stress_recovery_minutes),
             stress_summary = COALESCE(excluded.stress_summary, stress_summary),
+            ${sleepTimesUpdateSql('oura')},
             -- Round 12 (audit): distance_meters MUST be on the list of columns that
             -- decide whether the label is kept - without it, days where a higher-ranked
             -- source supplied ONLY distance (no steps/calories/minutes in that import)
@@ -418,6 +432,7 @@ async function syncOura(userId) {
           metrics.respiratory_rate, metrics.spo2_percentage,
           metrics.distance_meters, metrics.sedentary_minutes, metrics.low_activity_minutes,
           metrics.stress_high_minutes, metrics.stress_recovery_minutes, metrics.stress_summary,
+          metrics.sleep_start, metrics.sleep_end, metrics.sleep_start ? 'oura' : null,
           activitySource,
           // Per-column provenance, in ACTIVITY_LABEL_COLUMNS order: 'oura' only for the
           // columns this sync really brought a value for, so Oura cannot end up protecting

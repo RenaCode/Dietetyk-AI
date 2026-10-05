@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const { parseHealthAutoExportDate, dateObjToLocalDateString, getWarsawWallClock, shiftDate } = require('../utils/dates');
+const { parseHealthAutoExportDate, dateObjToLocalDateString, getWarsawWallClock, shiftDate, toWarsawIsoString } = require('../utils/dates');
+const { mainSleepBlocksByDay, sleepTimesUpdateSql } = require('../utils/sleepTimes');
 const {
   ACTIVITY_METRIC_COLUMNS,
   getActivitySourceRank,
@@ -372,9 +373,10 @@ function buildHealthMetricsUpsertSql(hasOura) {
         INSERT INTO health_metrics (
           user_id, date, steps, active_calories, total_calories_burned, active_minutes, wrist_temperature,
           distance_meters, water_ml, water_ml_apple, sleep_duration, sleep_deep, sleep_rem, sleep_score,
-          rhr, hrv, readiness_score, activity_source, ${sourceColumns.join(', ')}, last_sync
+          rhr, hrv, readiness_score, sleep_start, sleep_end, sleep_times_source,
+          activity_source, ${sourceColumns.join(', ')}, last_sync
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${sourceColumns.map(() => '?').join(', ')}, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${sourceColumns.map(() => '?').join(', ')}, ?)
         ON CONFLICT(user_id, date) DO UPDATE SET
           ${preserveHigherPriority('steps', APPLE_RANK)},
           ${preserveHigherPriority('active_calories', APPLE_RANK)},
@@ -390,6 +392,7 @@ function buildHealthMetricsUpsertSql(hasOura) {
           ${rhrUpdate},
           ${hrvUpdate},
           ${readinessScoreUpdate},
+          ${sleepTimesUpdateSql('apple')},
           ${preserveSourceLabel(APPLE_RANK, ACTIVITY_LABEL_COLUMNS)},
           last_sync = excluded.last_sync
   `;
@@ -558,6 +561,11 @@ router.post('/api/integrations/apple-health/:syncToken', requireKnownSyncToken, 
     // Days whose water samples this payload touched - re-summed from
     // apple_health_water_samples after the loop, see the dietary_water branch below.
     const waterAffectedDates = new Set();
+    // Sleep fragments with their real start and end, kept for the bedtime / wake time of each
+    // night (utils/sleepTimes.js). 'asleep' fragments decide the times; 'in_bed' ones are
+    // used only for a day with no asleep fragment at all - the same fallback sleep_duration
+    // makes below for a watch that records time in bed but no stages.
+    const sleepFragments = { asleep: [], in_bed: [] };
 
     if (metrics) {
       for (const metric of metrics) {
@@ -620,21 +628,48 @@ router.post('/api/integrations/apple-health/:syncToken', requireKnownSyncToken, 
               bucket.sleep_rem += remVal;
               bucket.in_bed_duration += inBedVal;
               matchedEntries++;
+
+              // An aggregated entry carries both the asleep and the in-bed window
+              // (sleepStart/sleepEnd vs inBedStart/inBedEnd). The asleep window is the one that
+              // means "fell asleep / woke up"; startStr/endStr above prefer startDate and only
+              // then fall through to these, so they are read explicitly here.
+              if (computedSleep > 0) {
+                sleepFragments.asleep.push({
+                  start: parseHealthAutoExportDate(entry.sleepStart || entry.sleep_start) || startParsed,
+                  end: parseHealthAutoExportDate(entry.sleepEnd || entry.sleep_end) || endParsed,
+                  asleepHours: computedSleep
+                });
+              } else if (inBedVal > 0) {
+                sleepFragments.in_bed.push({
+                  start: parseHealthAutoExportDate(entry.inBedStart) || startParsed,
+                  end: parseHealthAutoExportDate(entry.inBedEnd) || endParsed,
+                  asleepHours: inBedVal
+                });
+              }
             } else {
               const durationHrs = (endParsed - startParsed) / (1000 * 60 * 60);
               if (durationHrs <= 0 || durationHrs > 24) continue; // sanity check
 
-              const val = typeof entry.value === 'string' ? entry.value.toLowerCase() : '';
+              // Stage names are normalised (lower case, no spaces/underscores/hyphens) before
+              // matching. The matcher used to look for 'in_bed' / 'inbed' only, so a segment
+              // spelled "In Bed" - with a space - matched nothing: it added no in-bed time and
+              // was lost to the in-bed fallback for watches that record no stages.
+              const val = typeof entry.value === 'string' ? entry.value.toLowerCase().replace(/[\s_-]+/g, '') : '';
+              const fragment = { start: startParsed, end: endParsed, asleepHours: durationHrs };
               if (val.includes('deep')) {
                 bucket.sleep_deep += durationHrs;
                 bucket.sleep_duration += durationHrs;
+                sleepFragments.asleep.push(fragment);
               } else if (val.includes('rem')) {
                 bucket.sleep_rem += durationHrs;
                 bucket.sleep_duration += durationHrs;
+                sleepFragments.asleep.push(fragment);
               } else if (val.includes('core') || val.includes('asleep') || val.includes('light')) {
                 bucket.sleep_duration += durationHrs;
-              } else if (val.includes('in_bed') || val.includes('inbed')) {
+                sleepFragments.asleep.push(fragment);
+              } else if (val.includes('inbed')) {
                 bucket.in_bed_duration += durationHrs;
+                sleepFragments.in_bed.push(fragment);
               }
               matchedEntries++;
             }
@@ -834,6 +869,21 @@ router.post('/api/integrations/apple-health/:syncToken', requireKnownSyncToken, 
       byDate[dateStr].water_ml = waterSum && waterSum.total !== null ? waterSum.total : 0;
     }
 
+    // Bedtime / wake time of each night in this payload: fragments are grouped into blocks
+    // and the main block of each wake-up day kept (rule in utils/sleepTimes.js). The day comes
+    // from the block's end, so it is the same day sleep_duration is attributed to for an
+    // aggregated entry and for the fragment that ends the night.
+    const asleepBlocks = mainSleepBlocksByDay(sleepFragments.asleep, dateObjToLocalDateString);
+    const inBedBlocks = mainSleepBlocksByDay(sleepFragments.in_bed, dateObjToLocalDateString);
+    for (const [dateStr, block] of Object.entries({ ...inBedBlocks, ...asleepBlocks })) {
+      // Normally the fragment that ends the block created this bucket. An aggregated entry
+      // whose endDate and sleepEnd fall on different days could leave none; such a block is
+      // skipped rather than given a row with times but no duration.
+      if (!byDate[dateStr]) continue;
+      byDate[dateStr].sleep_start = toWarsawIsoString(block.start);
+      byDate[dateStr].sleep_end = toWarsawIsoString(block.end);
+    }
+
     // Post-processing of the sleep data and computing sleep_score against the user's target
     const sleepGoalRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'target_sleep_duration'", [user.id]);
     const targetSleep = sleepGoalRow ? parseFloat(sleepGoalRow.value) : 7.2;
@@ -923,6 +973,8 @@ router.post('/api/integrations/apple-health/:syncToken', requireKnownSyncToken, 
       const sleepDeep = m.sleep_deep !== null ? Math.round(m.sleep_deep * 10) / 10 : null;
       const sleepRem = m.sleep_rem !== null ? Math.round(m.sleep_rem * 10) / 10 : null;
       const sleepScore = m.sleep_score !== null ? Math.round(m.sleep_score) : null;
+      const sleepStart = m.sleep_start || null;
+      const sleepEnd = m.sleep_end || null;
       const rhr = m.rhr !== null ? Math.round(m.rhr) : null;
       const hrv = m.hrv !== null ? Math.round(m.hrv) : null;
 
@@ -1017,7 +1069,8 @@ router.post('/api/integrations/apple-health/:syncToken', requireKnownSyncToken, 
       await db.run(healthMetricsUpsertSql, [
         user.id, dateStr, steps, activeCalories, totalCalories, activeMinutes, wristTemperature,
         distanceMeters, waterMl, waterMl, sleepDuration, sleepDeep, sleepRem, sleepScore, rhr, hrv,
-        readinessScore, activitySource, ...activityColumnSources, lastSyncTime
+        readinessScore, sleepStart, sleepEnd, sleepStart ? 'apple' : null,
+        activitySource, ...activityColumnSources, lastSyncTime
       ]);
 
       savedDates.push(dateStr);

@@ -96,6 +96,29 @@ function getWarsawWallClock(date = new Date()) {
   ));
 }
 
+// Formats an instant as ISO 8601 with the Europe/Warsaw offset that applied AT THAT INSTANT,
+// e.g. "2026-10-24T23:10:00+02:00" or "2026-10-25T06:45:00+01:00" (seconds precision).
+// Used for the sleep_start/sleep_end columns: the string is an absolute moment (it carries
+// its offset, so it survives being read on a server in UTC), and its wall-clock part is
+// already the Polish time a chart wants to draw. UTC ("...Z") was the alternative and would
+// sort lexicographically, but every reader would then have to convert back to Warsaw time
+// and the DST nights - the very ones a regularity chart must get right - are where a
+// hand-written conversion goes wrong. Compare these values with julianday() in SQL or
+// Date.parse() in JS, never as strings: across the October change "02:15+01:00" is LATER
+// than "02:30+02:00".
+// The offset is derived from getWarsawWallClock rather than hard-coded per season, so the
+// ambiguous hour on the night clocks go back (02:00-03:00 occurs twice) gets the offset of
+// whichever pass the instant falls in.
+function toWarsawIsoString(date) {
+  const whole = new Date(Math.floor(date.getTime() / 1000) * 1000);
+  const wall = getWarsawWallClock(whole);
+  const offsetMinutes = Math.round((wall.getTime() - whole.getTime()) / 60000);
+  const sign = offsetMinutes < 0 ? '-' : '+';
+  const abs = Math.abs(offsetMinutes);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${wall.toISOString().slice(0, 19)}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
 // Returns the timestamp (ms) of Europe/Warsaw midnight for the day `deltaDays` away
 // from the given date. Needed wherever an external API splits data into daily buckets
 // aligned to the START OF THE WINDOW (Google Fit dataset:aggregate + bucketByTime) -
@@ -224,6 +247,7 @@ module.exports = {
   parseHealthAutoExportDate,
   dateObjToLocalDateString,
   getWarsawWallClock,
+  toWarsawIsoString,
   getWarsawDayStartMillis,
   nextWarsawTimeMillis,
   shiftDate,

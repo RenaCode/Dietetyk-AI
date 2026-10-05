@@ -12,7 +12,7 @@ const { columnBackedMetrics } = require('../utils/appleHealthColumns');
 router.get('/api/health/history', requireAuth, async (req, res) => {
   try {
     const rows = await db.all(`
-      SELECT date, weight, fat_ratio, muscle_mass, blood_pressure_systolic, blood_pressure_diastolic, sleep_score, sleep_duration, sleep_deep, sleep_rem, readiness_score, steps, active_calories, total_calories_burned, rhr, hrv, active_minutes, supplements
+      SELECT date, weight, fat_ratio, muscle_mass, blood_pressure_systolic, blood_pressure_diastolic, sleep_score, sleep_duration, sleep_deep, sleep_rem, sleep_start, sleep_end, readiness_score, steps, active_calories, total_calories_burned, rhr, hrv, active_minutes, supplements
       FROM health_metrics
       WHERE user_id = ? AND date >= date('now', '-90 days')
       ORDER BY date ASC

@@ -829,6 +829,15 @@ const initDb = async () => {
   // value Oura/Withings wrote - see the SOURCE RULE in utils/appleHealthColumns.js.
   await addColumn("ALTER TABLE health_metrics ADD COLUMN apple_columns_json TEXT DEFAULT NULL");
 
+  // Migration: bedtime and wake time of the night (Apple Health sleep_analysis, Oura
+  // bedtime_start/bedtime_end), so sleep regularity can be shown and not just duration. ISO
+  // 8601 with the Warsaw offset; sleep_times_source says which source wrote the pair. Plain
+  // nullable columns with no backfill: existing rows read as "times unknown", which is the
+  // truth - the webhook used to discard them. See utils/sleepTimes.js for the rules.
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN sleep_start TEXT DEFAULT NULL");
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN sleep_end TEXT DEFAULT NULL");
+  await addColumn("ALTER TABLE health_metrics ADD COLUMN sleep_times_source TEXT DEFAULT NULL");
+
   // Every Health Auto Export metric, whatever its name, folded into hourly buckets - see
   // utils/appleHealthSamples.js for why buckets rather than raw samples. hour_start is the
   // UTC hour as ISO text; `date` is the Warsaw calendar day of that hour, resolved once at

@@ -212,12 +212,20 @@ async function testAppleNightInPieces() {
   assert(row.sleep_start === '2026-09-27T23:20:00+02:00' && row.sleep_end === '2026-09-28T06:40:00+02:00',
     `a night arriving after a nap replaces it (got ${row.sleep_start} - ${row.sleep_end})`);
 
-  // A watch with no stages: in-bed only. The value is spelled 'InBed' because that is what the
-  // existing stage matcher in routes/appleHealth.js recognises ('in_bed' / 'inbed').
-  await postSleep([seg('2026-09-29 22:50:00 +0200', '2026-09-30 06:40:00 +0200', 'InBed')]);
-  row = await readDay('2026-09-30');
-  assert(row.sleep_start === '2026-09-29T22:50:00+02:00' && row.sleep_end === '2026-09-30T06:40:00+02:00',
-    `in-bed time is the fallback when no asleep stage exists (got ${row.sleep_start} - ${row.sleep_end})`);
+  // A watch with no stages: in-bed only. Every spelling of the stage name must be recognised -
+  // the matcher used to miss "In Bed" (with a space), which then counted for nothing.
+  const spellings = ['In Bed', 'in_bed', 'inBed', 'inbed', 'IN-BED'];
+  for (let i = 0; i < spellings.length; i++) {
+    // August, far from today's date, which TEST 8 uses for the Oura sync window.
+    const wake = `2026-08-1${i + 1}`;
+    const evening = `2026-08-1${i}`;
+    await postSleep([seg(`${evening} 22:50:00 +0200`, `${wake} 06:40:00 +0200`, spellings[i])]);
+    row = await readDay(wake);
+    assert(row.sleep_start === `${evening}T22:50:00+02:00` && row.sleep_end === `${wake}T06:40:00+02:00`,
+      `in-bed fallback recognises "${spellings[i]}" (got ${row.sleep_start} - ${row.sleep_end})`);
+    assert(row.sleep_duration === 7.8,
+      `"${spellings[i]}" also feeds the sleep_duration in-bed fallback (got ${row.sleep_duration})`);
+  }
 }
 
 async function testAppleDstNight() {

@@ -650,7 +650,11 @@ router.post('/api/integrations/apple-health/:syncToken', requireKnownSyncToken, 
               const durationHrs = (endParsed - startParsed) / (1000 * 60 * 60);
               if (durationHrs <= 0 || durationHrs > 24) continue; // sanity check
 
-              const val = typeof entry.value === 'string' ? entry.value.toLowerCase() : '';
+              // Stage names are normalised (lower case, no spaces/underscores/hyphens) before
+              // matching. The matcher used to look for 'in_bed' / 'inbed' only, so a segment
+              // spelled "In Bed" - with a space - matched nothing: it added no in-bed time and
+              // was lost to the in-bed fallback for watches that record no stages.
+              const val = typeof entry.value === 'string' ? entry.value.toLowerCase().replace(/[\s_-]+/g, '') : '';
               const fragment = { start: startParsed, end: endParsed, asleepHours: durationHrs };
               if (val.includes('deep')) {
                 bucket.sleep_deep += durationHrs;
@@ -663,7 +667,7 @@ router.post('/api/integrations/apple-health/:syncToken', requireKnownSyncToken, 
               } else if (val.includes('core') || val.includes('asleep') || val.includes('light')) {
                 bucket.sleep_duration += durationHrs;
                 sleepFragments.asleep.push(fragment);
-              } else if (val.includes('in_bed') || val.includes('inbed')) {
+              } else if (val.includes('inbed')) {
                 bucket.in_bed_duration += durationHrs;
                 sleepFragments.in_bed.push(fragment);
               }

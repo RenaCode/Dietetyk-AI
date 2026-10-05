@@ -1,4 +1,4 @@
-// Guards on .github/workflows/docker-publish.yml (audit 2026-10-04, D-4, D-5, D-8, D-9).
+// Guards on .github/workflows/docker-publish.yml (audit 2026-10-04, D-4, D-5, D-8, D-9; PR runs 2026-10-05).
 // Plain text checks - the backend has no YAML parser and these properties are visible as text.
 //
 //   D-4  images were built from a lockfile regenerated in CI (`npm install --package-lock-only`)
@@ -50,6 +50,14 @@ try {
   assert(/merge-base --is-ancestor "\$GITHUB_SHA" "\$current"/.test(jobBlock('update-git')), 'update-git refuses to write an older tag');
   const fe = jobBlock('test-frontend');
   assert(/npm test/.test(fe) && /check-i18n/.test(fe) && /npm run lint/.test(fe), 'test-frontend runs unit tests, i18n check and lint');
+  assert(/\non:\n(?: {2}\S.*\n(?: {4}.*\n)*)* {2}pull_request:/.test(code), 'pull requests run the workflow');
+  assert(!code.includes('pull_request_target'), 'PRs never run with the base repository\'s secrets (no pull_request_target)');
+  for (const job of ['build-backend', 'build-frontend', 'update-git']) {
+    assert(/\n {4}if: \|\n(?: {6}.*\n)*? {6}github\.event_name != 'pull_request' &&/.test(jobBlock(job)), `${job} never runs for a pull request`);
+  }
+  for (const job of ['test-backend', 'test-frontend']) {
+    assert(/github\.event_name != 'push'/.test(jobBlock(job)), `${job} runs for every pull request, not only when its paths changed`);
+  }
   console.log('\n🎉 WORKFLOW TESTS PASSED\n');
 } catch (err) {
   console.error('\n' + err.message);

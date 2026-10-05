@@ -14,6 +14,14 @@ name: Build and publish Docker images
 # There is no deploy job: update-git writes the new image tag into charts/dietetyk/values.yaml
 # and pushes it to main, and Argo CD syncs the cluster from there.
 #
+# Pull requests (05.10.2026) run every test job - backend, frontend, E2E - regardless of
+# which paths changed, and nothing else: both build jobs and update-git carry
+# `github.event_name != 'pull_request'`, so a PR never logs in to ghcr.io, never publishes
+# an image and never touches values.yaml. Until then the workflow ran only on push to main,
+# so no PR (Dependabot's included) was ever tested before merging, and the first run of a
+# change was the one that deployed it. `pull_request`, not `pull_request_target`: the PR's
+# code runs with the read-only token below and without secrets, including from a fork.
+#
 # Secrets (Settings -> Secrets and variables -> Actions):
 #   GITHUB_TOKEN - built in; logs in to ghcr.io to push the images.
 #   DEPLOY_PAT   - fine-grained PAT (Contents: Read & Write on this repository only) that
@@ -22,6 +30,8 @@ name: Build and publish Docker images
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch: {}
 
@@ -50,7 +60,10 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+      # Only on push: a PR runs all test jobs anyway (see the header), and the filter would
+      # list the PR's files through the API, which needs `pull-requests: read` on the token.
       - name: Detect changed paths
+        if: github.event_name == 'push'
         id: filter
         uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3
         with:
@@ -71,7 +84,7 @@ jobs:
   test-backend:
     name: Tests and security audit (backend)
     needs: changes
-    if: needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.backend == 'true' || github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kodu
@@ -137,6 +150,7 @@ jobs:
     name: Build and push image (backend)
     needs: [changes, test-backend, test-e2e]
     if: |
+      github.event_name != 'pull_request' &&
       (needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch') &&
       needs.test-backend.result == 'success' &&
       needs.test-e2e.result == 'success'
@@ -201,7 +215,7 @@ jobs:
   test-frontend:
     name: Tests and security audit (frontend)
     needs: changes
-    if: needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch'
+    if: needs.changes.outputs.frontend == 'true' || github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout kodu
@@ -237,6 +251,7 @@ jobs:
     name: Build and push image (frontend)
     needs: [changes, test-frontend, test-e2e]
     if: |
+      github.event_name != 'pull_request' &&
       (needs.changes.outputs.frontend == 'true' || github.event_name == 'workflow_dispatch') &&
       needs.test-frontend.result == 'success' &&
       needs.test-e2e.result == 'success'
@@ -361,6 +376,7 @@ jobs:
     needs: [build-backend, build-frontend]
     if: |
       always() &&
+      github.event_name != 'pull_request' &&
       (needs.build-backend.result == 'success' || needs.build-frontend.result == 'success')
     runs-on: ubuntu-latest
     # D-8 (audit 04.10.2026): two pushes A then B, A's build finishing last - A's update-git

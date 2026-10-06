@@ -1,6 +1,11 @@
 # 🥗 Dietetyk AI (AI Dietician)
 
-An aesthetically designed web application that analyzes your diet based on meals you enter (using **Gemini AI**), tracks health metrics from **Oura Ring** and **Withings** (smart scale and body composition) sensors, and visualizes trends on interactive charts.
+A self-hosted web application for keeping a diet journal with **Gemini AI**: you describe or photograph a meal, Gemini estimates its calories and nutrients, and the app puts that next to sleep, recovery, activity and body-composition data from **Oura Ring**, **Withings**, **Apple Health** and **Google Fit**, with dashboard insights, an AI chat and trend charts. The interface is available in Polish (default) and English.
+
+> [!IMPORTANT]
+> Calories, macronutrients, fiber, sugar and sodium for a meal are **estimates produced by Gemini** from your description or photo, not measurements. Insights that correlate them with measured data (e.g. sodium vs. blood pressure, fiber vs. sleep) inherit that uncertainty.
+
+A native iOS client (SwiftUI, in development and not deployed yet) lives in [RenaCode/Dietetyk-IOS](https://github.com/RenaCode/Dietetyk-IOS); it talks to the same API and can send HealthKit data to the same Apple Health endpoint as the webhook described below.
 
 Production runs on k3s, deployed by Argo CD from the Helm chart in `charts/dietetyk` — see [Deployment](#️-deployment-k3s--argo-cd).
 
@@ -8,23 +13,24 @@ Production runs on k3s, deployed by Argo CD from the Helm chart in `charts/diete
 
 ## 🚀 Main Features
 
-1.  **AI Meal Journal**: Input your meals in natural language (e.g., *"This morning I ate 2 slices of whole grain bread with avocado and a fried egg"*). Gemini AI automatically breaks it down into ingredients, calculates calories, macronutrients (protein, carbohydrates, fat), evaluates the meal, and generates tips.
+1.  **AI Meal Journal**: Input your meals in natural language (e.g., *"This morning I ate 2 slices of whole grain bread with avocado and a fried egg"*) and/or a photo. Gemini breaks the meal down into ingredients, estimates calories, protein, carbohydrates, fat, fiber, sugar and sodium, rates the meal and adds a short tip. Frequently repeated meals can be added again in one click without another AI call (`/api/meals/frequent`, `/api/meals/repeat`), and meals whose calories do not match their macros or stand out from your own history are flagged (`utils/mealAnomaly.js`).
 
     **Photo + description work together.** When you attach a photo *and* type something, the text is treated as a correction and completion of the photo — never as a second meal. Your description is the authoritative source and the photo is supporting evidence, so you can fix a portion the model misjudged (*"that was 200 g of chicken, not 150"*), correct an ingredient or the cooking method (*"turkey, not chicken"*, *"fried in butter"*), add what is out of frame (*"plus a glass of juice"*), or exclude something visible you did not eat (*"I skipped the bread"*). Where the two disagree the description wins, and the dietician comment says so — e.g. *"photo suggests about 150 g, using 200 g per your description"* — so the number is always traceable. Prompt construction lives in `utils/mealPrompts.js` and is covered by `tests/test-meal-prompts.js`.
-2.  **Direct Oura Ring Integration**: Retrieve recovery metrics such as Readiness score, Sleep score, sleep stages (deep, REM), resting heart rate (RHR), and heart rate variability (HRV).
-3.  **Direct Withings Integration**: Automatically retrieve body composition metrics: weight (kg), body fat percentage, and muscle mass (kg).
-4.  **Progress Charts (Custom SVG)**: Built-in, fully responsive, and highly performant SVG charts tracking:
-    *   **Fat Loss**: Weight trend plotted against body fat percentage (dual-axis chart).
-    *   **Muscle Gain**: Lean muscle mass trend over time.
-5.  **Daily Gemini AI Analysis**: The model analyzes your meals, sleep metrics from Oura, and body composition from Withings to provide personalized recommendations.
-6.  **Admin Panel**: Allows dynamic configuration of API credentials for Oura and Withings directly from the user interface (no container restart required).
-7.  **Apple Health Synchronization**: Steps, active energy (calories), and active minutes can be imported from Apple Health via a webhook—configure this in the Settings tab.
-8.  **Google Fit Synchronization**: Similar to Apple Health, the app can fetch steps and calories from Google Fit (hourly sync via OAuth2, without needing an intermediate app)—connect your account from the Settings tab. Needs the Google client configured in the Admin Panel; without it the option is hidden.
-9.  **Google Account Linking**: Connect an existing password-based account with your Google account in the Settings tab to sign in with a single click without losing your meal history and settings. Like Google Fit, this and the "Sign in with Google" button appear only once an administrator has configured the Google client.
-10. **Energy Battery**: A single 0–100 number at the top of the dashboard answering "how much fuel do I have today". It charges overnight from sleep quality, duration and readiness, drains through the day from actual training load (relative to your own 30-day median, not a population norm) and from time awake, takes a hit from accumulated **sleep debt** over the last 14 nights, and adjusts for stress vs. recovery minutes. Every card shows its own breakdown, so the number is checkable rather than magic. See `/api/dashboard/energy-battery`.
+2.  **Oura Ring Integration** (OAuth2, per-user credentials): sleep (score, duration, stages, bedtime and wake time), readiness, resting heart rate, HRV, daily activity, SpO2 and daily stress.
+3.  **Withings Integration** (OAuth2, per-user credentials): weight, body fat percentage, muscle mass and blood pressure.
+4.  **Apple Health Synchronization**: a per-user webhook (`POST /api/integrations/apple-health/<sync token>`) fed by the **Health Auto Export** iPhone app. Steps, active/basal energy, exercise minutes, distance, water, wrist temperature, sleep and workouts (with heart-rate zones when workout metrics are included) go into the daily metrics; every other numeric metric is kept as hourly samples, and symptoms, heart-rate notifications, cycle tracking and medications are stored as events.
+5.  **Google Fit Synchronization**: steps and calories fetched hourly via OAuth2, without an intermediate app. Needs the Google client configured in the Admin Panel; without it the option is hidden.
+6.  **Daily AI Advice and AI Chat**: Gemini combines your meals with sleep, recovery, activity, body composition and current weather/time of day (Open-Meteo, location configurable in Settings) to give daily recommendations, and answers questions about your data in a chat (`POST /api/chat`).
+7.  **Dashboard Insights**: 49 insight cards (sleep, recovery, training readiness, calorie balance and target suggestions, weight-goal forecast, blood-pressure and SpO2 trends, heart-rate zones, weekend effect and more), plus a **Wellness Score** and the **Energy Battery** below.
+8.  **Energy Battery**: A single 0–100 number at the top of the dashboard answering "how much fuel do I have today". It charges overnight from sleep quality, duration and readiness, drains through the day from actual training load (relative to your own 30-day median, not a population norm) and from time awake, takes a hit from accumulated **sleep debt** over the last 14 nights, and adjusts for stress vs. recovery minutes. Every card shows its own breakdown, so the number is checkable rather than magic. See `/api/dashboard/energy-battery`.
+9.  **Manual Tracking**: water intake, supplements, energy level and mood, and body circumference measurements.
+10. **Progress Charts (Custom SVG)**: hand-rolled, responsive SVG charts (no charting library) — weight against body fat percentage (dual axis), muscle mass, and 7/30/90-day trends for sleep, recovery, steps, calories and blood pressure.
+11. **Reports and Data Export**: daily, weekly and monthly e-mail summaries (via Mailgun, configured by the administrator), a PDF report for a doctor or dietician containing only computed data with no AI-generated text, time-limited read-only share links for that report, and a full JSON export of your own data.
+12. **Accounts and Security**: password login with optional TOTP two-factor authentication (an administrator can require it), "Sign in with Google" and linking Google to an existing account, invitation-based or optional public registration, session revocation ("log out everywhere"), and account deletion. Integration secrets are encrypted at rest.
+13. **Admin Panel**: user management (invitations, deletion, forcing a password change, requiring or resetting 2FA) and global settings — Mailgun, the public app URL, the Google OAuth client, mandatory 2FA and public registration — changeable without a restart. Oura, Withings and Gemini credentials are **not** set here; each user enters their own in **Settings**.
 
 > [!NOTE]
-> Energy Battery and Wellness Score answer different questions and are deliberately kept separate. Wellness Score rates how *good* the day was (sleep, readiness, calorie adherence, hydration) — a judgement about behaviour. The battery says how much resource is *left right now*. A day with a perfect diet after three short nights scores well and shows a low battery; that is the intended behaviour.
+> Energy Battery and Wellness Score answer different questions and are deliberately kept separate. Wellness Score rates how *good* the day was (sleep, readiness, resting heart rate recovery, calorie adherence, hydration) — a judgement about behaviour. The battery says how much resource is *left right now*. A day with a perfect diet after three short nights scores well and shows a low battery; that is the intended behaviour.
 
 ---
 
@@ -66,9 +72,9 @@ Google Fit's `dataset:aggregate` aligns its daily buckets to the **start of the 
 
 `npm run check-i18n` (in `frontend/`) cross-checks every `t('…')` literal against the dictionary in `utils/i18n.js` and reports three things: missing translations, texts hardcoded in JSX despite having a translation, and stale dictionary entries.
 
-**430 strings now go through `t()`**, up from 13 — switching the language actually translates the interface. `t()` also warns in the console (dev builds only) whenever a translation is missing, so future drift is visible instead of silent.
+**More than 450 strings go through `t()`**, so switching the language actually translates the interface. `t()` also warns in the console (dev builds only) whenever a translation is missing, so future drift is visible instead of silent.
 
-A handful of Polish literals remain unwrapped on purpose, and the check lists them:
+The check also lists Polish literals that are still hardcoded. Some of them are genuine gaps to wrap in `t()`; others remain unwrapped on purpose:
 
 - **Keyword matchers** — `'siłownia'`, `'pływ'`, `'różeniec'` are compared against workout and supplement names with `.includes()`. Wrapping them in `t()` would change what the code *matches*, not what it *shows*, and silently break the matching in English.
 - **Comparison operands** — e.g. `recentCategory !== 'Prawidłowe'`, where the value comes from the backend.
@@ -77,15 +83,17 @@ A handful of Polish literals remain unwrapped on purpose, and the check lists th
 > [!NOTE]
 > The dictionary keys are the Polish source strings themselves, so changing Polish copy silently breaks its translation. `npm run check-i18n` is what catches that: it matches **exact** occurrences only. An earlier version used a substring match and reported 61 hardcoded strings where only 43 were real — `"Zaloguj się"` was matching inside `"Sesja wygasła. Zaloguj się ponownie."`. Wrapping a hit like that would have torn the sentence in half.
 
-About 150 dictionary entries match no string in the code. They are pre-written translations for wording that has since changed; they are kept rather than deleted, because the English text is still useful when that part of the UI is revisited.
+About 140 dictionary entries match no string in the code. They are pre-written translations for wording that has since changed; they are kept rather than deleted, because the English text is still useful when that part of the UI is revisited.
 
 ---
 
 ## 🛠️ Architecture and Technologies
 
-*   **Backend**: Node.js + Express
-*   **Database**: SQLite (local file in the `/data` directory mounted as a volume)
-*   **Frontend**: React (Vite) styled in a modern dark theme with glassmorphism effects
+*   **Backend**: Node.js + Express (`backend/`)
+*   **AI**: Google Gemini via `@google/generative-ai`, default model `gemini-2.5-flash` (`backend/config.js`)
+*   **Database**: SQLite, a single file in `DATABASE_DIR` (the `backend/` directory by default; `/app/data` on a persistent volume in the container)
+*   **Frontend**: React 18 (Vite) styled in a dark theme with glassmorphism effects, hand-rolled SVG charts (`frontend/`)
+*   **E-mail**: Mailgun (summaries, invitations, admin reports), configured in the Admin Panel
 *   **Containerization**: two images on GHCR (Node.js API, nginx serving the SPA), deployed to k3s by a Helm chart and Argo CD
 
 ---
@@ -101,16 +109,25 @@ About 150 dictionary entries match no string in the code. They are pre-written t
     chmod +x scripts/start.sh
     ./scripts/start.sh
     ```
-2.  Copy the environment template and paste your Google AI Studio API key into `backend/.env`:
+    It installs dependencies, builds the frontend into `backend/public` and creates `backend/.env` from `backend/.env.example` if it does not exist yet.
+2.  Fill in `backend/.env`. The backend refuses to start without the two secrets:
     ```env
-    GEMINI_API_KEY=YOUR_API_KEY_HERE
+    APP_PASSWORD=<openssl rand -hex 32>
+    OAUTH_STATE_SECRET=<a second, different openssl rand -hex 32>
+    GEMINI_API_KEY=<optional: server-side key from Google AI Studio>
     ```
+    Set `DATABASE_DIR` to keep the SQLite file outside `backend/`. Other optional variables: `PORT`, `APP_URL` (public URL used for OAuth redirects and CORS), `ADMIN_INITIAL_PASSWORD` / `ADMIN_EMAIL` (first admin account), `WEATHER_LAT` / `WEATHER_LON` (default weather location), `BACKUP_HOUR_LOCAL`.
 3.  Start the backend server:
     ```bash
     cd backend
     npm start
     ```
-4.  The application will be available at: `http://localhost:3000` (with automated proxying for the frontend).
+4.  The application is available at `http://localhost:3000` — Express serves the built frontend from `backend/public`. For frontend development with hot reload, run `npm run dev` in `frontend/` instead and open `http://localhost:5173`; Vite proxies `/api` to the backend on port 3000.
+
+### Tests
+*   Backend: `cd backend && npm test` (point `DATABASE_DIR` at a temporary directory so your dev database is not touched).
+*   Frontend: `cd frontend && npm test && npm run check-i18n && npm run lint`.
+*   End-to-end: `npm run test:e2e` in the repository root (Playwright). It starts the backend itself on port 3000 and needs the frontend already built; the `test-e2e` job in `.github/workflows/docker-publish.yml` shows the environment it expects.
 
 ---
 
@@ -120,9 +137,9 @@ Production runs on a single-node **k3s** cluster on the RenaCode VPS, deployed b
 
 ### Pipeline: push → images → tag bump → Argo CD
 
-1.  **CI** (`.github/workflows/docker-publish.yml`) runs on every push to `main`:
+1.  **CI** (`.github/workflows/docker-publish.yml`) runs on every push to `main` and on pull requests to `main` (pull requests only run the tests; they never build, publish or deploy):
     *   `test-backend` — `npm audit` of production dependencies (high/critical blocks the run, no exceptions are whitelisted) and `npm test`;
-    *   `test-frontend` — `npm audit` of the frontend;
+    *   `test-frontend` — `npm audit` of the frontend, unit tests, `check-i18n` and lint;
     *   `test-e2e` — Playwright against a throwaway database.
 2.  **Images**: `build-backend` / `build-frontend` start only when their own tests **and** E2E passed, and only for the service whose files changed (`dorny/paths-filter`; `workflow_dispatch` builds both). They push `ghcr.io/renacode/dietetyk-ai-{backend,frontend}` tagged `latest` and `sha-<commit>`. Base images are pinned by digest (Node 24 LTS on Debian trixie for the backend — see the comment in `docker/backend.Dockerfile` on why not bookworm).
 3.  **Tag bump**: `update-git` writes `sha-<commit>` into `charts/dietetyk/values.yaml` and pushes `chore: update image tags to sha-… [skip ci]` to `main` with the `DEPLOY_PAT` secret (`main` is protected; the PAT is the bypass).
@@ -235,11 +252,11 @@ Unlike Oura and Withings, Apple Health does not expose a public cloud API—data
 2.  Log in to Dietetyk AI, navigate to the **Settings** tab, and locate the **Apple Health** section. Copy the generated webhook URL (which contains your private sync token, e.g., `https://dietetyk.renacode.com/api/integrations/apple-health/<token>`). You can regenerate a new token if needed.
 3.  In the Health Auto Export app, navigate to **Automations** and create a new **REST API** automation.
 4.  Paste the copied URL as the destination address and set the format to **JSON**.
-5.  Select the metrics: **Steps**, **Active Energy**, **Basal Energy Burned**, and **Apple Exercise Time**. If you also want to synchronize workouts, create a second automation for **Workouts** pointing to the same URL.
-6.  Enable background delivery (e.g., hourly)—data will flow into `health_metrics` with `activity_source = 'apple'` and will show up on your Dashboard automatically.
+5.  Select the metrics. **Steps**, **Active Energy**, **Basal Energy Burned** and **Apple Exercise Time** feed the calorie balance; distance, **Dietary Water**, wrist temperature and sleep are used as well, and you can tick everything — metrics without a dedicated column are stored as hourly samples instead of being dropped. To synchronize workouts, create a second automation for **Workouts** pointing to the same URL and enable **Include Workout Metrics** for heart-rate data. Symptoms, heart-rate notifications, cycle tracking and medications can be sent from their own automations to the same URL.
+6.  Enable background delivery (e.g., hourly)—activity data will flow into `health_metrics` with `activity_source = 'apple'` and will show up on your Dashboard automatically.
 
 > [!NOTE]
-> When both Apple Health and Oura are active, Apple Health data is treated as the primary source for steps/calories/activity minutes (since it syncs immediately, while Oura usually finalizes its summary the next morning). Oura only fills in these metrics for days where Apple Health has not reported any data.
+> When both Apple Health and Oura are active, Apple Health data is treated as the primary source for steps/calories/activity minutes (since it syncs immediately, while Oura usually finalizes its summary the next morning). Oura only fills in the activity values Apple Health has not reported.
 
 ### 4. Google Fit Integration (Steps, Calories)
 Unlike Apple Health (webhook) and Oura/Withings (per-user credentials), Google Fit uses OAuth2 and global Google credentials (Client ID/Secret) configured once by the administrator in the **Admin Panel** (the same keys used for Google Login). This means standard users do not need to register their own developer applications.
@@ -249,7 +266,7 @@ Unlike Apple Health (webhook) and Oura/Withings (per-user credentials), Google F
 4.  The integration can be disconnected at any time by clicking **"Disconnect Integration"**.
 
 > [!NOTE]
-> Google Fit timezone aggregation limits may cause a small (1-2h) shift relative to Europe/Warsaw time used by the rest of the application. Furthermore, Apple Health and Google Fit share the same priority (whoever writes last wins), while Apple Health always overrides Oura.
+> Activity sources follow one fixed priority, `apple > google_fit > oura` (see [Activity data source priority](#activity-data-source-priority)): Google Fit never overwrites activity values that came from Apple Health, and Oura never overwrites either of them.
 
 ### 5. Linking an Existing Account with Google
 If you already have an account created with a username/password and want to link it to a Google account for single-click login without losing history:
@@ -264,7 +281,10 @@ If you already have an account created with a username/password and want to link
 3.  Click **"Get API Key"**.
 4.  Click **"Create API Key"** (choose a new or existing Google Cloud project).
 5.  Copy the generated key.
-6.  Paste it in the Gemini AI section in the **Settings** tab of the Dietetyk AI app and click **"Save credentials"**. Once configured, meal analyses and dietary advice will use your personal quota.
+6.  Paste it in the Gemini AI section in the **Settings** tab of the Dietetyk AI app and click **"Save credentials"**. Once configured, meal analyses, the chat, daily advice and summaries will use your personal quota.
+
+> [!NOTE]
+> Regular (non-admin) accounts need their own Gemini key — without it the AI features are unavailable for them. The server-wide `GEMINI_API_KEY` from `backend/.env` is used only as a fallback for administrator accounts.
 
 ---
 

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { t } from '../utils/i18n';
+import { formatMealTime } from '../utils/format';
 
 // mealsUnknown: the day's data (/api/dashboard) failed to load, so an empty `meals` array
 // means "we do not know", not "the user ate nothing". Without this distinction a 500 from
@@ -118,20 +119,6 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
     if (score >= 8) return 'high';
     if (score >= 5) return 'med';
     return 'low';
-  };
-
-  const formatTime = (timestampStr) => {
-    if (!timestampStr) return '';
-    try {
-      const parts = timestampStr.split(' ');
-      if (parts.length >= 2) {
-        return parts[1].substring(0, 5); // HH:MM
-      }
-      const d = new Date(timestampStr);
-      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    } catch (e) {
-      return '';
-    }
   };
 
   return (
@@ -325,7 +312,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                   <div className="meal-item-header">
                     <div>
                       <h4 className="meal-title">{meal.raw_text}</h4>
-                      <span className="meal-time">🕒 Dodano o {formatTime(meal.timestamp)}</span>
+                      <span className="meal-time">🕒 Dodano o {formatMealTime(meal.timestamp)}</span>
                     </div>
                     <button
                       className="btn-delete"

@@ -1,42 +1,64 @@
+/* Paleta wg makiety "Dietetyk AI": zielony szmaragd/mięta jako główny akcent, fiolet i
+   limonka jako akcenty drugoplanowe, ciemne tło z poświatą. Nazwy istniejących zmiennych
+   zostały te same - komponenty czytają je w setkach miejsc (inline style), więc paleta
+   zmienia się tutaj, a nie w każdym pliku osobno. */
 :root {
   /* Kolory i paleta */
-  --bg-dark: #070913;
-  --bg-card: rgba(18, 22, 41, 0.7);
-  --bg-card-hover: rgba(26, 32, 58, 0.85);
-  --border-glass: rgba(255, 255, 255, 0.07);
-  --border-glass-glow: rgba(124, 58, 237, 0.3);
-  
-  --color-primary: #7c3aed; /* Fiolet AI */
+  --bg-dark: #06090b;
+  --bg-card: rgba(20, 26, 30, 0.62);
+  --bg-card-hover: rgba(24, 32, 36, 0.72);
+  --border-glass: rgba(255, 255, 255, 0.08);
+  --border-glass-strong: rgba(255, 255, 255, 0.14);
+  --border-glass-glow: rgba(62, 232, 166, 0.35);
+
+  --mint: #3ee8a6; /* Główny akcent - na --bg-dark kontrast ok. 12:1 */
+  --mint-deep: #0f9f6e;
+  --violet: #a78bfa;
+  --lime: #c6f24e;
+
+  --color-primary: #8b5cf6; /* Fiolet AI - akcent drugoplanowy */
   --color-secondary: #10b981; /* Szmaragd Zdrowia */
   --color-orange: #f59e0b; /* Pomarańcz */
   --color-blue: #06b6d4; /* Cyjan aktywności */
+  /* --primary-color/--primary-hover/--warning były czytane w Settings.jsx, App.jsx
+     i AppleHealthEventsCard.jsx, ale nigdzie niezdefiniowane - gradienty i kolory z nich
+     po cichu znikały. */
+  --primary-color: #10b981;
+  --primary-hover: #3ee8a6;
+  --warning: #fbbf24;
   --danger: #ef4444; /* Czerwień dla akcji destrukcyjnych (usunięcie konta itp.) */
   --danger-light: #f87171; /* Jaśniejszy czerwony do tekstu na ciemnym tle (np. alert-error) */
   --success-light: #34d399; /* Jaśniejszy zielony do tekstu na ciemnym tle (np. alert-success) -
     wcześniej zaszyty na sztywno w kilku miejscach (index.css, Dashboard.jsx) razem z
     --color-secondary (#10b981) jako dwa niezależne "zielone sukcesu" - teraz jedna zmienna. */
-  --focus-ring: 0 0 0 3px rgba(124, 58, 237, 0.45); /* Widoczny pierścień fokusu (nawigacja klawiaturą) */
+  /* Widoczny pierścień fokusu (nawigacja klawiaturą): ciemna obwódka + miętowy pierścień,
+     żeby był widoczny także na zielonych przyciskach. */
+  --focus-ring: 0 0 0 2px var(--bg-dark), 0 0 0 4px var(--mint);
+  --accent-glow: rgba(62, 232, 166, 0.18);
 
   --gradient-ai: linear-gradient(135deg, #7c3aed 0%, #c084fc 100%);
-  --gradient-health: linear-gradient(135deg, #059669 0%, #34d399 100%);
-  --gradient-dark: linear-gradient(180deg, #070913 0%, #0d1127 100%);
+  --gradient-health: linear-gradient(135deg, #0f9f6e 0%, #3ee8a6 100%);
+  --gradient-mint: linear-gradient(135deg, #6af4bf 0%, #22c98a 100%);
+  --gradient-dark: linear-gradient(180deg, #06090b 0%, #0a0d12 100%);
   --gradient-orange: linear-gradient(135deg, #d97706 0%, #fbbf24 100%);
 
-  --text-main: #f1f5f9;
-  --text-muted: #94a3b8;
-  --text-dim: #64748b;
-  
-  --font-main: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-display: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  --text-main: #eef3f1;
+  --text-muted: #a3b0ab;
+  --text-dim: #7a8883; /* ok. 5:1 na --bg-dark */
+  --text-on-mint: #03140d;
 
-  --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  --font-main: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-display: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  --shadow-glow: 0 18px 50px -12px rgba(0, 0, 0, 0.55);
   --shadow-purple: 0 0 20px 0 rgba(124, 58, 237, 0.15);
-  
-  --radius-lg: 18px;
-  --radius-md: 12px;
-  --radius-sm: 8px;
-  
-  --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --shadow-mint: 0 8px 28px -8px rgba(62, 232, 166, 0.45);
+
+  --radius-lg: 22px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+
+  --transition-smooth: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 * {
@@ -61,8 +83,17 @@
 }
 
 body {
-  background: var(--bg-dark);
-  background-image: var(--gradient-dark);
+  background-color: var(--bg-dark);
+  /* Poświata z makiety: zielona z lewej, fioletowa i limonkowa z prawej, fioletowa
+     u góry. Same gradienty, bez zdjęcia - żeby nie dokładać ciężkiego pliku do
+     pierwszego wczytania na telefonie. */
+  background-image:
+    radial-gradient(55% 45% at 6% 42%, rgba(16, 185, 129, 0.16) 0%, transparent 70%),
+    radial-gradient(40% 35% at 94% 30%, rgba(139, 92, 246, 0.16) 0%, transparent 70%),
+    radial-gradient(30% 30% at 96% 75%, rgba(198, 242, 78, 0.07) 0%, transparent 70%),
+    radial-gradient(70% 45% at 50% 0%, rgba(76, 52, 140, 0.2) 0%, transparent 70%),
+    var(--gradient-dark);
+  background-attachment: fixed;
   color: var(--text-main);
   font-family: var(--font-main);
   min-height: 100vh;
@@ -90,36 +121,11 @@ body {
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(124, 58, 237, 0.3);
+  background: rgba(62, 232, 166, 0.25);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(124, 58, 237, 0.5);
-}
-
-/* Dekoracyjne tła - świetliste kule */
-body::before, body::after {
-  content: '';
-  position: absolute;
-  width: 300px;
-  height: 300px;
-  border-radius: 50%;
-  filter: blur(100px);
-  z-index: -1;
-  opacity: 0.15;
-  pointer-events: none;
-}
-
-body::before {
-  top: 10%;
-  left: 10%;
-  background: var(--color-primary);
-}
-
-body::after {
-  bottom: 15%;
-  right: 10%;
-  background: var(--color-secondary);
+  background: rgba(62, 232, 166, 0.45);
 }
 
 a, button, input, textarea {
@@ -134,101 +140,253 @@ h1, h2, h3, h4 {
 
 /* Layout i kontenery */
 .app-container {
-  max-width: 1200px;
+  max-width: 1360px;
   margin: 0 auto;
-  padding: 24px 16px 80px 16px;
+  padding: 28px 24px 40px;
 }
 
-header {
+/* Rama aplikacji z makiety: jedna duża szklana tafla z cienką ramką, w której siedzą
+   nagłówek, pasek ikon i treść. CELOWO bez backdrop-filter/transform: oba tworzą nowy
+   "containing block" dla position: fixed, a wewnątrz ramy żyją elementy przypięte do
+   ekranu (dolny pasek nawigacji na telefonie, szuflada czatu z agentem) - z filtrem
+   na ramie przypinałyby się do niej zamiast do okna. */
+.app-frame {
+  background: linear-gradient(180deg, rgba(16, 21, 26, 0.78) 0%, rgba(9, 12, 15, 0.72) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 32px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 40px 120px -40px rgba(0, 0, 0, 0.8),
+    0 0 0 6px rgba(255, 255, 255, 0.015);
+}
+
+.app-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 32px;
-  padding-bottom: 16px;
+  gap: 40px;
+  padding: 20px 32px;
   border-bottom: 1px solid var(--border-glass);
 }
 
 .logo-container {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-.logo-icon {
-  font-size: 2.2rem;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
 .logo-text {
-  font-size: 1.8rem;
-  background: linear-gradient(135deg, #ffffff 0%, #a78bfa 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
   font-family: var(--font-display);
-  font-weight: 800;
+  font-size: 1.4rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #fff;
+  white-space: nowrap;
 }
 
-.logo-badge {
-  background: var(--gradient-ai);
-  font-size: 0.75rem;
-  padding: 3px 8px;
-  border-radius: 20px;
-  color: #fff;
-  font-weight: 600;
-  margin-left: 6px;
-  vertical-align: middle;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+.logo-text-ai {
+  color: var(--mint);
 }
 
 .nav-tabs {
   display: flex;
-  gap: 8px;
-  background: rgba(255, 255, 255, 0.03);
-  padding: 4px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-glass);
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
 }
 
 .nav-tab {
+  position: relative;
   background: transparent;
   border: none;
   color: var(--text-muted);
-  padding: 8px 16px;
+  padding: 10px 14px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 0.95rem;
+  font-size: 0.98rem;
   font-weight: 500;
-  transition: var(--transition-smooth);
+  white-space: nowrap;
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.nav-tab-icon,
+.nav-tab-short {
+  display: none;
 }
 
 .nav-tab:hover {
   color: var(--text-main);
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.04);
 }
 
+/* Aktywna zakładka: biały tekst i zielone podkreślenie z poświatą, osadzone na
+   dolnej krawędzi nagłówka - jak w makiecie. */
 .nav-tab.active {
-  background: var(--gradient-ai);
-  color: white;
-  box-shadow: var(--shadow-purple);
+  color: #fff;
+  background: radial-gradient(80% 120% at 50% 100%, rgba(62, 232, 166, 0.14) 0%, transparent 70%);
+}
+
+.nav-tab.active::after {
+  content: '';
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -21px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--mint);
+  box-shadow: 0 0 12px 1px rgba(62, 232, 166, 0.7);
+}
+
+.header-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.user-chip-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--border-glass-strong);
+}
+
+.user-chip-initial {
+  display: grid;
+  place-items: center;
+  background: var(--gradient-mint);
+  color: var(--text-on-mint);
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.user-chip-name {
+  font-size: 0.92rem;
+  font-weight: 500;
+  color: var(--text-main);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logout-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--border-glass);
+  color: var(--text-muted);
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.logout-btn:hover {
+  color: var(--danger-light);
+  border-color: rgba(248, 113, 113, 0.4);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.app-body {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+}
+
+/* Wąski pionowy pasek ikon po lewej (tylko szerokie ekrany). */
+.app-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 32px 0 0 16px;
+  position: sticky;
+  top: 16px;
+  align-self: start;
+}
+
+.rail-btn {
+  width: 60px;
+  height: 60px;
+  display: grid;
+  place-items: center;
+  border-radius: 18px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.rail-btn:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.rail-btn.active {
+  color: #fff;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.04) 100%);
+  border-color: var(--border-glass-strong);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 24px -10px rgba(0, 0, 0, 0.6);
+}
+
+.app-content {
+  min-width: 0;
+  padding: 24px 32px 32px 12px;
+}
+
+.app-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.app-toolbar-status {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.app-footer {
+  margin-top: 28px;
+  padding: 8px 0;
+  text-align: center;
 }
 
 /* Szklane karty (Glassmorphism) */
 .glass-card {
   background: var(--bg-card);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   border: 1px solid var(--border-glass);
   border-radius: var(--radius-lg);
   padding: 24px;
-  box-shadow: var(--shadow-glow);
-  transition: var(--transition-smooth);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), var(--shadow-glow);
+  transition: border-color 0.25s ease;
   position: relative;
 }
 
+/* Bez translateY na hover: transform tworzy containing block dla position: fixed,
+   więc dymki i nakładki w kartach skakały razem z kartą. */
 .glass-card:hover {
-  background: var(--bg-card-hover);
-  border-color: rgba(255, 255, 255, 0.14);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-glow), 0 12px 36px rgba(124, 58, 237, 0.12);
+  border-color: var(--border-glass-strong);
 }
 
 /* Layout Dashboardu */
@@ -395,14 +553,14 @@ header {
 
 .meal-input:focus {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 15px 0 rgba(124, 58, 237, 0.1);
+  border-color: var(--border-glass-glow);
+  box-shadow: 0 0 0 3px rgba(62, 232, 166, 0.12);
 }
 
 .btn-primary {
-  background: var(--gradient-ai);
+  background: var(--gradient-mint);
   border: none;
-  color: white;
+  color: var(--text-on-mint);
   padding: 14px 24px;
   border-radius: var(--radius-md);
   font-size: 1rem;
@@ -413,12 +571,12 @@ header {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  box-shadow: var(--shadow-purple);
+  box-shadow: var(--shadow-mint);
 }
 
 .btn-primary:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 25px 0 rgba(124, 58, 237, 0.3);
+  transform: translateY(-1px);
+  box-shadow: 0 12px 30px -8px rgba(62, 232, 166, 0.6);
 }
 
 .btn-primary:active:not(:disabled) {
@@ -872,6 +1030,14 @@ header {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Pole w siatce (Ustawienia -> integracje) ma domyślnie min-width: auto, więc długi,
+     niełamliwy adres URL w podpowiedzi pod polem rozpychał kolumnę o ~80px poza ekran
+     telefonu. min-width: 0 + łamanie adresu pozwala kolumnie zostać w szerokości ekranu. */
+  min-width: 0;
+}
+
+.input-group code {
+  overflow-wrap: anywhere;
 }
 
 .input-label {
@@ -892,7 +1058,8 @@ header {
 
 .input-field:focus {
   outline: none;
-  border-color: var(--color-primary);
+  border-color: var(--border-glass-glow);
+  box-shadow: 0 0 0 3px rgba(62, 232, 166, 0.12);
 }
 
 /* Komunikaty o błędach/powodzeniu */
@@ -955,16 +1122,19 @@ header {
 .date-selector {
   display: flex;
   align-items: center;
-  gap: 12px;
-  background: rgba(255, 255, 255, 0.03);
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--border-glass);
-  padding: 6px 12px;
-  border-radius: var(--radius-md);
+  padding: 7px 14px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
 }
 
 .date-input {
   background: transparent;
   border: none;
+  color-scheme: dark;
   color: white;
   font-family: var(--font-display);
   font-size: 0.95rem;
@@ -974,8 +1144,15 @@ header {
 
 .date-input:focus {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px rgba(var(--color-primary-rgb, 99, 102, 241), 0.25);
+}
+
+.date-input::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
+  cursor: pointer;
+}
+
+.date-selector:focus-within {
+  border-color: var(--border-glass-glow);
 }
 
 /* --- PREMIUM DASHBOARD STYLES (Oura / WHOOP / Athlytic style) --- */
@@ -987,10 +1164,8 @@ header {
   width: 100%;
   max-width: 100%;
   margin: 0 auto;
-  padding: 16px 8px;
-  background-color: #0b0c0c;
+  padding: 0;
   color: #fff;
-  border-radius: 28px;
   box-sizing: border-box;
 }
 
@@ -1006,8 +1181,8 @@ header {
     display: grid;
     grid-template-columns: 1fr 1fr;
     grid-auto-flow: row;
-    gap: 24px;
-    padding: 24px;
+    gap: 22px;
+    padding: 0;
     align-items: start;
   }
 
@@ -1016,10 +1191,14 @@ header {
   }
 }
 
+/* Bez backdrop-filter: tych kart jest na pulpicie ok. 90, a rozmycie tła liczone osobno
+   dla każdej z nich zauważalnie spowalniało przewijanie na telefonie. Półprzezroczyste
+   tło z gradientem daje ten sam efekt szkła na ciemnej poświacie. */
 .premium-card {
-  background: #141515;
-  border: 1px solid rgba(255, 255, 255, 0.04);
-  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(30, 37, 42, 0.62) 0%, rgba(19, 24, 28, 0.62) 100%);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 18px 40px -24px rgba(0, 0, 0, 0.7);
   padding: 20px;
   display: flex;
   flex-direction: column;
@@ -1033,8 +1212,9 @@ header {
 }
 
 .premium-title {
-  font-size: 1.1rem;
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-size: 1.08rem;
+  font-weight: 600;
   color: #ffffff;
   display: flex;
   align-items: center;
@@ -1092,7 +1272,7 @@ header {
 
 /* Cel Obciążenia Slider */
 .load-goal-card {
-  background: #141515;
+  background: rgba(255, 255, 255, 0.035);
 }
 
 .load-goal-range-container {
@@ -1127,7 +1307,7 @@ header {
   height: 14px;
   background: #fff;
   border-radius: 50%;
-  border: 2px solid #141515;
+  border: 2px solid #12181b;
   box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
   transform: translateX(-50%);
   z-index: 3;
@@ -1295,26 +1475,26 @@ header {
   height: 14px;
   background: #fff;
   border-radius: 50%;
-  border: 2px solid #141515;
+  border: 2px solid #12181b;
   box-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
   transform: translate(-50%, -3px);
 }
 
 /* Workout Cards */
 .premium-workout-card {
-  background: #1c1d1d;
+  background: rgba(255, 255, 255, 0.04);
   border-radius: 16px;
   padding: 12px 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  border: 1px solid rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-glass);
   margin-bottom: 8px;
   transition: all 0.2s ease;
 }
 
 .premium-workout-card:hover {
-  background: #232424;
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .premium-workout-left {
@@ -1326,8 +1506,8 @@ header {
 .premium-workout-icon-box {
   width: 40px;
   height: 40px;
-  background: #252626;
-  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1359,13 +1539,14 @@ header {
 
 /* AI Dietetyk Banner */
 .dietetyk-ai-banner {
-  background: linear-gradient(135deg, rgba(124, 58, 237, 0.12) 0%, rgba(6, 182, 212, 0.03) 100%);
-  border: 1px solid rgba(124, 58, 237, 0.2);
-  border-radius: 20px;
-  padding: 16px;
+  background: linear-gradient(160deg, rgba(139, 92, 246, 0.1) 0%, rgba(24, 30, 35, 0.66) 45%, rgba(16, 21, 25, 0.66) 100%);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .dietetyk-ai-advice-text {
@@ -1405,11 +1586,9 @@ header {
    (zgłoszenie użytkownika), a nie jednym blokiem tekstu z gwiazdkami. */
 .dietetyk-ai-advice-heading {
   margin: 12px 0 6px 0;
-  font-size: 0.82rem;
+  font-size: 0.85rem;
   font-weight: 700;
-  letter-spacing: 0.03em;
-  text-transform: uppercase;
-  color: #c084fc;
+  color: var(--violet);
 }
 
 .dietetyk-ai-advice-text > .dietetyk-ai-advice-heading:first-child {
@@ -1417,10 +1596,10 @@ header {
 }
 
 .btn-dietetyk-ask {
-  background: linear-gradient(90deg, #7c3aed, #a855f7);
-  border: none;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--border-glass-strong);
   color: #fff;
-  padding: 8px 16px;
+  padding: 10px 16px;
   border-radius: 12px;
   font-size: 0.85rem;
   font-weight: 700;
@@ -1433,13 +1612,13 @@ header {
 }
 
 .btn-dietetyk-ask:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+  background: rgba(255, 255, 255, 0.11);
+  border-color: var(--border-glass-glow);
 }
 
 .dietetyk-greeting {
-  font-size: 1.15rem;
-  font-weight: 800;
+  font-size: 0.98rem;
+  font-weight: 600;
   letter-spacing: -0.01em;
   color: #fff;
 }
@@ -1461,8 +1640,8 @@ header {
 }
 
 .daily-goal-card {
-  background: #141515;
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border-glass);
   border-radius: 16px;
   padding: 14px;
   display: flex;
@@ -1537,8 +1716,8 @@ header {
 
 /* Trend Health Cards */
 .trend-health-card {
-  background: #141515;
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--border-glass);
   border-radius: 16px;
   padding: 14px;
   display: flex;
@@ -1609,7 +1788,7 @@ header {
   height: 14px;
   background: #fff;
   border-radius: 50%;
-  border: 3px solid #141515;
+  border: 3px solid #12181b;
   box-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
 }
 
@@ -1634,36 +1813,6 @@ header {
 
 /* Responsywność na telefonach */
 @media (max-width: 767px) {
-  header {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 16px;
-    margin-bottom: 24px;
-    padding-bottom: 16px;
-  }
-
-  .nav-tabs {
-    width: 100%;
-    display: flex;
-    overflow-x: auto;
-    white-space: nowrap;
-    padding: 6px;
-    gap: 6px;
-    -webkit-overflow-scrolling: touch;
-    -ms-overflow-style: none; /* IE/Edge */
-    scrollbar-width: none; /* Firefox */
-  }
-
-  .nav-tabs::-webkit-scrollbar {
-    display: none; /* Chrome/Safari */
-  }
-
-  .nav-tab {
-    flex-shrink: 0;
-    padding: 8px 12px;
-    font-size: 0.85rem;
-  }
-
   /* Settings.jsx: siatka "Profil | 4 karty" zakłada min. 320px na kolumnę,
      czyli min. ~664px szerokości - na ekranach <=768px (tablet portrait,
      telefony) wymuszamy jedną kolumnę, inaczej karty się ścieśniają/wychodzą
@@ -1695,9 +1844,13 @@ header {
     opacity: 0;
     transform: translateY(8px);
   }
+  /* "none", nie translateY(0): z animation-fill-mode: forwards wartość końcowa
+     zostaje na elemencie na stałe, a każdy transform inny niż none tworzy containing
+     block dla position: fixed - szuflada czatu z agentem przypinała się wtedy do
+     zakładki zamiast do okna. */
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: none;
   }
 }
 
@@ -1718,5 +1871,575 @@ header {
   }
   100% {
     background-position: -200% 0;
+  }
+}
+
+/* --- PULPIT: GÓRNA SEKCJA (makieta) - pierścień kalorii, makro, porada AI, posiłki --- */
+
+.dash-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+  min-width: 0;
+}
+
+/* Na telefonie posiłki idą przed poradą AI: aplikację otwiera się zwykle przy jedzeniu,
+   żeby coś dopisać, a porada bywa długa i spychała "Dodaj posiłek" pod drugi ekran. */
+@media (max-width: 767px) {
+  .dash-hero > .hero-meals { order: 3; }
+  .dash-hero > .dietetyk-ai-banner { order: 4; }
+}
+
+@media (min-width: 768px) {
+  .dash-hero {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 992px) {
+  .dash-hero {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 22px;
+  }
+  .dash-hero > .hero-ring-card { grid-column: span 7; }
+  .dash-hero > .hero-macros { grid-column: span 5; }
+  .dash-hero > .dietetyk-ai-banner { grid-column: span 5; }
+  .dash-hero > .hero-meals { grid-column: span 7; }
+}
+
+.hero-card {
+  background: linear-gradient(180deg, rgba(30, 37, 42, 0.62) 0%, rgba(19, 24, 28, 0.62) 100%);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 18px 40px -24px rgba(0, 0, 0, 0.7);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.hero-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.hero-card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+.hero-card-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-glass-strong);
+  color: var(--text-main);
+}
+
+.hero-card-meta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-glass);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-empty {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* Pierścień kalorii - jedyny "głośny" element ekranu: poświata, drobinki, gradient. */
+.hero-ring-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 12px 16px;
+  min-width: 0;
+  /* Drobinki wystają poza pierścień - przycinamy je tutaj, żeby na wąskim ekranie nie
+     poszerzały strony. Karta nie zawiera wykresów ani dymków, więc clip niczego nie ucina. */
+  overflow: clip;
+}
+
+.calorie-ring {
+  position: relative;
+  width: 300px;
+  max-width: 72vw;
+  aspect-ratio: 1;
+}
+
+.calorie-ring-glow {
+  position: absolute;
+  inset: 8%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(62, 232, 166, 0.05) 30%, rgba(62, 232, 166, 0.26) 58%, transparent 72%);
+  filter: blur(16px);
+}
+
+.calorie-ring-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+  overflow: visible;
+}
+
+.calorie-ring-outline {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.08);
+  stroke-width: 1;
+}
+
+.calorie-ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.06);
+}
+
+.calorie-ring-progress {
+  fill: none;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 6px rgba(62, 232, 166, 0.85)) drop-shadow(0 0 18px rgba(62, 232, 166, 0.45));
+  transition: stroke-dashoffset 0.9s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.calorie-ring-particles span {
+  position: absolute;
+  border-radius: 50%;
+  background: var(--mint);
+  box-shadow: 0 0 8px 1px rgba(62, 232, 166, 0.8);
+  transform: translate(-50%, -50%);
+  opacity: 0.5;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .calorie-ring-particles span {
+    animation: ring-twinkle 3.4s ease-in-out infinite;
+  }
+}
+
+@keyframes ring-twinkle {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 0.85; }
+}
+
+.calorie-ring-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 2px;
+}
+
+.calorie-ring-day {
+  font-size: 0.98rem;
+  color: var(--text-main);
+  margin-bottom: 2px;
+}
+
+.calorie-ring-value {
+  font-family: var(--font-display);
+  font-size: 3rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+.calorie-ring-unit {
+  margin-left: 0.18em;
+  font-size: 0.6em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.calorie-ring-goal {
+  font-size: 0.86rem;
+  color: var(--text-muted);
+  max-width: 70%;
+}
+
+.calorie-ring-pct {
+  margin-top: 10px;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  font-weight: 500;
+  color: rgba(238, 243, 241, 0.72);
+  font-variant-numeric: tabular-nums;
+}
+
+.calorie-ring-pct.is-over,
+.macro-pct.is-over {
+  color: var(--warning);
+}
+
+.calorie-ring-net {
+  margin-top: 14px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.calorie-ring-net .is-surplus { color: #f87171; }
+.calorie-ring-net .is-deficit { color: #34d399; }
+.calorie-ring-net .is-even { color: #fbbf24; }
+
+/* Karta makro: grube paski z gradientem i poświatą, wartość w pasku, % w ciemnej
+   "kieszeni" na końcu toru. Wypełnienie skaluje się do toru BEZ kieszeni
+   (--p * (100% - 64px)), więc 100% celu kończy się przy kieszeni, a tekst procentu
+   zawsze leży na ciemnym tle - na jasnym końcu gradientu był nieczytelny. */
+.macro-rows {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-evenly;
+  flex: 1;
+  gap: 18px;
+}
+
+.macro-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+
+.macro-row-name {
+  font-size: 1.02rem;
+  font-weight: 500;
+  color: #fff;
+}
+
+.macro-row-goal {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+.macro-track {
+  position: relative;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.38);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.macro-fill {
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  bottom: 3px;
+  min-width: 28px;
+  width: calc((100% - 64px) * var(--p, 0));
+  border-radius: 999px;
+  transition: width 0.7s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.macro-protein .macro-fill {
+  background: linear-gradient(90deg, #0b6e4a 0%, #1fbf83 60%, #5ff2b8 100%);
+  box-shadow: 0 0 18px -2px rgba(62, 232, 166, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.macro-carbs .macro-fill {
+  background: linear-gradient(90deg, #4c25b0 0%, #8257f0 60%, #b99cff 100%);
+  box-shadow: 0 0 18px -2px rgba(139, 92, 246, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.macro-fat .macro-fill {
+  background: linear-gradient(90deg, #4d670c 0%, #94c21f 60%, #d4f76a 100%);
+  box-shadow: 0 0 18px -2px rgba(198, 242, 78, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+.macro-value {
+  position: relative;
+  z-index: 1;
+  font-size: 0.9rem;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.macro-value strong {
+  font-weight: 700;
+}
+
+.macro-value-goal {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.macro-pct {
+  position: relative;
+  z-index: 1;
+  margin-left: auto;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Karta porady AI w górnej sekcji */
+.dietetyk-ai-advice-text.is-clamped {
+  max-height: 9.5em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 60%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 60%, transparent 100%);
+}
+
+.dietetyk-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: auto;
+}
+
+.dietetyk-ai-actions .btn-dietetyk-ask {
+  align-self: auto;
+}
+
+.btn-advice-toggle {
+  padding: 10px 16px;
+  font-size: 0.85rem;
+  border-radius: 12px;
+  flex: 1;
+}
+
+/* Kafelki posiłków */
+.meal-tiles {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 12px;
+}
+
+.meal-tile {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 16px 10px 12px;
+  text-align: center;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.065) 0%, rgba(255, 255, 255, 0.025) 100%);
+  border: 1px solid var(--border-glass);
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.meal-tile:hover {
+  border-color: var(--border-glass-glow);
+}
+
+.meal-tile-dot {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.meal-tile-dot.high { background: var(--mint); box-shadow: 0 0 8px rgba(62, 232, 166, 0.9); }
+.meal-tile-dot.med { background: #fbbf24; box-shadow: 0 0 8px rgba(251, 191, 36, 0.7); }
+.meal-tile-dot.low { background: #f87171; box-shadow: 0 0 8px rgba(248, 113, 113, 0.7); }
+.meal-tile-dot.unrated { background: rgba(255, 255, 255, 0.25); }
+
+.meal-tile-icon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 6px;
+  font-size: 1.9rem;
+  border-radius: 50%;
+  overflow: hidden;
+}
+
+.meal-tile-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.meal-tile-name {
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.meal-tile-time,
+.meal-tile-kcal {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.meal-tile-add {
+  justify-content: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+/* --- NAWIGACJA NA TELEFONIE ---
+   Główne użycie aplikacji to telefon przy posiłku: górny pasek zakładek zamienia się
+   w pasek przypięty do dołu ekranu (w zasięgu kciuka), pasek ikon po lewej znika.
+   To ten sam <nav> co na desktopie, tylko inaczej ułożony. */
+@media (max-width: 899px) {
+  .app-container {
+    padding: 10px 10px calc(104px + env(safe-area-inset-bottom));
+  }
+
+  .app-frame {
+    border-radius: 24px;
+  }
+
+  .app-header {
+    gap: 12px;
+    padding: 12px 14px;
+    justify-content: space-between;
+  }
+
+  .logo-text {
+    font-size: 1.2rem;
+  }
+
+  .app-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-rail {
+    display: none;
+  }
+
+  .app-content {
+    padding: 16px 12px 20px;
+  }
+
+  .nav-tabs {
+    position: fixed;
+    left: 10px;
+    right: 10px;
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    z-index: 900;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 2px;
+    padding: 6px;
+    background: rgba(12, 17, 20, 0.88);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid var(--border-glass-strong);
+    border-radius: 22px;
+    box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.8);
+  }
+
+  .nav-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    min-width: 0;
+    padding: 8px 2px 7px;
+    border-radius: 16px;
+    font-size: 0.68rem;
+    line-height: 1.15;
+    text-align: center;
+  }
+
+  .nav-tab-icon,
+  .nav-tab-short {
+    display: flex;
+  }
+
+  /* Pełna nazwa zostaje w przycisku dla czytników ekranu, ale wizualnie ukryta -
+     pod ikoną widać krótki podpis (.nav-tab-short, aria-hidden). */
+  .nav-tab-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .nav-tab.active {
+    color: var(--mint);
+    background: rgba(62, 232, 166, 0.1);
+  }
+
+  .nav-tab.active::after {
+    display: none;
+  }
+}
+
+@media (max-width: 479px) {
+  .user-chip-name {
+    display: none;
+  }
+
+  .calorie-ring {
+    width: 250px;
+  }
+
+  .calorie-ring-value {
+    font-size: 2.5rem;
+  }
+
+  .hero-card {
+    padding: 18px 16px;
+  }
+}
+
+/* Ograniczony ruch: zatrzymujemy animacje dekoracyjne i przejścia w całej aplikacji
+   (drobinki pierścienia mają animację tylko w prefers-reduced-motion: no-preference). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

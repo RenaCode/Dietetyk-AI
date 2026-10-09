@@ -214,18 +214,22 @@ header {
 /* Szklane karty (Glassmorphism) */
 .glass-card {
   background: var(--bg-card);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-glass);
   border-radius: var(--radius-lg);
   padding: 24px;
   box-shadow: var(--shadow-glow);
   transition: var(--transition-smooth);
+  position: relative;
+  overflow: hidden;
 }
 
 .glass-card:hover {
   background: var(--bg-card-hover);
-  border-color: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.14);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-glow), 0 12px 36px rgba(124, 58, 237, 0.12);
 }
 
 /* Layout Dashboardu */

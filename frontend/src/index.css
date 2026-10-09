@@ -1883,13 +1883,6 @@ h1, h2, h3, h4 {
   min-width: 0;
 }
 
-/* Na telefonie posiłki idą przed poradą AI: aplikację otwiera się zwykle przy jedzeniu,
-   żeby coś dopisać, a porada bywa długa i spychała "Dodaj posiłek" pod drugi ekran. */
-@media (max-width: 767px) {
-  .dash-hero > .hero-meals { order: 3; }
-  .dash-hero > .dietetyk-ai-banner { order: 4; }
-}
-
 @media (min-width: 768px) {
   .dash-hero {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1904,8 +1897,11 @@ h1, h2, h3, h4 {
   }
   .dash-hero > .hero-ring-card { grid-column: span 7; }
   .dash-hero > .hero-macros { grid-column: span 5; }
-  .dash-hero > .dietetyk-ai-banner { grid-column: span 5; }
-  .dash-hero > .hero-meals { grid-column: span 7; }
+}
+
+/* Porada AI zajmuje całą szerokość pod pierścieniem i makro, na każdej szerokości. */
+.dash-hero > .dietetyk-ai-banner {
+  grid-column: 1 / -1;
 }
 
 .hero-card {
@@ -1949,22 +1945,6 @@ h1, h2, h3, h4 {
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid var(--border-glass-strong);
   color: var(--text-main);
-}
-
-.hero-card-meta {
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--border-glass);
-  border-radius: 999px;
-  padding: 2px 10px;
-  font-variant-numeric: tabular-nums;
-}
-
-.hero-empty {
-  font-size: 0.85rem;
-  color: var(--text-muted);
-  line-height: 1.5;
 }
 
 /* Pierścień kalorii - jedyny "głośny" element ekranu: poświata, drobinki, gradient. */
@@ -2201,12 +2181,61 @@ h1, h2, h3, h4 {
   font-variant-numeric: tabular-nums;
 }
 
-/* Karta porady AI w górnej sekcji */
-.dietetyk-ai-advice-text.is-clamped {
-  max-height: 9.5em;
-  overflow: hidden;
-  -webkit-mask-image: linear-gradient(180deg, #000 60%, transparent 100%);
-  mask-image: linear-gradient(180deg, #000 60%, transparent 100%);
+/* Karta porady AI w górnej sekcji: porada w całości, bez zwijania. Sekcje
+   "## Analiza" / "## Rekomendacje" (<section> z renderAdviceMarkdown w Dashboard.jsx)
+   stoją obok siebie na szerokim ekranie, a jedna pod drugą na telefonie. Tekst przed
+   pierwszym nagłówkiem (.is-intro) zawsze zajmuje całą szerokość. */
+.dietetyk-ai-advice-text {
+  max-width: 100%;
+}
+
+/* Pozdrowienie pełni rolę tytułu porady. */
+.dietetyk-ai-banner .dietetyk-greeting {
+  font-family: var(--font-display);
+  font-size: 1.12rem;
+}
+
+.dietetyk-ai-advice-section + .dietetyk-ai-advice-section {
+  margin-top: 14px;
+}
+
+@media (min-width: 768px) {
+  .dietetyk-ai-advice-text.has-columns {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 36px;
+    row-gap: 14px;
+  }
+
+  .dietetyk-ai-advice-text.has-columns .dietetyk-ai-advice-section + .dietetyk-ai-advice-section {
+    margin-top: 0;
+  }
+
+  .dietetyk-ai-advice-text.has-columns .dietetyk-ai-advice-section.is-intro {
+    grid-column: 1 / -1;
+  }
+
+  /* Pionowa linia między kolumnami - przy dwóch sekcjach porada czyta się jak tabela. */
+  .dietetyk-ai-advice-text.has-columns .dietetyk-ai-advice-section:not(.is-intro) ~ .dietetyk-ai-advice-section {
+    border-left: 1px solid var(--border-glass);
+    padding-left: 36px;
+    margin-left: -18px;
+  }
+}
+
+.dietetyk-ai-advice-section > .dietetyk-ai-advice-heading:first-child {
+  margin-top: 0;
+}
+
+.dietetyk-ai-advice-text .dietetyk-ai-advice-heading {
+  font-family: var(--font-display);
+  font-size: 0.98rem;
+  margin-bottom: 8px;
+}
+
+.dietetyk-ai-advice-text {
+  font-size: 0.92rem;
+  line-height: 1.6;
 }
 
 .dietetyk-ai-actions {
@@ -2218,106 +2247,6 @@ h1, h2, h3, h4 {
 
 .dietetyk-ai-actions .btn-dietetyk-ask {
   align-self: auto;
-}
-
-.btn-advice-toggle {
-  padding: 10px 16px;
-  font-size: 0.85rem;
-  border-radius: 12px;
-  flex: 1;
-}
-
-/* Kafelki posiłków */
-.meal-tiles {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
-  gap: 12px;
-}
-
-.meal-tile {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  min-height: 140px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  padding: 16px 10px 12px;
-  text-align: center;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.065) 0%, rgba(255, 255, 255, 0.025) 100%);
-  border: 1px solid var(--border-glass);
-  border-radius: 16px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  transition: border-color 0.2s ease, background-color 0.2s ease;
-}
-
-.meal-tile:hover {
-  border-color: var(--border-glass-glow);
-}
-
-.meal-tile-dot {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.meal-tile-dot.high { background: var(--mint); box-shadow: 0 0 8px rgba(62, 232, 166, 0.9); }
-.meal-tile-dot.med { background: #fbbf24; box-shadow: 0 0 8px rgba(251, 191, 36, 0.7); }
-.meal-tile-dot.low { background: #f87171; box-shadow: 0 0 8px rgba(248, 113, 113, 0.7); }
-.meal-tile-dot.unrated { background: rgba(255, 255, 255, 0.25); }
-
-.meal-tile-icon {
-  width: 46px;
-  height: 46px;
-  display: grid;
-  place-items: center;
-  margin-bottom: 6px;
-  font-size: 1.9rem;
-  border-radius: 50%;
-  overflow: hidden;
-}
-
-.meal-tile-icon img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.meal-tile-name {
-  font-size: 0.86rem;
-  font-weight: 600;
-  color: #fff;
-  line-height: 1.3;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  word-break: break-word;
-}
-
-.meal-tile-time,
-.meal-tile-kcal {
-  font-size: 0.78rem;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.meal-tile-add {
-  justify-content: center;
-  gap: 8px;
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #fff;
 }
 
 /* --- NAWIGACJA NA TELEFONIE ---

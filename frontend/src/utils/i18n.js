@@ -668,14 +668,6 @@ const TRANSLATIONS = {
   "cel {goal} g": "goal {goal} g",
   "brak celu": "no goal",
   "Wskazówki AI": "AI insights",
-  "Pokaż całą poradę": "Show the full advice",
-  "Zwiń": "Collapse",
-  "Dzisiejsze posiłki": "Today's meals",
-  "Posiłki tego dnia": "Meals of the day",
-  "Ocena: {score}/10": "Rating: {score}/10",
-  "Brak oceny": "Not rated",
-  "Dodaj posiłek": "Add meal",
-  "Brak wprowadzonych posiłków na ten dzień. Dodaj pierwszy — wystarczy opis albo zdjęcie talerza.": "No meals logged for this day. Add the first one - a description or a photo of your plate is enough.",
 };
 
 let currentLang = localStorage.getItem("language") || "pl";

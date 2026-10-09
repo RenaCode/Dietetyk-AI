@@ -47,7 +47,16 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   });
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState({ type: '', text: '' });
-  const [isPasswordOpen, setIsPasswordOpen] = useState(false);
+  // A grant from the Google re-authentication (backend GET /api/auth/google/reauth) arrives
+  // as `#google_reauth=` - in the fragment, so it never reaches a server log. Read once on
+  // mount and wiped from the address bar at once; it lets an account created through Google
+  // set a password it never had (audit 2026-10-09, B-S4).
+  const [googleReauthGrant] = useState(() => {
+    const grant = new URLSearchParams((window.location.hash || '').replace(/^#/, '')).get('google_reauth');
+    if (grant) window.history.replaceState({}, document.title, '/?tab=settings');
+    return grant || '';
+  });
+  const [isPasswordOpen, setIsPasswordOpen] = useState(!!googleReauthGrant);
   const [is2faOpen, setIs2faOpen] = useState(false);
   const [isDietGoalsOpen, setIsDietGoalsOpen] = useState(false);
 
@@ -597,6 +606,42 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
+  // Setting a password on the strength of the Google re-authentication grant instead of the
+  // current password - see googleReauthGrant above. The same form fields as a change, minus
+  // "current password".
+  const handleSetPasswordWithGoogle = async (e) => {
+    e.preventDefault();
+    setPasswordMessage({ type: '', text: '' });
+    if (passwordData.newPassword !== passwordData.confirmPassword) {
+      setPasswordMessage({ type: 'error', text: t('Nowe hasła nie są identyczne!') });
+      return;
+    }
+    setIsChangingPassword(true);
+    try {
+      const res = await fetch('/api/user/set-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${sessionToken}`
+        },
+        body: JSON.stringify({ googleReauth: googleReauthGrant, newPassword: passwordData.newPassword })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setPasswordMessage({ type: 'success', text: data.message || t('Hasło zostało ustawione.') });
+        setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
+        // The grant is single-use; a reload shows the ordinary change form from now on.
+        setTimeout(() => window.location.reload(), 6000);
+      } else {
+        setPasswordMessage({ type: 'error', text: data.error || t('Błąd podczas zmiany hasła.') });
+      }
+    } catch (err) {
+      setPasswordMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
   // Export of the user's own data (GDPR art. 20) - downloads a JSON file with the profile,
   // settings (secrets masked), meals and health history.
   const handleExportData = async () => {
@@ -793,6 +838,13 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
   const handleSaveProfile = async (e) => {
     e.preventDefault();
+    // Changing the e-mail address needs the current password (backend B-W2): that address
+    // receives the summaries with health data, so a session alone must not be able to move it.
+    let currentPassword;
+    if ((emailInput || '').trim() !== (userProfile.email || '')) {
+      currentPassword = prompt(t('Aby zmienić adres e-mail, potwierdź swoje aktualne hasło:'));
+      if (!currentPassword) return;
+    }
     setIsSavingProfile(true);
     setAvatarMessage({ type: '', text: '' });
 
@@ -804,7 +856,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           'Authorization': `Bearer ${sessionToken}`
         },
         body: JSON.stringify({
-          email: emailInput,
+          email: (emailInput || '').trim(),
+          currentPassword,
           first_name: firstNameInput,
           last_name: lastNameInput,
       // Empty input -> null (the backend computes HRmax with a fallback), not ''
@@ -873,13 +926,19 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   };
 
   const handleSetup2FA = async () => {
+    // Switching 2FA on needs the password as well (backend B-W2): otherwise a stolen session
+    // could enrol its own authenticator and lock the owner out at the next login.
+    const password = prompt(t('Aby włączyć 2FA, potwierdź swoje aktualne hasło:'));
+    if (!password) return;
     setTotpMessage({ type: '', text: '' });
     try {
       const res = await fetch('/api/user/setup-2fa', {
         method: 'POST',
         headers: {
+          'Content-Type': 'application/json',
           'Authorization': `Bearer ${sessionToken}`
-        }
+        },
+        body: JSON.stringify({ password })
       });
       if (res.ok) {
         const data = await res.json();
@@ -1044,7 +1103,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         setMessage({ type: 'error', text: data.error || t('Nie udało się rozpocząć łączenia.') });
         return;
       }
-      const path = service === 'google_link' ? 'google/link' : service;
+      const path = service === 'google_link' ? 'google/link' : (service === 'google_reauth' ? 'google/reauth' : service);
       window.location.href = `${window.location.origin}/api/auth/${path}?ticket=${encodeURIComponent(data.ticket)}`;
     } catch (err) {
       console.error('Failed to start the OAuth flow:', err);
@@ -1725,6 +1784,47 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   </div>
                 )}
 
+                {googleReauthGrant ? (
+                  <form onSubmit={handleSetPasswordWithGoogle} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--success-light)', margin: 0 }}>
+                      {t('Tożsamość potwierdzona przez Google. Ustaw nowe hasło (ważne przez 10 minut).')}
+                    </p>
+                    <div className="input-group">
+                      <label className="input-label">{t("Nowe hasło")}</label>
+                      <input
+                        type="password"
+                        className="input-field"
+                        value={passwordData.newPassword}
+                        onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
+                        required
+                      />
+                    </div>
+                    <div className="input-group">
+                      <label className="input-label">{t("Powtórz nowe hasło")}</label>
+                      <input
+                        type="password"
+                        className="input-field"
+                        value={passwordData.confirmPassword}
+                        onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                        required
+                      />
+                    </div>
+                    <button type="submit" className="btn-primary" disabled={isChangingPassword} style={{ marginTop: '8px' }}>
+                      {t('Ustaw hasło')}
+                    </button>
+                  </form>
+                ) : (
+                <>
+                {userProfile.has_google && (
+                  <div style={{ marginBottom: '16px' }}>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0 0 8px' }}>
+                      {t('Konto założone przez Google nie ma znanego hasła. Potwierdź tożsamość przez Google, aby je ustawić - potem możesz też wyłączyć 2FA albo usunąć konto.')}
+                    </p>
+                    <button type="button" className="btn-secondary" onClick={() => startOAuthFlow('google_reauth')}>
+                      {t('Ustaw hasło przez Google')}
+                    </button>
+                  </div>
+                )}
                 <form onSubmit={handleChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div className="input-group">
                     <label className="input-label">{t("Obecne hasło")}</label>
@@ -1763,6 +1863,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                     {isChangingPassword ? 'Zmienianie...' : t('Zmień hasło')}
                   </button>
                 </form>
+                </>
+                )}
               </div>
             )}
 

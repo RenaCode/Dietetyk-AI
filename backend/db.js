@@ -214,6 +214,16 @@ const initDb = async () => {
   // could be replayed for the rest of its validity window.
   await addColumn("ALTER TABLE users ADD COLUMN totp_last_step INTEGER");
 
+  // The last e-mail change and which session made it (audit 2026-10-09, B-W2) - see
+  // revertEmailChangedByRevokedSession in routes/account.js. users.email is where the summary
+  // e-mails with health data go, so a change made from a session the owner later throws out
+  // ("log out other devices", a password change) is undone together with that session.
+  // `email_changed_by_session` is a SHA-256 of the session token, never the token itself.
+  // Nullable, no backfill: existing accounts simply have no recorded change.
+  await addColumn("ALTER TABLE users ADD COLUMN previous_email TEXT");
+  await addColumn("ALTER TABLE users ADD COLUMN email_changed_at TEXT");
+  await addColumn("ALTER TABLE users ADD COLUMN email_changed_by_session TEXT");
+
   // Migration: Google sign-in (a step towards eventually dropping password login)
   await addColumn("ALTER TABLE users ADD COLUMN google_id TEXT");
   await createUniqueIndexWhenDataAllows({
@@ -998,6 +1008,14 @@ const initDb = async () => {
     )
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_shared_reports_user ON shared_reports(user_id)`);
+
+  // The last Warsaw date the shared report covers, fixed when the link is created (audit
+  // 2026-10-09, B-S3). Without it the public endpoint rebuilt the PDF for "the last N days
+  // up to today" on every visit, so a link sent to a doctor kept showing whatever the user
+  // logged for up to 30 days AFTER sharing it. NULL for links created before this column:
+  // services/sharedReports.js falls back to the date part of created_at for those, which is
+  // the same freeze with the precision the old rows allow.
+  await addColumn(`ALTER TABLE shared_reports ADD COLUMN report_end_date TEXT DEFAULT NULL`);
 
   // 11. Day events table (day_events) - the former "day tag" feature, where the user
   // marked a date range as illness/holiday/late bedtime and selected insights excluded

@@ -109,8 +109,13 @@ public.
 > variable merely being present as an answer:
 >
 > ```bash
-> kubectl get secret dietetyk-backend-secret -n default -o jsonpath='{.data.dotenv}' \
->   | base64 -d | grep -c '^APP_PASSWORD=dietetyk-admin$'   # 0 = rotated, 1 = still the leaked value
+> # Prints two numbers and never the value. Normalises CRLF line endings and optional quotes
+> # first: `APP_PASSWORD="dietetyk-admin"` or a trailing \r is still the leaked value to dotenv,
+> # and an exact-line grep alone would report it as rotated.
+> kubectl get secret dietetyk-backend-secret -n default -o jsonpath='{.data.dotenv}' | base64 -d \
+>   | tr -d '\r' | sed -E "s/^APP_PASSWORD=[\"']?([^\"']*)[\"']?[[:space:]]*$/APP_PASSWORD=\1/" \
+>   | awk '/^APP_PASSWORD=/{n++; if ($0 == "APP_PASSWORD=dietetyk-admin") leaked++}
+>          END {print "APP_PASSWORD lines:", n+0, "(must be 1)"; print "leaked value:", leaked+0, "(0 = rotated, 1 = still the leaked value)"}'
 > ```
 >
 > If that prints `1`, Runbook B below is not housekeeping — every `enc:v1:` value in the
@@ -313,13 +318,32 @@ Deployment's pod is gone — runs once, and exits.
    `kubectl wait` printing "no matching resources found" means the pod is already gone, which is
    what you want; the `get` afterwards is the check that actually matters — it must list nothing.
 
-4. Put the **new** `APP_PASSWORD` into the Secret, the same way as in Runbook A (back up first,
-   edit the one line in a copy of the whole file, `create --dry-run | apply`). Check free space on
-   the PVC while you are there — the migration writes a full copy of the database next to it:
+4. Put the **new** `APP_PASSWORD` into the Secret. The same shape as Runbook A — back up, rebuild
+   the whole file with the one line replaced, abort on any surprise, `create --dry-run | apply` —
+   written out in full here, because a hand-edited `sed` with the value inline lands the new
+   secret in the shell history:
 
    ```bash
-   sed -i 's/^APP_PASSWORD=.*/APP_PASSWORD=<new value>/' ~/dotenv.new
+   kubectl get secret dietetyk-backend-secret -n default -o jsonpath='{.data.dotenv}' \
+     | base64 -d > ~/dotenv.backup
+   read -rs -p 'new APP_PASSWORD (from step 2): ' NEW_APP_PASSWORD; echo
+   grep -v '^APP_PASSWORD=' ~/dotenv.backup > ~/dotenv.new
+   [ -s ~/dotenv.new ] && [ -z "$(tail -c 1 ~/dotenv.new)" ] || printf '\n' >> ~/dotenv.new
+   printf 'APP_PASSWORD=%s\n' "$NEW_APP_PASSWORD" >> ~/dotenv.new
+
+   [ "$(grep -c '^APP_PASSWORD=' ~/dotenv.new)" = 1 ] || { echo 'ABORT: APP_PASSWORD is not exactly one line'; return 2>/dev/null || exit 1; }
+   grep -qx 'APP_PASSWORD=dietetyk-admin' ~/dotenv.new && { echo 'ABORT: that is the leaked value'; return 2>/dev/null || exit 1; }
+   diff <(grep -v '^APP_PASSWORD=' ~/dotenv.backup) <(grep -v '^APP_PASSWORD=' ~/dotenv.new) \
+     || { echo 'ABORT: ~/dotenv.new differs from the backup in more than APP_PASSWORD'; return 2>/dev/null || exit 1; }
+
+   kubectl create secret generic dietetyk-backend-secret -n default \
+     --from-file=dotenv=$HOME/dotenv.new --dry-run=client -o yaml | kubectl apply -f -
+   unset NEW_APP_PASSWORD
    ```
+
+   Then re-run the two-number check from "Why this is being done at all": it must now print
+   `APP_PASSWORD lines: 1` and `leaked value: 0`. Check free space on the PVC while you are there —
+   the migration writes a full copy of the database next to it.
 
 5. Run the migration as a one-off Job. Read the old password into a shell variable rather than
    typing it into the manifest, so it does not end up in your shell history, and take the image
@@ -414,7 +438,14 @@ kubectl logs -f job/dietetyk-reencrypt -n default
    kubectl get application dietetyk -n argocd -o jsonpath='{.spec.syncPolicy}{"\n"}'
    ```
 
-9. Only after the verification in step 7, delete the pre-rotation copy — it is a complete database
+9. Remove the plaintext copies from your machine — `~/dotenv.backup` holds the OLD value, which
+   still decrypts the pre-rotation copy and every older backup:
+
+   ```bash
+   shred -u ~/dotenv.new ~/dotenv.backup
+   ```
+
+10. Only after the verification in step 7, delete the pre-rotation copy — it is a complete database
    readable with the **old** password:
 
    ```bash

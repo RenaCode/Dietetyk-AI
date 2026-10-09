@@ -65,7 +65,7 @@ router.get('/api/public/shared-reports/:token', async (req, res) => {
       return res.status(404).json({ error: 'Link jest nieprawidłowy, wygasł albo został odwołany.' });
     }
 
-    const pdfBuffer = await buildHealthReportPdf(share.userId, share.days);
+    const pdfBuffer = await buildHealthReportPdf(share.userId, share.days, { endDate: share.endDate });
     res.setHeader('Content-Type', 'application/pdf');
     // inline (not attachment) - a link recipient usually just wants to view the report
     // in the browser rather than be forced to download a file.

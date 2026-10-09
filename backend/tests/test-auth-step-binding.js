@@ -11,6 +11,8 @@
 // 2. The reverse: the token minted for an OWED password change was accepted by
 //    /api/login-2fa and /api/verify-2fa-setup, which turned it into a full session with the
 //    password change never made.
+// 2b. (audit 2026-10-09, B-W1) On an account with 2FA the password-change step came BEFORE
+//    the code, so the password alone set a new password. The code now comes first.
 // 3. POST /api/user/setup-2fa overwrote users.totp_secret even with 2FA already on. The
 //    authenticator on the owner's phone stopped matching and the caller - possibly a stolen
 //    session with no password - held the only valid secret.
@@ -126,26 +128,51 @@ async function test2faTokenCannotForcePasswordChange(baseUrl) {
 }
 
 async function testOwedPasswordChangeCannotBeSkipped(baseUrl) {
-  console.log('\n--- TEST: an owed password change cannot be skipped through the 2FA routes ---');
+  console.log('\n--- TEST: an owed password change cannot be skipped, and on a 2FA account it waits for the code ---');
   const secret = authenticator.generateSecret();
   const user = await createUser({ totp_enabled: 1, totp_secret: secret, force_password_change: 1 });
 
+  // Audit 2026-10-09, B-W1: the password alone used to be answered with the password-change
+  // token, and that token set a new password - on an account protected by 2FA. The second
+  // factor now comes first.
   const login = await post(baseUrl, '/api/login', { username: user.username, password: PASSWORD });
-  assert(login.body.status === 'force_password_change', 'login asks for the forced password change first');
-  const tempToken = login.body.tempToken;
+  assert(login.body.status === 'require_2fa', `a 2FA account that owes a password change is asked for the code first (got ${login.body.status})`);
 
-  const via2fa = await post(baseUrl, '/api/login-2fa', { tempToken, code: authenticator.generate(secret) });
-  assert(via2fa.status === 401 && !via2fa.body.token, `login-2fa does not turn the password-change token into a session (got ${via2fa.status})`);
+  const passwordOnly = await post(baseUrl, '/api/change-password-forced', { tempToken: login.body.tempToken, newPassword: NEW_PASSWORD });
+  assert(passwordOnly.status === 401, `the password-only token cannot set a new password (got ${passwordOnly.status}, expected 401)`);
+  const unchanged = await db.get(`SELECT password_hash, force_password_change FROM users WHERE id = ?`, [user.id]);
+  assert(await bcrypt.compare(PASSWORD, unchanged.password_hash) && unchanged.force_password_change === 1, 'the password is unchanged and the change is still owed');
 
-  const viaSetup = await post(baseUrl, '/api/verify-2fa-setup', { tempToken, code: authenticator.generate(secret) });
-  assert(viaSetup.status === 401 && !viaSetup.body.token, `verify-2fa-setup does not either (got ${viaSetup.status})`);
+  const via2fa = await post(baseUrl, '/api/login-2fa', { tempToken: login.body.tempToken, code: authenticator.generate(secret) });
+  assert(via2fa.status === 200 && via2fa.body.status === 'force_password_change' && !via2fa.body.token,
+    `a valid code leads to the password change, not to a session (got ${via2fa.status} ${via2fa.body.status})`);
+  const changeToken = via2fa.body.tempToken;
 
-  // ...and the legitimate path still works end to end.
-  const change = await post(baseUrl, '/api/change-password-forced', { tempToken, newPassword: 'ownernewpass456' });
-  assert(change.status === 200 && change.body.status === 'require_2fa', 'the same token still completes the forced change, which then asks for 2FA');
+  // The post-2FA change token must not be turned into a session through the 2FA routes.
+  const replay2fa = await post(baseUrl, '/api/login-2fa', { tempToken: changeToken, code: authenticator.generate(secret) });
+  assert(replay2fa.status === 401 && !replay2fa.body.token, `login-2fa refuses the password-change token (got ${replay2fa.status})`);
+  const viaSetup = await post(baseUrl, '/api/verify-2fa-setup', { tempToken: changeToken, code: authenticator.generate(secret) });
+  assert(viaSetup.status === 401 && !viaSetup.body.token, `verify-2fa-setup refuses it too (got ${viaSetup.status})`);
 
-  const finish = await post(baseUrl, '/api/login-2fa', { tempToken: change.body.tempToken, code: authenticator.generate(secret) });
-  assert(finish.status === 200 && typeof finish.body.token === 'string', 'after the change, login-2fa issues a full session');
+  const change = await post(baseUrl, '/api/change-password-forced', { tempToken: changeToken, newPassword: 'ownernewpass456' });
+  assert(change.status === 200 && typeof change.body.token === 'string', 'after the code, the forced change completes and issues a full session');
+
+  const profile = await get(baseUrl, '/api/user/profile', change.body.token);
+  assert(profile.status === 200, `that session counts as 2FA-verified (got ${profile.status})`);
+}
+
+async function testNo2faAccountWithStraySecretCannotSkipChange(baseUrl) {
+  console.log('\n--- TEST: an account without 2FA but with an unverified secret cannot skip the change ---');
+  // setup-2fa writes totp_secret before verification, so an account can carry a secret with
+  // 2FA off. Its login token is a password-change token, and must stay one.
+  const secret = authenticator.generateSecret();
+  const user = await createUser({ totp_enabled: 0, totp_secret: secret, force_password_change: 1 });
+  const login = await post(baseUrl, '/api/login', { username: user.username, password: PASSWORD });
+  assert(login.body.status === 'force_password_change', 'login asks for the forced password change');
+  const via2fa = await post(baseUrl, '/api/login-2fa', { tempToken: login.body.tempToken, code: authenticator.generate(secret) });
+  assert(via2fa.status === 401 && !via2fa.body.token, `login-2fa does not turn it into a session (got ${via2fa.status})`);
+  const change = await post(baseUrl, '/api/change-password-forced', { tempToken: login.body.tempToken, newPassword: 'ownernewpass456' });
+  assert(change.status === 200 && typeof change.body.token === 'string', 'the forced change itself still works');
 }
 
 async function testSetup2faDoesNotRekeyEnabled2fa(baseUrl) {
@@ -164,7 +191,7 @@ async function testSetup2faDoesNotRekeyEnabled2fa(baseUrl) {
   // A user without 2FA must still be able to set it up.
   const plain = await createUser();
   const plainLogin = await post(baseUrl, '/api/login', { username: plain.username, password: PASSWORD });
-  const plainSetup = await post(baseUrl, '/api/user/setup-2fa', {}, plainLogin.body.token);
+  const plainSetup = await post(baseUrl, '/api/user/setup-2fa', { password: PASSWORD }, plainLogin.body.token);
   assert(plainSetup.status === 200 && typeof plainSetup.body.secret === 'string', 'setup-2fa still works for an account without 2FA');
 }
 
@@ -174,6 +201,7 @@ async function run() {
   try {
     await test2faTokenCannotForcePasswordChange(baseUrl);
     await testOwedPasswordChangeCannotBeSkipped(baseUrl);
+    await testNo2faAccountWithStraySecretCannotSkipChange(baseUrl);
     await testSetup2faDoesNotRekeyEnabled2fa(baseUrl);
   } finally {
     server.close();

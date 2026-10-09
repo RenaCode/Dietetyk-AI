@@ -13,11 +13,13 @@ const { getAppConfig, isGoogleConfigured } = require('../services/oauthHelpers')
 const { summaryEmailLimiter, pdfRateLimiter } = require('../middleware/rateLimit');
 const { revokeUserSessions } = require('../middleware/auth');
 const loginAttempts = require('../services/loginAttempts');
-const { issueTicket } = require('../services/authTickets');
+const { issueTicket, consumeTicket, GOOGLE_REAUTH_GRANT_SERVICE } = require('../services/authTickets');
 const logger = require('../services/logger');
 const { USER_SECRET_SETTING_KEYS, maskSecretValue, isMaskedSecretWrite } = require('../utils/secretKeys');
 const { encrypt } = require('../utils/encryption');
 const { geocodeLocation } = require('../utils/weatherContext');
+const { sessionFingerprint, revertEmailChangedByRevokedSession, emailRevertMessage, notifyEmailChanged } = require('../services/emailChange');
+const { isImageDataUrl } = require('../utils/imageDataUrl');
 
 // Simple email format validation (not full RFC 5322 - this is enough to reject obviously
 // invalid values written straight to the database or used as a Mailgun recipient).
@@ -73,12 +75,26 @@ const passwordCheckAttemptKey = (userId) => `pwcheck_user:${userId}`;
 // attempt is COUNTED here, before the comparison (reserveAttempt - see
 // services/loginAttempts.js for the parallel-burst race this closes), so a failure needs only
 // to be logged and a success must call recordSuccess.
+//
+// Per IP AND account-wide (audit 2026-10-09, B-S1), the same pair /api/login uses. The per-IP
+// key alone gave 5 guesses per address: a session token replayed from 8 addresses got 40
+// wrong answers without one 429, and the 41st - the right password - came back with a
+// google_link ticket. The account-wide counter (services/loginAttempts.js, ACCOUNT_SCOPE)
+// does not care where the guesses come from.
 async function passwordCheckLockout(req) {
-  const lockedMs = await loginAttempts.reserveAttempt(req.ip, passwordCheckAttemptKey(req.user.id));
+  const key = passwordCheckAttemptKey(req.user.id);
+  const lockedMs = await loginAttempts.reserveAttempt(req.ip, key)
+    || await loginAttempts.reserveAccountAttempt(key);
   if (lockedMs > 0) {
     return { error: `Za dużo nieudanych prób podania hasła. Spróbuj ponownie za ${Math.ceil(lockedMs / 60000)} min.` };
   }
   return null;
+}
+
+async function recordPasswordCheckSuccess(req) {
+  const key = passwordCheckAttemptKey(req.user.id);
+  await loginAttempts.recordSuccess(req.ip, key);
+  await loginAttempts.recordAccountSuccess(key);
 }
 
 async function recordPasswordCheckFailure(req, action) {
@@ -99,6 +115,30 @@ async function recordPasswordCheckFailure(req, action) {
 // Export; the responses below say so.
 async function rotateSyncToken(userId) {
   await db.run(`UPDATE users SET sync_token = ? WHERE id = ?`, ['sync_' + crypto.randomBytes(24).toString('hex'), userId]);
+}
+
+// Re-entering the current password for an operation a session alone must not be able to
+// perform. Sends the error response itself and returns false, or returns true when the caller
+// may go ahead. `requirePassword: true` in the 400 lets the frontend tell "ask for the
+// password" apart from any other validation error on the same endpoint.
+async function confirmCurrentPassword(req, res, password, action) {
+  if (!password || typeof password !== 'string') {
+    res.status(400).json({ error: 'Potwierdź tę zmianę aktualnym hasłem.', requirePassword: true });
+    return false;
+  }
+  const locked = await passwordCheckLockout(req);
+  if (locked) {
+    res.status(429).json(locked);
+    return false;
+  }
+  const user = await db.get(`SELECT password_hash FROM users WHERE id = ?`, [req.user.id]);
+  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+    await recordPasswordCheckFailure(req, action);
+    res.status(400).json({ error: 'Niepoprawne hasło.', requirePassword: true });
+    return false;
+  }
+  await recordPasswordCheckSuccess(req);
+  return true;
 }
 
 router.get('/api/settings', async (req, res) => {
@@ -334,8 +374,22 @@ router.get('/api/user/profile', async (req, res) => {
 
 // 6b. Update the user profile (avatar, email, syncToken)
 router.post('/api/user/profile', async (req, res) => {
-  const { avatar, email, syncToken, first_name, last_name, birth_year, weekly_summary_enabled, weekly_summary_day, weekly_summary_time, monthly_summary_enabled, monthly_summary_day, monthly_summary_time, body_goal_text, body_goal_photo, target_weight_kg, target_body_fat_pct } = req.body;
+  const { avatar, syncToken, first_name, last_name, birth_year, weekly_summary_enabled, weekly_summary_day, weekly_summary_time, monthly_summary_enabled, monthly_summary_day, monthly_summary_time, body_goal_text, body_goal_photo, target_weight_kg, target_body_fat_pct, currentPassword } = req.body;
+  let { email } = req.body;
   try {
+    // A changed address needs the password (audit 2026-10-09, B-W2) - see
+    // revertEmailChangedByRevokedSession above for what an address in the wrong hands buys.
+    // Checked FIRST, before any other field of the same request is written, so a refused
+    // password leaves the whole profile as it was. Re-sending the unchanged address (the
+    // profile form always sends it) does not count as a change and needs nothing.
+    const currentRow = await db.get(`SELECT email, username FROM users WHERE id = ?`, [req.user.id]);
+    const oldEmail = currentRow ? currentRow.email || null : null;
+    if (email === '') email = null;
+    const emailChanged = email !== undefined && (email || null) !== oldEmail;
+    if (emailChanged && !(await confirmCurrentPassword(req, res, currentPassword, 'change-email'))) {
+      return;
+    }
+    if (!emailChanged) email = undefined;
     if (syncToken !== undefined) {
       const trimmedToken = syncToken.trim();
       if (!trimmedToken) {
@@ -353,7 +407,7 @@ router.post('/api/user/profile', async (req, res) => {
 
       // Email format validation - this field is later used as the default Mailgun recipient
       // for summaries, so an obviously invalid value should not reach the database.
-    if (email !== undefined && email !== '' && !EMAIL_REGEX.test(email)) {
+    if (email !== undefined && email !== null && (typeof email !== 'string' || !EMAIL_REGEX.test(email))) {
       return res.status(400).json({ error: 'Niepoprawny format adresu e-mail.' });
     }
 
@@ -382,13 +436,23 @@ router.post('/api/user/profile', async (req, res) => {
     if (avatar !== undefined && avatar !== null && avatar.length > MAX_AVATAR_BASE64_LENGTH) {
       return res.status(400).json({ error: 'Zdjęcie profilowe jest zbyt duże.' });
     }
+    // The bytes must actually be an image (audit 2026-10-09, B-N2): the size check above was
+    // the only one, so any string up to 3 MB - HTML, SVG with script, arbitrary data - was
+    // stored and later rendered back as <img src>. See utils/imageDataUrl.js.
+    if (avatar !== undefined && avatar !== null && !isImageDataUrl(avatar)) {
+      return res.status(400).json({ error: 'Nieprawidłowy format zdjęcia.' });
+    }
 
-    if (avatar !== undefined && email !== undefined) {
-      await db.run(`UPDATE users SET avatar_base64 = ?, email = ? WHERE id = ?`, [avatar, email, req.user.id]);
-    } else if (avatar !== undefined) {
+    if (avatar !== undefined) {
       await db.run(`UPDATE users SET avatar_base64 = ? WHERE id = ?`, [avatar, req.user.id]);
-    } else if (email !== undefined) {
-      await db.run(`UPDATE users SET email = ? WHERE id = ?`, [email, req.user.id]);
+    }
+    if (email !== undefined) {
+      await db.run(
+        `UPDATE users SET email = ?, previous_email = ?, email_changed_at = datetime('now'), email_changed_by_session = ? WHERE id = ?`,
+        [email, oldEmail, sessionFingerprint(req.sessionToken), req.user.id]
+      );
+      logger.security(`Account e-mail changed (UID: ${req.user.id})`, 'AUTH_EMAIL_CHANGE', { userId: req.user.id }, req.ip, req.user.id);
+      await notifyEmailChanged(oldEmail, email, currentRow.username);
     }
 
     // First/last name - used by the AI dietician to personalise its phrasing ('Hi Marcin').
@@ -437,7 +501,7 @@ router.post('/api/user/profile', async (req, res) => {
       if (body_goal_photo === null) {
         await db.run(`UPDATE users SET body_goal_photo_base64 = NULL WHERE id = ?`, [req.user.id]);
       } else {
-        if (typeof body_goal_photo !== 'string' || !body_goal_photo.startsWith('data:image/')) {
+        if (typeof body_goal_photo !== 'string' || !isImageDataUrl(body_goal_photo)) {
           return res.status(400).json({ error: 'Nieprawidłowy format zdjęcia.' });
         }
         if (body_goal_photo.length > MAX_BODY_GOAL_PHOTO_LENGTH) {
@@ -563,6 +627,16 @@ router.post('/api/user/setup-2fa', async (req, res) => {
       return res.status(409).json({ error: 'Weryfikacja 2FA jest już włączona. Aby skonfigurować ją ponownie, najpierw ją wyłącz.' });
     }
 
+    // Switching 2FA ON needs the password too (audit 2026-10-09, B-W2), not only switching it
+    // off. It sounds harmless - more protection - but the secret is whatever this endpoint
+    // returns to the CALLER: a stolen session enrolled its own authenticator and the owner,
+    // password in hand, was stopped at require_2fa on their next login and could not get in
+    // at all. Asked here rather than in verify-2fa so no secret is even generated (and
+    // written over users.totp_secret) for a caller without the password.
+    if (!(await confirmCurrentPassword(req, res, req.body && req.body.password, 'setup-2fa'))) {
+      return;
+    }
+
     const secret = authenticator.generateSecret();
     await db.run(`UPDATE users SET totp_secret = ? WHERE id = ?`, [secret, req.user.id]);
 
@@ -626,7 +700,7 @@ router.post('/api/user/verify-2fa', async (req, res) => {
       return res.status(400).json({ error: 'Niepoprawny kod 2FA.' });
     }
 
-    await loginAttempts.recordSuccess(req.ip, passwordCheckAttemptKey(req.user.id));
+    await recordPasswordCheckSuccess(req);
     // Activate 2FA for the user
     await db.run(`UPDATE users SET totp_enabled = 1 WHERE id = ?`, [req.user.id]);
     // Remove the temporary session
@@ -665,7 +739,7 @@ router.post('/api/user/disable-2fa', async (req, res) => {
       return res.status(400).json({ error: 'Niepoprawne hasło.' });
     }
 
-    await loginAttempts.recordSuccess(req.ip, passwordCheckAttemptKey(req.user.id));
+    await recordPasswordCheckSuccess(req);
     await db.run(`UPDATE users SET totp_enabled = 0, totp_secret = NULL WHERE id = ?`, [req.user.id]);
 
     // Turning the second factor off lowers the protection on every session that exists, so
@@ -698,7 +772,11 @@ router.post('/api/user/disable-2fa', async (req, res) => {
 // Linking Google adds a way to log in, and a way to log in that a stolen session can add on
 // its own survives everything the owner does about it afterwards. The data-source flows
 // (Oura, Withings, Google Fit) only bring data INTO the account and need just the session.
-const TICKET_SERVICES = new Set(['oura', 'withings', 'google-fit', 'google_link']);
+//
+// 'google_reauth' (B-S4, see GET /api/auth/google/reauth) needs only the session: the Google
+// round-trip it starts is itself the proof of ownership, and a stolen session cannot complete
+// it without the owner's Google account.
+const TICKET_SERVICES = new Set(['oura', 'withings', 'google-fit', 'google_link', 'google_reauth']);
 
 router.post('/api/auth/ticket', async (req, res) => {
   const { service, password, code } = req.body || {};
@@ -732,7 +810,14 @@ router.post('/api/auth/ticket', async (req, res) => {
           return res.status(400).json({ error: 'Niepoprawny kod 2FA.', require2fa: true });
         }
       }
-      await loginAttempts.recordSuccess(req.ip, passwordCheckAttemptKey(req.user.id));
+      await recordPasswordCheckSuccess(req);
+    }
+
+    if (service === 'google_reauth') {
+      const linked = await db.get(`SELECT google_id FROM users WHERE id = ?`, [req.user.id]);
+      if (!linked || !linked.google_id) {
+        return res.status(400).json({ error: 'To konto nie jest połączone z Google.' });
+      }
     }
 
     res.json({ ticket: issueTicket(req.user.id, service) });
@@ -783,7 +868,7 @@ router.post('/api/user/change-password', async (req, res) => {
       return res.status(400).json({ error: 'Obecne hasło jest niepoprawne.' });
     }
 
-    await loginAttempts.recordSuccess(req.ip, passwordCheckAttemptKey(req.user.id));
+    await recordPasswordCheckSuccess(req);
     const newHash = await bcrypt.hash(newPassword, 10);
     await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, req.user.id]);
 
@@ -796,6 +881,7 @@ router.post('/api/user/change-password', async (req, res) => {
     // revoking the share links as well.
     const revokedSessions = await revokeUserSessions(req.user.id, req.sessionToken);
     const revokedShares = await revokeAllSharesForUser(req.user.id);
+    const emailRevert = await revertEmailChangedByRevokedSession(req.user.id, req.sessionToken);
 
     // The two ways back in that do not go through a session. A Google identity linked from a
     // stolen session kept logging the attacker in after the victim changed the password, and
@@ -823,6 +909,7 @@ router.post('/api/user/change-password', async (req, res) => {
     if (revokedShares > 0) parts.push('aktywne linki do raportów unieważnione');
     if (unlinkedGoogle) parts.push('konto Google odłączone (możesz je połączyć ponownie w Ustawieniach)');
     parts.push('adres webhooka Apple Health zmieniony - zaktualizuj go w Health Auto Export');
+    if (emailRevert) parts.push(emailRevertMessage(emailRevert));
 
     res.json({
       success: true,
@@ -830,11 +917,62 @@ router.post('/api/user/change-password', async (req, res) => {
       revokedSessions,
       revokedShares,
       unlinkedGoogle,
-      syncTokenRotated: true
+      syncTokenRotated: true,
+      emailReverted: !!emailRevert
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Błąd zmiany hasła serwera.' });
+  }
+});
+
+// Setting a new password WITHOUT the current one, on the strength of a fresh Google
+// re-authentication (audit 2026-10-09, B-S4 - see GET /api/auth/google/reauth in
+// routes/auth.js for why an account created through Google needs this at all). The grant is
+// one-time, ten minutes long, and only valid for the account that earned it.
+//
+// Ends the same access a password change does - other sessions, share links, the sync token,
+// and an e-mail change made from a revoked session - because the Google account proving
+// ownership here is also exactly what an owner who suspects a compromise would use. Google
+// stays linked: it is the identity that just proved ownership, unlike in change-password,
+// where the link may have been planted by the session being thrown out.
+router.post('/api/user/set-password', async (req, res) => {
+  const { googleReauth, newPassword } = req.body || {};
+  const passError = typeof newPassword !== 'string' || newPassword.length < 8
+    ? 'Hasło musi mieć co najmniej 8 znaków.'
+    : (!/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword) ? 'Hasło musi zawierać co najmniej jedną literę i jedną cyfrę.' : null);
+  if (passError) {
+    return res.status(400).json({ error: passError });
+  }
+  // Consumed before anything else, so a grant is spent by its first use whatever happens.
+  const grantUserId = consumeTicket(googleReauth, GOOGLE_REAUTH_GRANT_SERVICE);
+  if (!grantUserId || grantUserId !== req.user.id) {
+    logger.security(`Set-password refused: missing, expired or foreign Google re-authentication (UID: ${req.user.id})`, 'AUTH_PASSWORD_FAILURE', { userId: req.user.id, action: 'set-password' }, req.ip, req.user.id);
+    return res.status(401).json({ error: 'Potwierdzenie przez Google wygasło. Spróbuj ponownie.' });
+  }
+
+  try {
+    const newHash = await bcrypt.hash(newPassword, 10);
+    await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, req.user.id]);
+    const revokedSessions = await revokeUserSessions(req.user.id, req.sessionToken);
+    const revokedShares = await revokeAllSharesForUser(req.user.id);
+    const emailRevert = await revertEmailChangedByRevokedSession(req.user.id, req.sessionToken);
+    await rotateSyncToken(req.user.id);
+    logger.security(
+      `Password set after Google re-authentication: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s), rotated sync token (UID: ${req.user.id})`,
+      'AUTH_PASSWORD_CHANGE',
+      { userId: req.user.id, revokedSessions, revokedShares, via: 'google_reauth' },
+      req.ip,
+      req.user.id
+    );
+    const parts = ['Hasło zostało ustawione. Pozostałe urządzenia zostały wylogowane'];
+    if (revokedShares > 0) parts.push('aktywne linki do raportów unieważnione');
+    parts.push('adres webhooka Apple Health zmieniony - zaktualizuj go w Health Auto Export');
+    if (emailRevert) parts.push(emailRevertMessage(emailRevert));
+    res.json({ success: true, message: parts.join(', ') + '.', revokedSessions, revokedShares, syncTokenRotated: true, emailReverted: !!emailRevert });
+  } catch (err) {
+    console.error('[SET PASSWORD ERROR]', err);
+    res.status(500).json({ error: 'Błąd ustawiania hasła.' });
   }
 });
 
@@ -857,12 +995,16 @@ router.post('/api/user/logout-all', async (req, res) => {
     const revoked = await revokeUserSessions(req.user.id, req.sessionToken);
     // See rotateSyncToken: a session that is being shut out must not keep the webhook.
     await rotateSyncToken(req.user.id);
+    // ...nor the summary e-mails it may have redirected - see revertEmailChangedByRevokedSession.
+    const emailRevert = await revertEmailChangedByRevokedSession(req.user.id, req.sessionToken);
     logger.security(`Logged out all other devices: ${revoked} session(s), rotated sync token (UID: ${req.user.id})`, 'AUTH_SESSION_REVOKE', { userId: req.user.id, revoked }, req.ip, req.user.id);
     res.json({
       success: true,
-      message: 'Pozostałe urządzenia zostały wylogowane. Adres webhooka Apple Health został zmieniony - zaktualizuj go w Health Auto Export.',
+      message: 'Pozostałe urządzenia zostały wylogowane. Adres webhooka Apple Health został zmieniony - zaktualizuj go w Health Auto Export.'
+        + (emailRevert ? ` Ponadto: ${emailRevertMessage(emailRevert)}.` : ''),
       revokedSessions: revoked,
-      syncTokenRotated: true
+      syncTokenRotated: true,
+      emailReverted: !!emailRevert
     });
   } catch (err) {
     console.error('[LOGOUT ALL ERROR]', err);
@@ -1068,8 +1210,9 @@ router.delete('/api/user/shared-reports/:id', async (req, res) => {
 // Deleting one's own account (GDPR art. 17 - the right to erasure).
 // Requires the current password, so that someone holding ONLY a session token - a browser
 // left open, for instance - cannot permanently delete the account without knowing the
-// password. Accounts signed in through Google with no password set (a theoretical case,
-// since Google registration assigns a random hash) are covered by the same bcrypt check.
+// password. An account created through Google sign-in has a random hash nobody knows; its
+// owner sets a real password first through a Google re-authentication
+// (POST /api/user/set-password) and confirms the deletion with that.
 router.delete('/api/user/account', async (req, res) => {
   const { password } = req.body;
   if (!password) {
@@ -1091,7 +1234,7 @@ router.delete('/api/user/account', async (req, res) => {
       return res.status(400).json({ error: 'Niepoprawne hasło.' });
     }
 
-    await loginAttempts.recordSuccess(req.ip, passwordCheckAttemptKey(req.user.id));
+    await recordPasswordCheckSuccess(req);
 
     if (user.role === 'admin') {
       return res.status(403).json({

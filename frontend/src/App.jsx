@@ -1394,7 +1394,7 @@ export default function App() {
                 at the single point where the component is mounted - that way no code path
                 inside it can reach for a value the backend never sent. */}
             {dashboardData.summary
-              ? <Dashboard summary={dashboardData.summary} aiAdvice={dashboardData.aiAdvice} meals={dashboardData.meals} sessionToken={sessionToken} selectedDate={selectedDate} onNavigate={setCurrentTab} onRefresh={fetchDashboardData} onLogout={handleLogout} userProfile={userProfile} language={appLang} />
+              ? <Dashboard summary={dashboardData.summary} aiAdvice={dashboardData.aiAdvice} sessionToken={sessionToken} selectedDate={selectedDate} onNavigate={setCurrentTab} onRefresh={fetchDashboardData} onLogout={handleLogout} userProfile={userProfile} language={appLang} />
               : <SummaryUnavailable hasFailed={dashboardLoadFailed} onRetry={fetchDashboardData} />}
           </div>
         )}

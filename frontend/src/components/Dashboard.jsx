@@ -6,7 +6,7 @@ import { useInsights } from '../utils/useInsights';
 import { getWarsawDateString } from '../utils/dates';
 import AppleHealthMetricsCard from './AppleHealthMetricsCard';
 import AppleHealthEventsCard from './AppleHealthEventsCard';
-import { CalorieRingCard, MacroCard, TodayMealsCard } from './DashboardHero';
+import { CalorieRingCard, MacroCard } from './DashboardHero';
 import { NavIcon } from './NavIcons';
 
 // Insights are fetched with ONE batched request (/api/dashboard/insights).
@@ -278,7 +278,7 @@ const getLast7Days = (endDateStr) => {
   return days;
 };
 
-export default function Dashboard({ summary, aiAdvice, meals = [], sessionToken, selectedDate, onNavigate, onRefresh, onLogout, userProfile = {}, language = 'pl' }) {
+export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDate, onNavigate, onRefresh, onLogout, userProfile = {}, language = 'pl' }) {
   const [historyData, setHistoryData] = useState([]);
 // Set when /api/health/history could not be read. Without it a 503 left historyData as []
 // and the body-composition card told the user "Brak danych - zsynchronizuj wagę z
@@ -1144,11 +1144,10 @@ export default function Dashboard({ summary, aiAdvice, meals = [], sessionToken,
 
   // State for the built-in chat with the Dietetyk AI assistant
   const [isChatOpen, setIsChatOpen] = useState(false);
-// The advice card sits in the dashboard's first screen next to the calorie ring, so a long
-// answer (Gemini's "## Analiza / ## Rekomendacje" runs to a dozen lines) is clamped there and
-// opened on request instead of pushing the meals below the fold on a phone.
-  const [isAdviceExpanded, setIsAdviceExpanded] = useState(false);
-  const isAdviceLong = typeof aiAdvice === 'string' && aiAdvice.length > 280;
+// Two or more top-level sections ("## Analiza", "## Rekomendacje" from the prompt in
+// dashboard.js) are laid out side by side on wide screens. `##\s` deliberately does not match
+// "###" sub-headings, which stay inside their section.
+  const adviceHasColumns = typeof aiAdvice === 'string' && (aiAdvice.match(/^\s*##\s/gm) || []).length >= 2;
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState([
     { sender: 'ai', text: t('Cześć! Jestem Twoim inteligentnym asystentem w aplikacji Dietetyk AI. Przeanalizowałem Twoje dzisiejsze wyniki gotowości (Readiness), snu oraz treningów. W czym mogę Ci pomóc w kontekście diety lub obciążenia treningowego?') }
@@ -1299,19 +1298,38 @@ export default function Dashboard({ summary, aiAdvice, meals = [], sessionToken,
   // structured AI answer (the "## Analiza" / "## Rekomendacje" headings from the prompt in
   // dashboard.js) rendered as plain text with visible "##" on screen. We close every
   // list/heading when the line type changes, so an open <ul>/<ol> is never left behind.
+  //
+  // Every "## " heading also opens a <section> that runs until the next one, so the card can
+  // put Analiza and Rekomendacje in two columns (see .has-columns in index.css). Text before
+  // the first heading goes into an "intro" section that spans the full width.
   const renderAdviceMarkdown = (text) => {
     if (!text) return '';
     const lines = escapeHtml(text).split('\n');
     let html = '';
     let listType = null; // 'ul' | 'ol' | null
+    let sectionOpen = false;
     const closeList = () => {
       if (listType) { html += `</${listType}>`; listType = null; }
+    };
+    const closeSection = () => {
+      if (sectionOpen) { html += '</section>'; sectionOpen = false; }
+    };
+    const ensureSection = () => {
+      if (!sectionOpen) { html += '<section class="dietetyk-ai-advice-section is-intro">'; sectionOpen = true; }
     };
     lines.forEach((rawLine) => {
       const line = rawLine.trim();
       const headingMatch = line.match(/^(#{2,4})\s+(.*)/);
       const bulletMatch = line.match(/^[*-]\s+(.*)/);
       const orderedMatch = line.match(/^\d+[.)]\s+(.*)/);
+      if (headingMatch && headingMatch[1].length === 2) {
+        closeList();
+        closeSection();
+        html += '<section class="dietetyk-ai-advice-section">';
+        sectionOpen = true;
+      } else if (line !== '') {
+        ensureSection();
+      }
       if (headingMatch) {
         closeList();
         const level = headingMatch[1].length >= 4 ? 'h6' : headingMatch[1].length === 3 ? 'h5' : 'h4';
@@ -1324,10 +1342,13 @@ export default function Dashboard({ summary, aiAdvice, meals = [], sessionToken,
         html += `<li>${orderedMatch[1]}</li>`;
       } else {
         closeList();
-        html += line === '' ? '<br/>' : `<p>${line}</p>`;
+        if (line !== '') html += `<p>${line}</p>`;
+        // An empty line only separates blocks; the paragraph margins already do that, and a
+        // <br/> between two sections would become a stray item in the two-column grid.
       }
     });
     closeList();
+    closeSection();
     return html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   };
 
@@ -1361,8 +1382,9 @@ export default function Dashboard({ summary, aiAdvice, meals = [], sessionToken,
         </div>
       )}
 
-      {/* HERO: calories, macros, AI advice and the day's meals - the four things a user
-          checks while eating. Real values only; see DashboardHero.jsx for the no-goal rule. */}
+      {/* HERO: calories and macros side by side, the AI advice in full width under them.
+          The day's meals are not repeated here - they live in the "Dziennik posiłków" tab.
+          Real values only; see DashboardHero.jsx for the no-goal rule. */}
       <div className="dash-hero">
       <CalorieRingCard summary={summary} selectedDate={selectedDate} language={language} />
       <MacroCard summary={summary} language={language} />
@@ -1389,8 +1411,7 @@ export default function Dashboard({ summary, aiAdvice, meals = [], sessionToken,
         </div>
         {aiAdvice && aiAdvice.length > 30 ? (
           <div
-            id="dietetyk-ai-advice"
-            className={`dietetyk-ai-advice-text${isAdviceLong && !isAdviceExpanded ? ' is-clamped' : ''}`}
+            className={`dietetyk-ai-advice-text${adviceHasColumns ? ' has-columns' : ''}`}
             dangerouslySetInnerHTML={{ __html: renderAdviceMarkdown(aiAdvice) }}
           />
         ) : (
@@ -1400,24 +1421,11 @@ export default function Dashboard({ summary, aiAdvice, meals = [], sessionToken,
           </p>
         )}
         <div className="dietetyk-ai-actions">
-          {isAdviceLong && (
-            <button
-              type="button"
-              className="btn-secondary btn-advice-toggle"
-              aria-expanded={isAdviceExpanded}
-              aria-controls="dietetyk-ai-advice"
-              onClick={() => setIsAdviceExpanded(v => !v)}
-            >
-              {isAdviceExpanded ? t('Zwiń') : t('Pokaż całą poradę')}
-            </button>
-          )}
           <button className="btn-dietetyk-ask" onClick={() => setIsChatOpen(true)}>
             ✨ Zapytaj agenta
           </button>
         </div>
       </div>
-
-      <TodayMealsCard meals={meals} selectedDate={selectedDate} onOpenMeals={() => onNavigate && onNavigate('meals')} />
       </div>
 
       {/* SYNC STATUS - data that had long been collected (last_sync, activity_source)

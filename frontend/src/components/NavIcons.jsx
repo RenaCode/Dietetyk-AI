@@ -2,7 +2,7 @@ import React from 'react';
 
 // Line icons for the navigation (top bar, side rail, mobile bottom bar) and the logo mark.
 // Hand-drawn SVG on purpose: the project keeps a small dependency surface (see CLAUDE.md),
-// and an icon library would add more weight than these eight shapes are worth.
+// and an icon library would add more weight than these few shapes are worth.
 // Every icon is decorative - the button that holds it carries the accessible name.
 const PATHS = {
   dashboard: <><rect x="3.5" y="3.5" width="7" height="9" rx="2" /><rect x="13.5" y="3.5" width="7" height="5" rx="2" /><rect x="13.5" y="11.5" width="7" height="9" rx="2" /><rect x="3.5" y="15.5" width="7" height="5" rx="2" /></>,
@@ -12,8 +12,7 @@ const PATHS = {
   settings: <><circle cx="12" cy="8" r="4" /><path d="M4.5 20.5c1.4-3.6 4.2-5.5 7.5-5.5s6.1 1.9 7.5 5.5" /></>,
   admin: <><path d="M12 3l7.5 3v5.5c0 4.6-3.1 8.2-7.5 9.5-4.4-1.3-7.5-4.9-7.5-9.5V6L12 3z" /><path d="M9 12l2 2 4-4" /></>,
   insights: <><path d="M9.5 4.5a3 3 0 0 0-3 3v.3A3.2 3.2 0 0 0 4.5 11a3.2 3.2 0 0 0 1.6 2.8A3 3 0 0 0 9.5 18H12V4.5z" /><path d="M14.5 4.5a3 3 0 0 1 3 3v.3a3.2 3.2 0 0 1 2 3.2 3.2 3.2 0 0 1-1.6 2.8 3 3 0 0 1-3.4 4.2H12" /></>,
-  logout: <><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" /><path d="M10 16l-4-4 4-4" /><path d="M6 12h10" /></>,
-  plus: <><path d="M12 5v14" /><path d="M5 12h14" /></>
+  logout: <><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" /><path d="M10 16l-4-4 4-4" /><path d="M6 12h10" /></>
 };
 
 export function NavIcon({ name, size = 20 }) {

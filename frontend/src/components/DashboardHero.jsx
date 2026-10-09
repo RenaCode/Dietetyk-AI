@@ -1,12 +1,10 @@
 import React from 'react';
 import { t } from '../utils/i18n';
 import { getWarsawDateString } from '../utils/dates';
-import { formatMealTime } from '../utils/format';
-import { NavIcon } from './NavIcons';
 
-// The top of the dashboard: the day's calories as one large ring, the three macronutrients,
-// and the day's meals as tiles. Everything here is read from the /api/dashboard summary and
-// meal list that App.jsx already holds - this file adds no request of its own.
+// The top of the dashboard: the day's calories as one large ring and the three
+// macronutrients. Everything here is read from the /api/dashboard summary that
+// App.jsx already holds - this file adds no request of its own.
 //
 // Goals are shown ONLY when the user actually has one. The nutrition card this replaces
 // read `summary.target_protein ?? 150` (and 2000 kcal / 250 g / 80 g), so a user without a
@@ -168,60 +166,4 @@ function MacroCard({ summary, language }) {
   );
 }
 
-// Same thresholds as the rating badge in MealLogger.jsx, so the dot and the badge on the
-// meal log never disagree. No rating (an older entry) is its own neutral state, not "low".
-const ratingClass = (score) => {
-  if (score == null) return 'unrated';
-  if (score >= 8) return 'high';
-  if (score >= 5) return 'med';
-  return 'low';
-};
-
-function TodayMealsCard({ meals, selectedDate, onOpenMeals }) {
-  const isToday = selectedDate === getWarsawDateString();
-  return (
-    <section className="hero-card hero-meals" aria-labelledby="hero-meals-title">
-      <div className="hero-card-head">
-        <h3 className="hero-card-title" id="hero-meals-title">{isToday ? t('Dzisiejsze posiłki') : t('Posiłki tego dnia')}</h3>
-        {meals.length > 0 && <span className="hero-card-meta">{meals.length}</span>}
-      </div>
-      <ul className="meal-tiles">
-        {meals.map((meal) => {
-          const rating = ratingClass(meal.health_rating);
-          const ratingText = meal.health_rating != null
-            ? t('Ocena: {score}/10', { score: meal.health_rating })
-            : t('Brak oceny');
-          return (
-            <li key={meal.id}>
-              <button type="button" className="meal-tile" onClick={onOpenMeals}>
-                <span
-                  role="img"
-                  className={`meal-tile-dot ${rating}`}
-                  title={ratingText}
-                  aria-label={ratingText}
-                />
-                <span className="meal-tile-icon" aria-hidden="true">
-                  {meal.image_base64 ? <img src={meal.image_base64} alt="" /> : '🍽️'}
-                </span>
-                <span className="meal-tile-name">{meal.raw_text}</span>
-                <span className="meal-tile-time">{formatMealTime(meal.timestamp)}</span>
-                <span className="meal-tile-kcal">{meal.calories != null ? `${Math.round(meal.calories)} kcal` : '– kcal'}</span>
-              </button>
-            </li>
-          );
-        })}
-        <li>
-          <button type="button" className="meal-tile meal-tile-add" onClick={onOpenMeals}>
-            <NavIcon name="plus" size={26} />
-            <span>{t('Dodaj posiłek')}</span>
-          </button>
-        </li>
-      </ul>
-      {meals.length === 0 && (
-        <p className="hero-empty">{t('Brak wprowadzonych posiłków na ten dzień. Dodaj pierwszy — wystarczy opis albo zdjęcie talerza.')}</p>
-      )}
-    </section>
-  );
-}
-
-export { CalorieRingCard, MacroCard, TodayMealsCard };
+export { CalorieRingCard, MacroCard };

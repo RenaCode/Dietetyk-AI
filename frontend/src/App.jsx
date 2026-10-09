@@ -286,6 +286,7 @@ export default function App() {
       const errorParam = params.get('error');
       const googleLinkParam = params.get('google_link');
       const googleLinkErrorParam = params.get('google_link_error');
+      const googleReauthErrorParam = params.get('google_reauth_error');
 
       if (tabParam) {
         setCurrentTab(tabParam);
@@ -299,6 +300,15 @@ export default function App() {
         setTimeout(() => setSuccessMessage(''), 6000);
         window.history.replaceState({}, document.title, '/?tab=settings');
         fetchUserProfile();
+      } else if (googleReauthErrorParam) {
+        // Return from the Google re-authentication that lets a Google-created account set a
+        // password (Settings -> "Ustaw hasło przez Google"). Success arrives as a fragment
+        // that Settings itself picks up; only failures come through here.
+        setErrorMessage(googleReauthErrorParam === 'mismatch'
+          ? t('Zalogowano innym kontem Google niż to połączone z tym kontem.')
+          : t('Nie udało się potwierdzić tożsamości przez Google.'));
+        setTimeout(() => setErrorMessage(''), 6000);
+        window.history.replaceState({}, document.title, '/?tab=settings');
       } else if (googleLinkErrorParam) {
         let msg = t('Nie udało się połączyć konta z Google.');
         if (googleLinkErrorParam === 'already_linked') {
@@ -840,6 +850,13 @@ export default function App() {
 
       if (res.ok) {
         const data = await res.json();
+        // An account with 2FA that owes a password change gets the change step only AFTER
+        // the code (backend completeLogin, audit 2026-10-09 B-W1) - so this answer can be
+        // force_password_change instead of a session.
+        if (data.status === 'force_password_change') {
+          applyLoginResult(data);
+          return;
+        }
         setSessionToken(data.token);
         localStorage.setItem('diet_session_token', data.token);
         setLoginStep('password');

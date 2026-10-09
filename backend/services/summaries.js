@@ -89,7 +89,9 @@ function buildGoalPaceAnalysis(targetWeightKg, currentWeight, weeklyWeightChange
 }
 
 // Aggregates nutrition and health statistics over a date range (used by the weekly and
-async function aggregateNutritionAndHealth(meals, healthMetrics, numDays, userId, startDate) {
+// `endDate` (optional) bounds the workout count from above - the frozen window of a shared
+// PDF report (services/pdfReport.js). The e-mail reports end today and pass none.
+async function aggregateNutritionAndHealth(meals, healthMetrics, numDays, userId, startDate, endDate) {
 // NOTE: totalFiber/totalSugar/totalSodium MUST be declared (let) BEFORE the forEach below
 // that uses them - the declaration used to sit lower in the function, so every call with a
 // non-empty meal list threw a ReferenceError (temporal dead zone), which broke the weekly
@@ -193,7 +195,9 @@ async function aggregateNutritionAndHealth(meals, healthMetrics, numDays, userId
   // what this counts has to land in all three places: here, both prompt variants, and both
   // table labels (tests/test-summary-labels.js compares them).
   const workoutsCount = userId && startDate
-    ? (await db.get(`SELECT COUNT(*) AS count FROM apple_health_workouts WHERE user_id = ? AND date >= ?`, [userId, startDate])).count
+    ? (endDate
+      ? (await db.get(`SELECT COUNT(*) AS count FROM apple_health_workouts WHERE user_id = ? AND date >= ? AND date <= ?`, [userId, startDate, endDate])).count
+      : (await db.get(`SELECT COUNT(*) AS count FROM apple_health_workouts WHERE user_id = ? AND date >= ?`, [userId, startDate])).count)
     : healthMetrics.filter(h => (h.active_calories || 0) > 0).length;
 
   // FIX (audit round 4): the daily averages computed here were divided by the FIXED window

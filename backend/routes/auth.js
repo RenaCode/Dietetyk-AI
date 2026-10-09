@@ -9,7 +9,7 @@ const crypto = require('crypto');
 const loginAttempts = require('../services/loginAttempts');
 const logger = require('../services/logger');
 const { getAppConfig, isGoogleConfigured, generateOAuthState, verifyOAuthState, readCookie, isSecureRequest, startBrowserBoundOAuthState, verifyBrowserBoundOAuthState } = require('../services/oauthHelpers');
-const { consumeTicket } = require('../services/authTickets');
+const { consumeTicket, issueTicket, GOOGLE_REAUTH_GRANT_SERVICE, GOOGLE_REAUTH_GRANT_TTL_MS } = require('../services/authTickets');
 const { isValidUsername, USERNAME_RULE_MESSAGE } = require('../utils/username');
 const { revokeUserSessions } = require('../middleware/auth');
 const { revokeAllSharesForUser } = require('../services/sharedReports');
@@ -60,6 +60,12 @@ const twoFactorAttemptKey = (userId) => `2fa_user:${userId}`;
 // `alice@example.com`: ten guesses where the limit says five, and more still if a second address
 // ever reaches that row. The account id is the one identifier that does not multiply.
 const loginAttemptKeyForUser = (userId) => `login_user:${userId}`;
+
+// Compared against when the login name matches no account, so that a miss costs the same
+// bcrypt round as a hit - see /api/login. Same cost factor (10) as every real hash written in
+// this codebase; a cheaper one would bring the timing difference back. Hashed once at start
+// from random bytes, so no input can ever match it.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 10);
 
 // ===== Binding the Google sign-in flow to the browser that started it =====
 // The `state` of the sign-in flow has to be tied to ONE browser, otherwise the flow is
@@ -208,15 +214,24 @@ async function createSession(userId, isVerified2fa, ttlDays = PERMANENT_SESSION_
 // after a suspected compromise - got a full session simply by clicking "Sign in with
 // Google". One function means one policy for every way in.
 async function completeLogin(user) {
-  if (user.force_password_change === 1) {
-    const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
-    return { status: 'force_password_change', tempToken };
-  }
-
+  // The second factor comes BEFORE an owed password change (audit 2026-10-09, B-W1). The
+  // order used to be the reverse: an account with 2FA and force_password_change got a
+  // password-change token straight after the password check, and /api/change-password-forced
+  // set a new password with it - no TOTP code involved. An administrator forces a password
+  // change precisely when the password is believed to have leaked, which is the one
+  // situation where 2FA is the only thing still protecting the account; whoever logged in
+  // first with the leaked password took the account over, and the owner got "wrong
+  // password". Now such an account stops at require_2fa, and /api/login-2fa hands out the
+  // password-change token (marked is_verified_2fa = 1) only after a valid code.
   if (user.totp_enabled === 1) {
     // Generate a temporary token, valid for 5 minutes
     const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
     return { status: 'require_2fa', tempToken };
+  }
+
+  if (user.force_password_change === 1) {
+    const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
+    return { status: 'force_password_change', tempToken };
   }
 
   // B-W4: forced 2FA applies to ALL users, admin included (the bypass was removed)
@@ -231,11 +246,15 @@ async function completeLogin(user) {
     const hoursSinceCreation = (Date.now() - userCreated.getTime()) / (1000 * 60 * 60);
 
     if (isUserForce2fa || hoursSinceCreation > 24) {
-      // Force 2FA setup at login
-      const secret = user.totp_secret || authenticator.generateSecret();
-      if (!user.totp_secret) {
-        await db.run(`UPDATE users SET totp_secret = ? WHERE id = ?`, [secret, user.id]);
-      }
+      // Force 2FA setup at login - always with a FRESH secret (audit 2026-10-09, B-S2).
+      // This used to reuse `user.totp_secret` when one was present, but with 2FA still off
+      // (we only get here when totp_enabled = 0) a stored secret is by definition one nobody
+      // finished enrolling - and POST /api/user/setup-2fa writes it before any verification.
+      // A stolen session could call setup-2fa, read the secret from the response, and wait:
+      // once an administrator forced 2FA, the owner was shown the attacker's secret as their
+      // new authenticator, and both of them held a valid second factor from then on.
+      const secret = authenticator.generateSecret();
+      await db.run(`UPDATE users SET totp_secret = ? WHERE id = ?`, [secret, user.id]);
 
       const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
       const otpauth = authenticator.keyuri(user.username, 'Dietetyk AI', secret);
@@ -337,6 +356,41 @@ router.get('/api/auth/google/link', async (req, res) => {
   }
 });
 
+// Step 1c: re-authenticating with Google for an account that is ALREADY linked to it, so
+// that an account created through "Sign in with Google" can prove it is its owner without a
+// password (audit 2026-10-09, B-S4). Such an account gets a random password_hash nobody
+// knows (see the callback below), and changing the password, switching 2FA off and deleting
+// the account all require the current password - so the owner of a Google-created account
+// could do none of them, deletion (GDPR art. 17) included. Returning from Google with the
+// same identity yields a short-lived grant (fragment `#google_reauth=`) that
+// POST /api/user/set-password accepts instead of the current password; with a password set,
+// everything else works as for any account.
+//
+// Entered with a one-time ticket like the link flow above, and bound to this browser the
+// same way. The ticket needs only the session: the Google round-trip IS the proof, and a
+// stolen session cannot complete it without the owner's Google account.
+router.get('/api/auth/google/reauth', async (req, res) => {
+  const userId = consumeTicket(req.query.ticket, 'google_reauth');
+  if (!userId) return res.status(401).send('Link wygasł. Wróć do Ustawień i spróbuj ponownie.');
+
+  try {
+    const clientId = await getAppConfig('google_client_id');
+    if (!clientId) {
+      return res.status(400).send('Logowanie przez Google nie jest skonfigurowane. Administrator musi wpisać Client ID/Secret w Panelu Admina.');
+    }
+    const appUrl = await getAppConfig('app_url');
+    const base = appUrl ? appUrl.replace(/\/$/, '') : `${isSecureRequest(req) ? 'https' : 'http'}://${req.get('host')}`;
+    const redirectUri = `${base}/api/auth/google/callback`;
+
+    const state = startBrowserBoundOAuthState(req, res, userId, 'google_reauth');
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('openid email profile')}&state=${state}&prompt=select_account`;
+    res.redirect(authUrl);
+  } catch (err) {
+    console.error('[GOOGLE REAUTH ERROR]', err);
+    res.status(500).send('Błąd serwera.');
+  }
+});
+
 // Krok 2: callback - wymiana kodu na token, pobranie profilu, znalezienie/utworzenie konta
 // (or, when `state` indicates the account-linking flow above, simply assigning google_id to
 // the already logged-in user).
@@ -354,6 +408,10 @@ router.get('/api/auth/google/callback', async (req, res) => {
   // also clears that cookie, so it runs for every callback, not only for link states.
   const linkVerified = verifyBrowserBoundOAuthState(req, res, state);
   const isLinkFlow = !!(linkVerified && linkVerified.userId > 0 && linkVerified.service === 'google_link');
+  // Re-authentication of an already linked account (GET /api/auth/google/reauth below). It
+  // goes back to Settings like linking does, so the error redirects treat both alike.
+  const isReauthFlow = !!(linkVerified && linkVerified.userId > 0 && linkVerified.service === 'google_reauth');
+  const settingsErrorParam = isReauthFlow ? 'google_reauth_error' : 'google_link_error';
 
   // One cookie, one flow: whatever happens below, this nonce must not stay usable for a
   // second callback. Cleared for every state that claims to be a sign-in - including a
@@ -364,12 +422,14 @@ router.get('/api/auth/google/callback', async (req, res) => {
 
   if (error) {
     console.error('[GOOGLE LOGIN CALLBACK ERROR]', error);
-    return res.redirect(isLinkFlow ? '/?tab=settings&google_link_error=auth_failed' : '/?google_error=auth_failed');
+    return res.redirect(isLinkFlow || isReauthFlow ? `/?tab=settings&${settingsErrorParam}=auth_failed` : '/?google_error=auth_failed');
   }
-  if (!code || !verified || (!isLoginFlow && !isLinkFlow)) {
+  if (!code || !verified || (!isLoginFlow && !isLinkFlow && !isReauthFlow)) {
     // A signed google_link state without the matching cookie is still answered on the
     // settings screen, where the user started it.
     const claimsLink = !!(verified && verified.userId > 0 && verified.service === 'google_link');
+    const claimsReauth = !!(verified && verified.userId > 0 && verified.service === 'google_reauth');
+    if (claimsReauth) return res.redirect('/?tab=settings&google_reauth_error=csrf_failed');
     return res.redirect(claimsLink ? '/?tab=settings&google_link_error=csrf_failed' : '/?google_error=csrf_failed');
   }
 
@@ -414,6 +474,19 @@ router.get('/api/auth/google/callback', async (req, res) => {
       // in, verified by the signed `state`, so we only assign google_id to THEIR account - no
       // sign-in, no new account, no new session. We block account takeover if the same
       // google_id is already assigned to a different user.
+    if (isReauthFlow) {
+      // Proof of the Google identity ALREADY linked to this account - a different Google
+      // account proves nothing about this one. The grant is what POST /api/user/set-password
+      // (routes/account.js) accepts in place of the current password.
+      const owner = await db.get(`SELECT google_id FROM users WHERE id = ?`, [linkVerified.userId]);
+      if (!owner || !owner.google_id || owner.google_id !== profile.sub) {
+        logger.security('Google re-authentication refused: a different Google account', 'AUTH_GOOGLE_REAUTH', { userId: linkVerified.userId }, req.ip, linkVerified.userId);
+        return res.redirect('/?tab=settings&google_reauth_error=mismatch');
+      }
+      const grant = issueTicket(linkVerified.userId, GOOGLE_REAUTH_GRANT_SERVICE, GOOGLE_REAUTH_GRANT_TTL_MS);
+      return res.redirect(`/?tab=settings#google_reauth=${grant}`);
+    }
+
     if (isLinkFlow) {
       const conflictingUser = await db.get(`SELECT id FROM users WHERE google_id = ? AND id != ?`, [profile.sub, verified.userId]);
       if (conflictingUser) {
@@ -496,7 +569,7 @@ router.get('/api/auth/google/callback', async (req, res) => {
     res.redirect(`/#google_code=${exchangeCode}`);
   } catch (err) {
     console.error('[GOOGLE LOGIN CALLBACK ERROR]', err.message);
-    res.redirect(isLinkFlow ? '/?tab=settings&google_link_error=exchange_failed' : '/?google_error=exchange_failed');
+    res.redirect(isLinkFlow || isReauthFlow ? `/?tab=settings&${settingsErrorParam}=exchange_failed` : '/?google_error=exchange_failed');
   }
 });
 
@@ -544,6 +617,11 @@ router.post('/api/login', async (req, res) => {
   try {
     const user = await db.get(`SELECT * FROM users WHERE username = ? OR email = ?`, [username, username]);
     if (!user) {
+      // Burn the same bcrypt work a real account costs (audit 2026-10-09, B-N1). Without it
+      // an unknown name answered in ~2 ms and a known one in ~75 ms, so the response time
+      // alone said which usernames and e-mail addresses have an account here - no password
+      // needed, and the per-name lockout never triggers for names that do not exist.
+      await bcrypt.compare(String(password), DUMMY_PASSWORD_HASH);
       logger.security(`Failed login attempt for account: ${username} (no such user)`, 'AUTH_LOGIN_FAILURE', { username }, req.ip);
       return res.status(401).json({ error: 'Niepoprawny użytkownik lub hasło.' });
     }
@@ -655,14 +733,21 @@ router.post('/api/login-2fa', async (req, res) => {
   }
 
   try {
-    // Session first, then the lockout - see the comment in /api/verify-2fa-setup above,
-    // which also explains the force_password_change guard.
+    // Session first, then the lockout - see the comment in /api/verify-2fa-setup above.
+    //
+    // Unlike there, an owed password change does NOT exclude the account: since B-W1 (see
+    // completeLogin) a 2FA account with force_password_change comes HERE first, and leaves
+    // with a password-change token rather than a session (below). `totp_enabled = 1` is what
+    // keeps the old hole shut instead: the temp token of an account WITHOUT 2FA is a
+    // password-change token, and an account without 2FA can still carry an unverified
+    // totp_secret (setup-2fa writes it before verification) - without this condition that
+    // token plus a code for that secret would skip the forced change.
     const session = await db.get(`
-      SELECT s.*, u.totp_secret
+      SELECT s.*, u.totp_secret, u.force_password_change
       FROM sessions s
       JOIN users u ON s.user_id = u.id
       WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_temp = 1 AND s.is_verified_2fa = 0
-        AND COALESCE(u.force_password_change, 0) = 0
+        AND u.totp_enabled = 1
     `, [tempToken]);
 
     if (!session) {
@@ -689,11 +774,20 @@ router.post('/api/login-2fa', async (req, res) => {
     await loginAttempts.recordSuccess(req.ip, twoFactorAttemptKey(session.user_id));
     await loginAttempts.recordAccountSuccess(twoFactorAttemptKey(session.user_id));
 
-    // Issue a permanent session token (valid 7 days), already 2FA-verified
-    const permanentToken = await createSession(session.user_id, true);
-
     // Remove the temporary session
     await db.run(`DELETE FROM sessions WHERE token = ?`, [tempToken]);
+
+    // Both factors are proven, but the administrator still wants a new password. The token
+    // for that step is a temp session with is_verified_2fa = 1 - the one marker that tells
+    // /api/change-password-forced "this came through the second factor", and that keeps it
+    // out of this route and /api/verify-2fa-setup (both require is_verified_2fa = 0).
+    if (session.force_password_change === 1) {
+      const changeToken = await createSession(session.user_id, true, TEMP_SESSION_TTL_DAYS);
+      return res.json({ status: 'force_password_change', tempToken: changeToken });
+    }
+
+    // Issue a permanent session token (valid 7 days), already 2FA-verified
+    const permanentToken = await createSession(session.user_id, true);
 
     res.json({ token: permanentToken });
   } catch (err) {
@@ -735,12 +829,18 @@ router.post('/api/change-password-forced', async (req, res) => {
     // that token was accepted here, so a password alone - no second factor - was enough to
     // set a new password, revoke every session and every share link of the account, and lock
     // the owner out. 2FA protected the session but not the credential it was layered on.
+    //
+    // The last condition is the second half of that fix (B-W1, see completeLogin): an account
+    // with 2FA gets its password-change token only from /api/login-2fa, marked
+    // is_verified_2fa = 1. A token minted after the password alone (is_verified_2fa = 0) is
+    // accepted only for an account that has no second factor to ask for.
     const session = await db.get(`
       SELECT s.*, u.username
       FROM sessions s
       JOIN users u ON s.user_id = u.id
-      WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_temp = 1 AND s.is_verified_2fa = 0
+      WHERE s.token = ? AND datetime(s.expires_at) > datetime('now') AND s.is_temp = 1
         AND u.force_password_change = 1
+        AND (COALESCE(u.totp_enabled, 0) = 0 OR s.is_verified_2fa = 1)
     `, [tempToken]);
 
     if (!session) {
@@ -773,13 +873,13 @@ router.post('/api/change-password-forced', async (req, res) => {
     const user = await db.get(`SELECT totp_enabled, username, totp_secret, force_2fa FROM users WHERE id = ?`, [session.user_id]);
     
     if (user.totp_enabled === 1) {
-    // B-W5: invalidate the old tempToken and issue a new one after a password change
+      // Only reachable with a token from /api/login-2fa (see the WHERE above): the code was
+      // checked a moment ago, on the way to this step. Asking for another one used to be the
+      // flow when this step came first; now it would only make the user wait for the next
+      // 30-second window (verifyTotpOnce refuses the same code twice).
       await db.run(`DELETE FROM sessions WHERE token = ?`, [tempToken]);
-      const newTempToken = await createSession(session.user_id, false, TEMP_SESSION_TTL_DAYS);
-      res.json({
-        status: 'require_2fa',
-        tempToken: newTempToken
-      });
+      const permanentToken = await createSession(session.user_id, true);
+      res.json({ token: permanentToken });
     } else {
       const force2faRow = await db.get(`SELECT value FROM app_config WHERE key = 'force_2fa'`);
       const isForce2faEnabled = force2faRow && force2faRow.value === '1';

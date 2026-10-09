@@ -33,12 +33,19 @@ const MEASUREMENT_FIELDS = [
 // yesterday's, so a report generated then labelled its period a day early and its window
 // started a day early: every `date` column in the database is a Warsaw date (see CLAUDE.md,
 // "Dates"). Exported for tests/test-pdf-report-window.js.
-function reportWindow(days) {
-  const today = getLocalDateString();
+//
+// `endDate` freezes the window for a shared link (B-S3, see services/sharedReports.js); a
+// download from Settings passes none and ends today. A frozen end date in the future of
+// "today" cannot happen through the app, and is clamped anyway.
+function reportWindow(days, endDate) {
+  const localToday = getLocalDateString();
+  const today = typeof endDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(endDate) && endDate < localToday
+    ? endDate
+    : localToday;
   return { startDate: shiftDate(today, -days), today };
 }
 
-async function buildHealthReportPdf(userId, requestedDays) {
+async function buildHealthReportPdf(userId, requestedDays, { endDate } = {}) {
   const days = Math.min(Math.max(parseInt(requestedDays, 10) || PDF_REPORT_DEFAULT_DAYS, 1), PDF_REPORT_MAX_DAYS);
 
   const user = await db.get(
@@ -50,7 +57,7 @@ async function buildHealthReportPdf(userId, requestedDays) {
   }
 
   const settings = await getUserSettings(userId);
-  const { startDate, today } = reportWindow(days);
+  const { startDate, today } = reportWindow(days, endDate);
 
     // The same tables and columns as the email reports (summaries.js) - without image_base64
     // or analysis_json, which this report never displays.
@@ -64,11 +71,11 @@ async function buildHealthReportPdf(userId, requestedDays) {
     // same result (tests/test-summary-aggregation.js); summaries.js now rejects rows without
     // it rather than averaging them, and tests/test-pdf-report.js pins the figure here.
     db.all(
-      `SELECT date, calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ?`,
-      [userId, startDate]
+      `SELECT date, calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ? AND date <= ?`,
+      [userId, startDate, today]
     ),
-    db.all(`SELECT * FROM health_metrics WHERE user_id = ? AND date >= ? ORDER BY date ASC`, [userId, startDate]),
-    db.all(`SELECT * FROM body_measurements WHERE user_id = ? AND date >= ? ORDER BY date ASC`, [userId, startDate])
+    db.all(`SELECT * FROM health_metrics WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date ASC`, [userId, startDate, today]),
+    db.all(`SELECT * FROM body_measurements WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date ASC`, [userId, startDate, today])
   ]);
 
   // `userId` and `startDate` are passed so workoutsCount is counted from apple_health_workouts,
@@ -86,7 +93,7 @@ async function buildHealthReportPdf(userId, requestedDays) {
   // while still generating, downloading and opening like a valid report. Nothing else here
   // would have caught it - the missing rejection handling made it worse rather than louder,
   // since server.js's unhandledRejection handler logs and returns instead of exiting.
-  const stats = await aggregateNutritionAndHealth(meals, healthMetrics, days, userId, startDate);
+  const stats = await aggregateNutritionAndHealth(meals, healthMetrics, days, userId, startDate, today);
   const firstMeasurement = bodyMeasurements.length > 0 ? bodyMeasurements[0] : null;
   const lastMeasurement = bodyMeasurements.length > 0 ? bodyMeasurements[bodyMeasurements.length - 1] : null;
 

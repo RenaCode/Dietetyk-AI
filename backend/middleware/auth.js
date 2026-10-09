@@ -48,7 +48,8 @@ async function requireAuth(req, res, next) {
     req.path === '/auth/oura' ||
     req.path === '/auth/withings' ||
     req.path === '/auth/google-fit' ||
-    req.path === '/auth/google/link'
+    req.path === '/auth/google/link' ||
+    req.path === '/auth/google/reauth'
   ) {
     return next();
   }

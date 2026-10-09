@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const db = require('../db');
 const { PDF_REPORT_MAX_DAYS, PDF_REPORT_DEFAULT_DAYS } = require('./pdfReport');
+const { getLocalDateString } = require('../utils/dates');
 
 // Sharing a PDF report by link (read-only, no account required) - extends the PDF export
 // for a doctor or dietician (services/pdfReport.js) with a "send a link" variant instead
@@ -58,9 +59,12 @@ async function createShareLink(userId, requestedDays, validityKey) {
   const token = 'share_' + crypto.randomBytes(24).toString('hex');
   const expiresAt = new Date(Date.now() + validityHours * 60 * 60 * 1000).toISOString();
 
+  // The report's last day is fixed NOW, not when the link is opened - see the
+  // report_end_date migration in db.js (B-S3). A link sent to a doctor shows the period the
+  // user chose to share, and nothing logged afterwards.
   await db.run(
-    `INSERT INTO shared_reports (user_id, token, days, expires_at) VALUES (?, ?, ?, ?)`,
-    [userId, token, days, expiresAt]
+    `INSERT INTO shared_reports (user_id, token, days, expires_at, report_end_date) VALUES (?, ?, ?, ?, ?)`,
+    [userId, token, days, expiresAt, getLocalDateString()]
   );
 
   return { token, days, expiresAt };
@@ -131,12 +135,17 @@ async function revokeAllSharesForUser(userId) {
 // "expired" must look identical.
 async function getActiveShareByToken(token) {
   const row = await db.get(
-    `SELECT user_id, days, expires_at, revoked FROM shared_reports WHERE token = ?`,
+    `SELECT user_id, days, expires_at, revoked, report_end_date, created_at FROM shared_reports WHERE token = ?`,
     [token]
   );
   if (!row || row.revoked) return null;
   if (row.expires_at < new Date().toISOString()) return null;
-  return { userId: row.user_id, days: row.days };
+  // Links created before report_end_date existed freeze on the day they were created.
+  // created_at is `datetime('now', 'localtime')` in the container's zone, so around midnight
+  // that date can be one day off the Warsaw date - for a handful of old links, against
+  // showing them a month of data nobody chose to share.
+  const endDate = row.report_end_date || (row.created_at ? String(row.created_at).slice(0, 10) : null);
+  return { userId: row.user_id, days: row.days, endDate };
 }
 
 module.exports = {

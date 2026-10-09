@@ -114,7 +114,7 @@ async function testVerify2faIsLimited(baseUrl) {
     VALUES (?, ?, datetime('now', '+1 day'), datetime('now', '+1 day'), 0, 0)
   `, [sessionToken, result.id]);
 
-  const setup = await call(baseUrl, 'POST', '/api/user/setup-2fa', {}, sessionToken);
+  const setup = await call(baseUrl, 'POST', '/api/user/setup-2fa', { password: PASSWORD }, sessionToken);
   assert(setup.status === 200 && setup.body.tempToken, 'setup-2fa hands out a temp token');
   const current = authenticator.generate(setup.body.secret);
 

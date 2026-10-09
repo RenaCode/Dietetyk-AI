@@ -553,6 +553,17 @@ const TRANSLATIONS = {
   "Czy chcesz usunąć zdjęcie celu sylwetki?": "Remove the physique goal photo?",
   "Nowe hasła nie są identyczne!": "The new passwords do not match.",
   "Hasło zostało pomyślnie zmienione!": "Password changed.",
+
+  // Account security (audit 2026-10-09: password re-entry, Google re-authentication)
+  "Aby zmienić adres e-mail, potwierdź swoje aktualne hasło:": "To change your e-mail address, confirm your current password:",
+  "Aby włączyć 2FA, potwierdź swoje aktualne hasło:": "To turn on 2FA, confirm your current password:",
+  "Zalogowano innym kontem Google niż to połączone z tym kontem.": "You signed in with a different Google account than the one linked to this account.",
+  "Nie udało się potwierdzić tożsamości przez Google.": "Could not confirm your identity with Google.",
+  "Hasło zostało ustawione.": "Password set.",
+  "Tożsamość potwierdzona przez Google. Ustaw nowe hasło (ważne przez 10 minut).": "Identity confirmed with Google. Set a new password (valid for 10 minutes).",
+  "Ustaw hasło": "Set password",
+  "Ustaw hasło przez Google": "Set a password via Google",
+  "Konto założone przez Google nie ma znanego hasła. Potwierdź tożsamość przez Google, aby je ustawić - potem możesz też wyłączyć 2FA albo usunąć konto.": "An account created through Google has no known password. Confirm your identity with Google to set one - then you can also turn off 2FA or delete the account.",
   "Błąd eksportu danych.": "Could not export the data.",
   "Błąd generowania raportu PDF.": "Could not generate the PDF report.",
   "Błąd tworzenia linku udostępniania.": "Could not create the sharing link.",

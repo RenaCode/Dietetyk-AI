@@ -222,7 +222,6 @@ header {
   box-shadow: var(--shadow-glow);
   transition: var(--transition-smooth);
   position: relative;
-  overflow: hidden;
 }
 
 .glass-card:hover {

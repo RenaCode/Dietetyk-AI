@@ -1,4 +1,5 @@
 const express = require('express');
+const { completeDaySumSql, sumIfComplete, formatEstimateForPrompt } = require('../utils/estimatedNutrients');
 const crypto = require('crypto');
 const router = express.Router();
 const db = require('../db');
@@ -230,31 +231,44 @@ registerRoute('/api/dashboard/insights', async (req, res) => {
 // przez całą długość okresu zaniżałoby średnią przy nieregularnym logowaniu.
 async function aggregateNutrition(userId, startDate, endDate) {
   const rows = await db.all(
-    `SELECT date, SUM(calories) AS calories, SUM(protein) AS protein, SUM(carbs) AS carbs, SUM(fat) AS fat, SUM(fiber) AS fiber, SUM(sugar) AS sugar, SUM(sodium) AS sodium
+    `SELECT date, SUM(calories) AS calories, SUM(protein) AS protein, SUM(carbs) AS carbs, SUM(fat) AS fat,
+            ${completeDaySumSql('fiber')}, ${completeDaySumSql('sugar')}, ${completeDaySumSql('sodium')}
      FROM meals WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date`,
     [userId, startDate, endDate]
   );
   const daysLogged = rows.length;
+  // Fibre/sugar/sodium are AI estimates and a day counts only when every meal had one (see
+  // utils/estimatedNutrients.js): their averages are over THOSE days, and null when there are
+  // none - not a sum of partial days divided by every logged day.
+  const estimateDays = { fiber: 0, sugar: 0, sodium: 0 };
   const totals = rows.reduce((acc, r) => {
     acc.calories += r.calories || 0;
     acc.protein += r.protein || 0;
     acc.carbs += r.carbs || 0;
     acc.fat += r.fat || 0;
-    acc.fiber += r.fiber || 0;
-    acc.sugar += r.sugar || 0;
-    acc.sodium += r.sodium || 0;
+    for (const key of ['fiber', 'sugar', 'sodium']) {
+      if (r[key] !== null && r[key] !== undefined) {
+        acc[key] += r[key];
+        estimateDays[key]++;
+      }
+    }
     return acc;
   }, { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, sodium: 0 });
+  const estimateAvg = (key, decimals) => {
+    if (estimateDays[key] === 0) return null;
+    const f = 10 ** decimals;
+    return Math.round((totals[key] / estimateDays[key]) * f) / f;
+  };
   const avg = daysLogged > 0 ? {
     calories: Math.round(totals.calories / daysLogged),
     protein: Math.round((totals.protein / daysLogged) * 10) / 10,
     carbs: Math.round((totals.carbs / daysLogged) * 10) / 10,
     fat: Math.round((totals.fat / daysLogged) * 10) / 10,
-    fiber: Math.round((totals.fiber / daysLogged) * 10) / 10,
-    sugar: Math.round((totals.sugar / daysLogged) * 10) / 10,
-    sodium: Math.round(totals.sodium / daysLogged)
+    fiber: estimateAvg('fiber', 1),
+    sugar: estimateAvg('sugar', 1),
+    sodium: estimateAvg('sodium', 0)
   } : null;
-  return { start: startDate, end: endDate, days_logged: daysLogged, totals, avg };
+  return { start: startDate, end: endDate, days_logged: daysLogged, estimate_days: estimateDays, totals, avg };
 }
 
 // Bilans kaloryczny narastająco dla zakresu dat (punkt 11 z analizy dashboardu).
@@ -335,9 +349,6 @@ router.get('/api/dashboard', async (req, res) => {
       totalEaten.protein += r.protein;
       totalEaten.carbs += r.carbs;
       totalEaten.fat += r.fat;
-      totalEaten.fiber += r.fiber || 0;
-      totalEaten.sugar += r.sugar || 0;
-      totalEaten.sodium += r.sodium || 0;
       // Kolumny bazy (po sanityzacji przy zapisie) muszą nadpisać spread z `analysis`
       // (niesanityzowany JSON z AI) - inaczej karta posiłku pokaże inne wartości niż
       // te użyte tuż wyżej do totalEaten.
@@ -352,9 +363,12 @@ router.get('/api/dashboard', async (req, res) => {
     totalEaten.protein = Math.round(totalEaten.protein * 10) / 10;
     totalEaten.carbs = Math.round(totalEaten.carbs * 10) / 10;
     totalEaten.fat = Math.round(totalEaten.fat * 10) / 10;
-    totalEaten.fiber = Math.round(totalEaten.fiber * 10) / 10;
-    totalEaten.sugar = Math.round(totalEaten.sugar * 10) / 10;
-    totalEaten.sodium = Math.round(totalEaten.sodium);
+    // AI estimates: the day's total only when every meal carries one, otherwise null - a
+    // missing estimate is not 0 (utils/estimatedNutrients.js, audit 2026-10-09 W3).
+    const roundOrNull = (v, f) => (v === null ? null : Math.round(v * f) / f);
+    totalEaten.fiber = roundOrNull(sumIfComplete(mealRows, 'fiber'), 10);
+    totalEaten.sugar = roundOrNull(sumIfComplete(mealRows, 'sugar'), 10);
+    totalEaten.sodium = roundOrNull(sumIfComplete(mealRows, 'sodium'), 1);
 
     // Dane zdrowotne z Oura & Withings z wybranego dnia
     const health = await db.get(`SELECT * FROM health_metrics WHERE user_id = ? AND date = ?`, [req.user.id, date]) || getDefaultHealthMetrics();
@@ -712,7 +726,7 @@ User Goals:
 - User body goal description: ${bodyGoalText || 'not described in Settings'}${bodyGoalImagePart ? '\n- The user also attached a reference photo of their body goal (see the attached image) - analyze it visually and relate recommendations to the body shape shown in the photo (e.g., muscle level, fat tissue, proportions), in the context of other data.' : ''}
 
 Today's Balance:
-- Total eaten: ${totalEaten.calories} kcal (Protein: ${totalEaten.protein}g, Carbs: ${totalEaten.carbs}g, Fat: ${totalEaten.fat}g, Fiber: ${totalEaten.fiber}g, Sugar: ${totalEaten.sugar}g, Sodium: ${totalEaten.sodium}mg)
+- Total eaten: ${totalEaten.calories} kcal (Protein: ${totalEaten.protein}g, Carbs: ${totalEaten.carbs}g, Fat: ${totalEaten.fat}g, Fiber: ${formatEstimateForPrompt(totalEaten.fiber, 'g', 'en')}, Sugar: ${formatEstimateForPrompt(totalEaten.sugar, 'g', 'en')}, Sodium: ${formatEstimateForPrompt(totalEaten.sodium, 'mg', 'en')})
 - Active calories burned: ${activeCalories} kcal
 - Total calories burned (BMR + Active): ${totalBurned} kcal
 - Net balance (eaten - burned): ${netCalories} kcal
@@ -771,8 +785,8 @@ ${yesterdayMealRows.map(m => `- ${escapeUserInputTag(m.raw_text)} (${m.calories}
 </user_input>
 
 Trends and database history:
-- Average nutrition (last 7 days): ${last7DaysNutrition.avg ? `${last7DaysNutrition.avg.calories} kcal (P: ${last7DaysNutrition.avg.protein}g, C: ${last7DaysNutrition.avg.carbs}g, F: ${last7DaysNutrition.avg.fat}g, Fiber: ${last7DaysNutrition.avg.fiber}g, Sugar: ${last7DaysNutrition.avg.sugar}g, Sodium: ${last7DaysNutrition.avg.sodium}mg) over ${last7DaysNutrition.days_logged} logged days` : 'no data'}
-- Average nutrition (last 30 days): ${last30DaysNutrition.avg ? `${last30DaysNutrition.avg.calories} kcal (P: ${last30DaysNutrition.avg.protein}g, C: ${last30DaysNutrition.avg.carbs}g, F: ${last30DaysNutrition.avg.fat}g, Fiber: ${last30DaysNutrition.avg.fiber}g, Sugar: ${last30DaysNutrition.avg.sugar}g, Sodium: ${last30DaysNutrition.avg.sodium}mg) over ${last30DaysNutrition.days_logged} logged days` : 'no data'}
+- Average nutrition (last 7 days): ${last7DaysNutrition.avg ? `${last7DaysNutrition.avg.calories} kcal (P: ${last7DaysNutrition.avg.protein}g, C: ${last7DaysNutrition.avg.carbs}g, F: ${last7DaysNutrition.avg.fat}g, Fiber: ${formatEstimateForPrompt(last7DaysNutrition.avg.fiber, 'g', 'en')}, Sugar: ${formatEstimateForPrompt(last7DaysNutrition.avg.sugar, 'g', 'en')}, Sodium: ${formatEstimateForPrompt(last7DaysNutrition.avg.sodium, 'mg', 'en')}) over ${last7DaysNutrition.days_logged} logged days` : 'no data'}
+- Average nutrition (last 30 days): ${last30DaysNutrition.avg ? `${last30DaysNutrition.avg.calories} kcal (P: ${last30DaysNutrition.avg.protein}g, C: ${last30DaysNutrition.avg.carbs}g, F: ${last30DaysNutrition.avg.fat}g, Fiber: ${formatEstimateForPrompt(last30DaysNutrition.avg.fiber, 'g', 'en')}, Sugar: ${formatEstimateForPrompt(last30DaysNutrition.avg.sugar, 'g', 'en')}, Sodium: ${formatEstimateForPrompt(last30DaysNutrition.avg.sodium, 'mg', 'en')}) over ${last30DaysNutrition.days_logged} logged days` : 'no data'}
 - Weight & body composition history:
 ${weightHistory.map(w => `- ${w.date}: ${w.weight} kg (fat: ${w.fat_ratio || '-'}%, muscle: ${w.muscle_mass || '-'} kg)`).join('\n') || 'no data'}
 - Supplements history (latest):
@@ -811,7 +825,7 @@ Cele użytkownika:
 - Cel sylwetki opisany przez użytkownika: ${bodyGoalText || 'użytkownik nie opisał celu sylwetki w Ustawieniach'}${bodyGoalImagePart ? '\n- Użytkownik dołączył też zdjęcie referencyjne celu sylwetki (patrz załączony obraz) - przeanalizuj je wizualnie i odnieś rekomendacje do tego, jak wygląda sylwetka na zdjęciu (np. poziom umięśnienia, tkanki tłuszczowej, proporcje), w kontekście pozostałych danych.' : ''}
 
 Aktualny bilans dzisiejszy:
-- Łącznie zjedzone: ${totalEaten.calories} kcal (Białko: ${totalEaten.protein}g, Węgle: ${totalEaten.carbs}g, Tłuszcz: ${totalEaten.fat}g, Błonnik: ${totalEaten.fiber}g, Cukry: ${totalEaten.sugar}g, Sód: ${totalEaten.sodium}mg)
+- Łącznie zjedzone: ${totalEaten.calories} kcal (Białko: ${totalEaten.protein}g, Węgle: ${totalEaten.carbs}g, Tłuszcz: ${totalEaten.fat}g, Błonnik: ${formatEstimateForPrompt(totalEaten.fiber, 'g', 'pl')}, Cukry: ${formatEstimateForPrompt(totalEaten.sugar, 'g', 'pl')}, Sód: ${formatEstimateForPrompt(totalEaten.sodium, 'mg', 'pl')})
 - Aktywne kalorie spalone: ${activeCalories} kcal
 - Łącznie spalone kalorie (BMR + Aktywne): ${totalBurned} kcal
 - Bilans netto (zjedzone - spalone): ${netCalories} kcal
@@ -870,8 +884,8 @@ ${yesterdayMealRows.map(m => `- ${escapeUserInputTag(m.raw_text)} (${m.calories}
 </user_input>
 
 Trendy i historia z bazy danych użytkownika:
-- Średnie odżywianie z ostatnich 7 dni: ${last7DaysNutrition.avg ? `${last7DaysNutrition.avg.calories} kcal (B: ${last7DaysNutrition.avg.protein}g, W: ${last7DaysNutrition.avg.carbs}g, T: ${last7DaysNutrition.avg.fat}g, Błonnik: ${last7DaysNutrition.avg.fiber}g, Cukry: ${last7DaysNutrition.avg.sugar}g, Sód: ${last7DaysNutrition.avg.sodium}mg) na ${last7DaysNutrition.days_logged} dni logowania` : 'brak danych'}
-- Średnie odżywianie z ostatnich 30 dni: ${last30DaysNutrition.avg ? `${last30DaysNutrition.avg.calories} kcal (B: ${last30DaysNutrition.avg.protein}g, W: ${last30DaysNutrition.avg.carbs}g, T: ${last30DaysNutrition.avg.fat}g, Błonnik: ${last30DaysNutrition.avg.fiber}g, Cukry: ${last30DaysNutrition.avg.sugar}g, Sód: ${last30DaysNutrition.avg.sodium}mg) na ${last30DaysNutrition.days_logged} dni logowania` : 'brak danych'}
+- Średnie odżywianie z ostatnich 7 dni: ${last7DaysNutrition.avg ? `${last7DaysNutrition.avg.calories} kcal (B: ${last7DaysNutrition.avg.protein}g, W: ${last7DaysNutrition.avg.carbs}g, T: ${last7DaysNutrition.avg.fat}g, Błonnik: ${formatEstimateForPrompt(last7DaysNutrition.avg.fiber, 'g', 'pl')}, Cukry: ${formatEstimateForPrompt(last7DaysNutrition.avg.sugar, 'g', 'pl')}, Sód: ${formatEstimateForPrompt(last7DaysNutrition.avg.sodium, 'mg', 'pl')}) na ${last7DaysNutrition.days_logged} dni logowania` : 'brak danych'}
+- Średnie odżywianie z ostatnich 30 dni: ${last30DaysNutrition.avg ? `${last30DaysNutrition.avg.calories} kcal (B: ${last30DaysNutrition.avg.protein}g, W: ${last30DaysNutrition.avg.carbs}g, T: ${last30DaysNutrition.avg.fat}g, Błonnik: ${formatEstimateForPrompt(last30DaysNutrition.avg.fiber, 'g', 'pl')}, Cukry: ${formatEstimateForPrompt(last30DaysNutrition.avg.sugar, 'g', 'pl')}, Sód: ${formatEstimateForPrompt(last30DaysNutrition.avg.sodium, 'mg', 'pl')}) na ${last30DaysNutrition.days_logged} dni logowania` : 'brak danych'}
 - Historia pomiarów wagi i składu ciała (ostatnie wpisy):
 ${weightHistory.map(w => `- ${w.date}: ${w.weight} kg (tłuszcz: ${w.fat_ratio || '-'}%, mięśnie: ${w.muscle_mass || '-'} kg)`).join('\n') || 'brak danych w bazie'}
 - Historia suplementów (ostatnie wpisy, nie tylko dziś/wczoraj):
@@ -1124,11 +1138,13 @@ router.get('/api/dashboard/sleep-insight', async (req, res) => {
     // extra day beyond the sleep range any more: the waking day after a night row IS that row's
     // own date.
     const mealRows = await db.all(
-      `SELECT date, SUM(calories) AS calories, SUM(sugar) AS sugar
+      `SELECT date, SUM(calories) AS calories, ${completeDaySumSql('sugar')}
        FROM meals WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date`,
       [req.user.id, startDate, today]
     );
-    const mealsByDate = new Map(mealRows.map(r => [r.date, { calories: r.calories || 0, sugar: r.sugar || 0 }]));
+    // sugar stays null for a day without a complete estimate (utils/estimatedNutrients.js):
+    // `|| 0` used to file such days as sugar-free in the comparison below.
+    const mealsByDate = new Map(mealRows.map(r => [r.date, { calories: r.calories || 0, sugar: r.sugar }]));
 
     const shortSleepNext = [];
     const goodSleepNext = [];
@@ -1159,8 +1175,13 @@ router.get('/api/dashboard/sleep-insight', async (req, res) => {
 
     const avgCaloriesShort = avg(shortSleepNext, 'calories');
     const avgCaloriesGood = avg(goodSleepNext, 'calories');
-    const avgSugarShort = avg(shortSleepNext, 'sugar');
-    const avgSugarGood = avg(goodSleepNext, 'sugar');
+    // Over the days that HAVE a complete sugar estimate only; null when a group has none.
+    const avgKnown = (arr, key) => {
+      const known = arr.filter(x => x[key] !== null && x[key] !== undefined);
+      return known.length > 0 ? avg(known, key) : null;
+    };
+    const avgSugarShort = avgKnown(shortSleepNext, 'sugar');
+    const avgSugarGood = avgKnown(goodSleepNext, 'sugar');
 
     res.json({
       hasEnoughData: true,
@@ -1172,7 +1193,8 @@ router.get('/api/dashboard/sleep-insight', async (req, res) => {
       caloriesDiff: Math.round((avgCaloriesShort - avgCaloriesGood) * 10) / 10,
       avgSugarAfterShortSleep: avgSugarShort,
       avgSugarAfterGoodSleep: avgSugarGood,
-      sugarDiff: Math.round((avgSugarShort - avgSugarGood) * 10) / 10
+      sugarDiff: avgSugarShort !== null && avgSugarGood !== null ? Math.round((avgSugarShort - avgSugarGood) * 10) / 10 : null,
+      sugarIsEstimate: true
     });
   } catch (err) {
     console.error(err);
@@ -1202,15 +1224,18 @@ router.get('/api/dashboard/sodium-bp-insight', async (req, res) => {
 
     // Część 1: sód zjedzony dziś (niezależnie od tego, czy mamy już wystarczającą historię).
     const todayRow = await db.get(
-      `SELECT SUM(sodium) AS sodium FROM meals WHERE user_id = ? AND date = ?`,
+      `SELECT ${completeDaySumSql('sodium')}, COUNT(*) - COUNT(sodium) AS missing FROM meals WHERE user_id = ? AND date = ?`,
       [req.user.id, today]
     );
+    // null unless every meal of the day has a sodium estimate - a partial sum would understate
+    // the day and keep the warning below silent (utils/estimatedNutrients.js).
     const todaySodium = todayRow && todayRow.sodium != null ? Math.round(todayRow.sodium) : null;
+    const todayMealsWithoutEstimate = todayRow ? todayRow.missing || 0 : 0;
     const todayHighSodium = todaySodium != null && todaySodium >= SODIUM_HIGH_THRESHOLD_MG;
 
     // Część 2: historia sodu (dzień) -> ciśnienie (dzień+1).
     const sodiumRows = await db.all(
-      `SELECT date, SUM(sodium) AS sodium FROM meals
+      `SELECT date, ${completeDaySumSql('sodium')} FROM meals
        WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date`,
       [req.user.id, startDate, today]
     );
@@ -1225,11 +1250,17 @@ router.get('/api/dashboard/sodium-bp-insight', async (req, res) => {
     const highSodiumNext = [];
     const normalSodiumNext = [];
 
+    // Days with a blood-pressure reading the next day but no complete sodium estimate: left out
+    // of both groups, and counted so the card can say so.
+    let excludedIncompleteDays = 0;
     sodiumRows.forEach(row => {
-      if (row.sodium == null) return;
       const nextDay = shiftDate(row.date, 1);
       const nextBp = bpByDate.get(nextDay);
       if (!nextBp) return;
+      if (row.sodium == null) {
+        excludedIncompleteDays++;
+        return;
+      }
       const bucket = row.sodium >= SODIUM_HIGH_THRESHOLD_MG ? highSodiumNext : normalSodiumNext;
       bucket.push(nextBp);
     });
@@ -1241,6 +1272,7 @@ router.get('/api/dashboard/sodium-bp-insight', async (req, res) => {
         reason: 'not_enough_days',
         highSodiumDays: highSodiumNext.length,
         normalSodiumDays: normalSodiumNext.length,
+        excludedIncompleteDays,
         minDaysRequired: MIN_DAYS_PER_SODIUM_GROUP
       };
     } else {
@@ -1258,13 +1290,15 @@ router.get('/api/dashboard/sodium-bp-insight', async (req, res) => {
         systolicDiff: Math.round((avgSysHigh - avgSysNormal) * 10) / 10,
         avgDiastolicAfterHighSodium: avgDiaHigh,
         avgDiastolicAfterNormalSodium: avgDiaNormal,
-        diastolicDiff: Math.round((avgDiaHigh - avgDiaNormal) * 10) / 10
+        diastolicDiff: Math.round((avgDiaHigh - avgDiaNormal) * 10) / 10,
+        excludedIncompleteDays
       };
     }
 
     res.json({
       sodiumThresholdMg: SODIUM_HIGH_THRESHOLD_MG,
-      today: { sodium: todaySodium, isHigh: todayHighSodium },
+      today: { sodium: todaySodium, isHigh: todayHighSodium, mealsWithoutEstimate: todayMealsWithoutEstimate },
+      sodiumIsEstimate: true,
       insight
     });
   } catch (err) {
@@ -1907,8 +1941,10 @@ router.get('/api/dashboard/fiber-sleep-insight', async (req, res) => {
     const startDate = shiftDate(today, -FIBER_SLEEP_LOOKBACK_DAYS);
 
     const fiberRows = await db.all(
-      `SELECT date, SUM(fiber) AS fiber FROM meals
-       WHERE user_id = ? AND date >= ? AND date <= ? AND fiber IS NOT NULL GROUP BY date HAVING fiber > 0`,
+      // `fiber IS NOT NULL` in the WHERE used to sum only the meals that HAD an estimate, so a
+      // day with one estimated meal out of three entered the comparison as a low-fibre day.
+      `SELECT date, ${completeDaySumSql('fiber')} FROM meals
+       WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date HAVING fiber > 0`,
       [req.user.id, startDate, today]
     );
     // Reaches one day past `today`: the night that follows the last day of eating is filed
@@ -2160,7 +2196,7 @@ router.get('/api/dashboard/stress-nutrition-insight', async (req, res) => {
       [req.user.id, startDate, today]
     );
     const nutritionRows = await db.all(
-      `SELECT date, SUM(sodium) AS sodium, SUM(sugar) AS sugar FROM meals
+      `SELECT date, ${completeDaySumSql('sodium')}, ${completeDaySumSql('sugar')} FROM meals
        WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date`,
       [req.user.id, startDate, today]
     );
@@ -3845,12 +3881,12 @@ async function buildExplanationContext(userId, today) {
 
   const [todayNutrition, yesterdayNutrition, todayHealth, todayWorkouts, supplementsRow] = await Promise.all([
     db.get(
-      `SELECT SUM(calories) AS calories, SUM(sodium) AS sodium, SUM(sugar) AS sugar, SUM(fiber) AS fiber, MAX(timestamp) AS last_meal_timestamp
+      `SELECT SUM(calories) AS calories, ${completeDaySumSql('sodium', 'sodium_estimate')}, ${completeDaySumSql('sugar', 'sugar_estimate')}, ${completeDaySumSql('fiber', 'fiber_estimate')}, MAX(timestamp) AS last_meal_timestamp
        FROM meals WHERE user_id = ? AND date = ?`,
       [userId, today]
     ),
     db.get(
-      `SELECT SUM(calories) AS calories, SUM(sodium) AS sodium, SUM(sugar) AS sugar, SUM(fiber) AS fiber
+      `SELECT SUM(calories) AS calories, ${completeDaySumSql('sodium', 'sodium_estimate')}, ${completeDaySumSql('sugar', 'sugar_estimate')}, ${completeDaySumSql('fiber', 'fiber_estimate')}
        FROM meals WHERE user_id = ? AND date = ?`,
       [userId, yesterday]
     ),

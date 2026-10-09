@@ -9,6 +9,7 @@ import SummaryUnavailable from './components/SummaryUnavailable';
 import { t, setLanguage, getLanguage } from './utils/i18n';
 import { getWarsawDateString } from './utils/dates';
 import { parseGoogleReturn } from './utils/googleReturn';
+import { mealFingerprint, submissionKeyFor, randomSubmissionId } from './utils/mealSubmission';
 import { NavIcon, LogoMark } from './components/NavIcons';
 
 // Today's date in YYYY-MM-DD, in the timezone the BACKEND uses (Europe/Warsaw).
@@ -176,6 +177,8 @@ export default function App() {
 // The set of meal IDs that already have a delete request in flight - see the comment in
 // handleDeleteMeal (protection against a double click sending a duplicate DELETE).
   const deletingMealIdsRef = useRef(new Set());
+  // { fingerprint, key } of the last meal submission the server has not confirmed yet.
+  const pendingMealSubmissionRef = useRef(null);
 
 // The login screen's Google button - asked only while signed out, which is the only time the
 // button is rendered.
@@ -578,6 +581,10 @@ export default function App() {
   const handleAddMeal = async (rawText, imageBase64) => {
     setIsAnalyzing(true);
     setErrorMessage('');
+    // Same meal retried -> same key, so the server answers with the meal it already saved
+    // instead of analysing (and saving) it again - see utils/mealSubmission.js.
+    const submission = submissionKeyFor(pendingMealSubmissionRef.current, mealFingerprint(rawText, selectedDate, imageBase64), randomSubmissionId);
+    pendingMealSubmissionRef.current = submission;
 // The returned boolean (success/failure) - MealLogger.jsx waits for it so it can show the
 // "Meal saved" message ONLY after the save genuinely succeeded, rather than optimistically
 // right after the click (previously the form gave no confirmation beyond a new entry in the
@@ -593,11 +600,13 @@ export default function App() {
         body: JSON.stringify({
           rawText,
           date: selectedDate,
-          image: imageBase64
+          image: imageBase64,
+          idempotencyKey: submission.key
         })
       });
 
       if (res.ok) {
+        pendingMealSubmissionRef.current = null;
 // The meal was added successfully - reload the dashboard
         await fetchDashboardData();
 // The new meal may have changed the "frequent meals" ranking (reaching the 2-repetition
@@ -614,13 +623,19 @@ export default function App() {
             const errData = await res.json();
             errorMsg = errData.error || errorMsg;
           } catch (e) {
-            errorMsg = `Serwer zwrócił kod błędu ${res.status} (${res.statusText || t('Błąd połączenia/Limit czasu')}).`;
+            errorMsg = t('Serwer zwrócił kod błędu {status} ({detail}).', { status: res.status, detail: res.statusText || t('Błąd połączenia/Limit czasu') });
           }
           setErrorMessage(errorMsg);
+          // A gateway timeout or a 409 "still analysing" may mean the meal IS saved - show
+          // whatever the server has, so the user sees it before deciding to retry.
+          if (res.status >= 500 || res.status === 409) fetchDashboardData();
         }
       }
     } catch (err) {
-      setErrorMessage(t('Nie udało się połączyć z serwerem w celu analizy posiłku.'));
+      // The connection dropped: the server may well have finished and saved the meal (that is
+      // how the duplicate of 08.10.2026 happened). Refresh the list, and say a retry is safe.
+      setErrorMessage(t('Połączenie zostało przerwane. Jeśli posiłek pojawił się na liście, jest zapisany - ponowne wysłanie nie utworzy duplikatu.'));
+      fetchDashboardData();
       console.error(err);
     } finally {
       setIsAnalyzing(false);

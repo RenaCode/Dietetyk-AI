@@ -944,12 +944,12 @@ export default function ActivityTracker({ summary = {}, userProfile, sessionToke
           {/* The "za mało danych" note is gated on historyData.length > 0, so a failed read
               used to remove the forecast AND its explanation in one go. */}
           {!isLoadingHistory && !weightForecast && historyData.length > 0 && !historyError && (
-            <p style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.3)', marginTop: '10px', textAlign: 'center' }}>
+            <p style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '10px', textAlign: 'center' }}>
               Za mało danych do prognozy trendu wagi (min. 5 pomiarów).
             </p>
           )}
           {!isLoadingHistory && historyError && (
-            <p style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.3)', marginTop: '10px', textAlign: 'center' }}>
+            <p style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '10px', textAlign: 'center' }}>
               {t('Prognoza niedostępna — nie udało się wczytać historii pomiarów.')}
             </p>
           )}

@@ -42,3 +42,35 @@ export function barHeight(value, maxVal, chartHeight) {
   const safeMax = maxVal > 0 ? maxVal : 1;
   return (value / safeMax) * chartHeight;
 }
+
+// Y-scale of a line chart: { min, max, ticks }.
+//
+// renderLineChart in Trends.jsx used to take min/max over the data, the fixed ticks AND the
+// constant 1 (audit 2026-10-09, S5). For body weight that meant a scale from 1 to 110 kg: a
+// week between 81 and 83 kg moved the line by about 1.4 px of a 75 px chart - a flat line -
+// and the 80/95/110 labels piled up in one corner. RHR and HRV had the same problem with
+// their fixed ticks.
+//
+// `fromData` (weight, RHR, HRV - quantities whose interesting range is a few units around
+// the person's own level): the scale spans the data with a margin, never forced to include 1
+// or a fixed tick. Otherwise (0-100 scores) the fixed ticks stay, because there the absolute
+// position IS the information. With no data, the fixed ticks are used either way.
+// `minSpan` keeps a perfectly stable week from collapsing to a zero-height range.
+export function lineChartScale(values, fixedTicks, { fromData = false, minSpan = 2 } = {}) {
+  const valid = (values || []).filter(v => v !== null && v !== undefined && Number.isFinite(v));
+  if (!fromData || valid.length === 0) {
+    const all = [...valid, ...fixedTicks];
+    const min = Math.min(...all);
+    const max = Math.max(...all);
+    return { min, max: max > min ? max : min + 1, ticks: fixedTicks };
+  }
+  const lo = Math.min(...valid);
+  const hi = Math.max(...valid);
+  const span = Math.max(hi - lo, minSpan);
+  const pad = span * 0.2;
+  const mid = (lo + hi) / 2;
+  const min = mid - span / 2 - pad;
+  const max = mid + span / 2 + pad;
+  const round1 = (v) => Math.round(v * 10) / 10;
+  return { min, max, ticks: [round1(lo), round1(mid), round1(hi)] };
+}

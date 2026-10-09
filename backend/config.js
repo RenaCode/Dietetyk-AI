@@ -46,6 +46,15 @@ const ACTIVE_GEMINI_MODEL = resolveGeminiModel();
 // Empirical, not a documented limit.
 const GEMINI_REQUEST_TIMEOUT_MS = 90 * 1000;
 
+// The longest a single generateContentWithFallback call can take: every model in the
+// fallback chain may time out in turn. The reverse proxy in front of the backend must wait
+// LONGER than this (proxy_read_timeout in charts/dietetyk/templates/nginx-configmap.yaml,
+// pinned by tests/test-proxy-timeouts.js). It waited nginx's default 60 s (audit 2026-10-09,
+// W2): a slow photo analysis got a 504 at the browser while the backend went on to save the
+// meal, and the user - told it had failed - sent it again.
+const GEMINI_MAX_MODELS = 2;
+const GEMINI_WORST_CASE_MS = GEMINI_MAX_MODELS * GEMINI_REQUEST_TIMEOUT_MS;
+
 // Inicjalizacja Gemini API
 const geminiApiKey = process.env.GEMINI_API_KEY;
 let genAI = null;
@@ -78,7 +87,7 @@ async function generateContentWithFallback(promptText, isJson = false, imagePart
   // fallback - when both are the same, uniqueModels collapses it to a single attempt.
   const modelsToTry = [ACTIVE_GEMINI_MODEL, DEFAULT_GEMINI_MODEL].filter(Boolean);
 
-  const uniqueModels = [...new Set(modelsToTry)];
+  const uniqueModels = [...new Set(modelsToTry)].slice(0, GEMINI_MAX_MODELS);
   let lastError = null;
 
   console.log(`[AI LOG] Starting generation with a prompt of ${promptText.length} characters.`);
@@ -141,5 +150,7 @@ module.exports = {
   // Exported for tests and diagnostics - lets you check which model will actually be used
   // without reading the startup logs.
   ACTIVE_GEMINI_MODEL,
-  DEFAULT_GEMINI_MODEL
+  DEFAULT_GEMINI_MODEL,
+  GEMINI_REQUEST_TIMEOUT_MS,
+  GEMINI_WORST_CASE_MS
 };

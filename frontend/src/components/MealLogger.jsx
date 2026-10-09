@@ -340,20 +340,21 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                   {(meal.fiber != null || meal.sugar != null || meal.sodium != null) && (
                     <div className="meal-nutrition-chips" style={{ marginTop: '-4px' }}>
                       {meal.fiber != null && (
-                        <span className="nutrition-chip fiber">
-                          Błonnik: {Math.round(meal.fiber * 10) / 10}g
+                        <span className="nutrition-chip fiber" title={t('Szacunek AI, nie pomiar')}>
+                          {t('Błonnik')}: ≈{Math.round(meal.fiber * 10) / 10}g
                         </span>
                       )}
                       {meal.sugar != null && (
-                        <span className="nutrition-chip sugar">
-                          Cukry: {Math.round(meal.sugar * 10) / 10}g
+                        <span className="nutrition-chip sugar" title={t('Szacunek AI, nie pomiar')}>
+                          {t('Cukry')}: ≈{Math.round(meal.sugar * 10) / 10}g
                         </span>
                       )}
                       {meal.sodium != null && (
-                        <span className="nutrition-chip sodium">
-                          Sód: {Math.round(meal.sodium)}mg
+                        <span className="nutrition-chip sodium" title={t('Szacunek AI, nie pomiar')}>
+                          {t('Sód')}: ≈{Math.round(meal.sodium)}mg
                         </span>
                       )}
+                      <span className="nutrition-chip" style={{ color: 'var(--text-dim)' }}>{t('szac. AI')}</span>
                     </div>
                   )}
 

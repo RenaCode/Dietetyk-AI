@@ -104,5 +104,11 @@ data:
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $dietetyk_forwarded_proto;
             proxy_cache_bypass $http_upgrade;
+            # Longer than the worst case of one AI call (2 models x 90 s, GEMINI_WORST_CASE_MS in
+            # backend/config.js) plus the request around it. The default 60 s answered a slow
+            # meal photo analysis with 504 while the backend still saved the meal - and the
+            # user, told it had failed, sent it again (audit 2026-10-09, W2).
+            proxy_read_timeout 210s;
+            proxy_send_timeout 210s;
         }
     }

@@ -14,6 +14,8 @@ const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/
 // e-mail as if the application itself had written it.
 const { escapeUserInputTag } = require('../utils/mealSanitize');
 const { escapeHtml } = require('../utils/html');
+const { formatEstimateForPrompt } = require('../utils/estimatedNutrients');
+const { userGoal, goalText } = require('../utils/defaultSettings');
 
 // ===== Shared helpers (extracted from duplication across the three functions below) =====
 
@@ -37,13 +39,17 @@ async function getUserSettings(userId) {
   settingsRows.forEach(r => {
     settings[r.key] = Number(r.value);
   });
+  // null = the user never set it (S2, see userGoal in utils/defaultSettings.js). These used to
+  // be `?? 2500 / 150 / 250 / 80 / 1800 / 2500` - a second copy of the defaults, different
+  // from getTargetCalories (which treats 0 as unset) - and the e-mails quoted them as the
+  // user's own goals.
   return {
-    targetCalories: settings.target_calories ?? 2500,
-    targetProtein: settings.target_protein ?? 150,
-    targetCarbs: settings.target_carbs ?? 250,
-    targetFat: settings.target_fat ?? 80,
-    bmr: settings.bmr ?? 1800,
-    targetWaterMl: settings.target_water_ml ?? 2500,
+    targetCalories: userGoal(settings, 'target_calories'),
+    targetProtein: userGoal(settings, 'target_protein'),
+    targetCarbs: userGoal(settings, 'target_carbs'),
+    targetFat: userGoal(settings, 'target_fat'),
+    bmr: userGoal(settings, 'bmr'),
+    targetWaterMl: userGoal(settings, 'target_water_ml'),
     // 0 = nieustawiony (ta sama konwencja co w routes/dashboard.js) - liczbowy cel
 // the weight target is optional, unlike calories and macros, which have sensible
 // defaults.
@@ -120,10 +126,30 @@ async function aggregateNutritionAndHealth(meals, healthMetrics, numDays, userId
     totalProtein += m.protein;
     totalCarbs += m.carbs;
     totalFat += m.fat;
-    totalFiber += m.fiber || 0;
-    totalSugar += m.sugar || 0;
-    totalSodium += m.sodium || 0;
   });
+  // Fibre/sugar/sodium are AI estimates: a day's total counts only when every meal of that day
+  // carries one, and the average is over those days - null when there are none (see
+  // utils/estimatedNutrients.js). Adding `m.sodium || 0` per meal counted a missing estimate
+  // as zero sodium and divided by every logged day.
+  const estimateByDay = new Map();
+  meals.forEach(m => {
+    const day = estimateByDay.get(m.date) || { fiber: 0, sugar: 0, sodium: 0, incomplete: new Set() };
+    for (const key of ['fiber', 'sugar', 'sodium']) {
+      if (m[key] === null || m[key] === undefined) day.incomplete.add(key);
+      else day[key] += m[key];
+    }
+    estimateByDay.set(m.date, day);
+  });
+  const estimateDays = { fiber: 0, sugar: 0, sodium: 0 };
+  for (const day of estimateByDay.values()) {
+    for (const key of ['fiber', 'sugar', 'sodium']) {
+      if (day.incomplete.has(key)) continue;
+      estimateDays[key]++;
+      if (key === 'fiber') totalFiber += day.fiber;
+      if (key === 'sugar') totalSugar += day.sugar;
+      if (key === 'sodium') totalSodium += day.sodium;
+    }
+  }
 
   let totalSteps = 0, totalActiveCal = 0, totalWaterMl = 0;
   let sleepScoreSum = 0, sleepScoreCount = 0;
@@ -229,9 +255,9 @@ async function aggregateNutritionAndHealth(meals, healthMetrics, numDays, userId
   const avgMuscleMass = muscleMassCount > 0 ? Math.round((muscleMassSum / muscleMassCount) * 10) / 10 : null;
   const avgBpSystolic = bpCount > 0 ? Math.round(bpSystolicSum / bpCount) : null;
   const avgBpDiastolic = bpCount > 0 ? Math.round(bpDiastolicSum / bpCount) : null;
-  const avgFiber = Math.round((totalFiber / nutritionDivisor) * 10) / 10;
-  const avgSugar = Math.round((totalSugar / nutritionDivisor) * 10) / 10;
-  const avgSodium = Math.round(totalSodium / nutritionDivisor);
+  const avgFiber = estimateDays.fiber > 0 ? Math.round((totalFiber / estimateDays.fiber) * 10) / 10 : null;
+  const avgSugar = estimateDays.sugar > 0 ? Math.round((totalSugar / estimateDays.sugar) * 10) / 10 : null;
+  const avgSodium = estimateDays.sodium > 0 ? Math.round(totalSodium / estimateDays.sodium) : null;
 
   const weightChange = (firstWeight !== null && lastWeight !== null) ? Math.round((lastWeight - firstWeight) * 10) / 10 : null;
   const fatRatioChange = (firstFatRatio !== null && lastFatRatio !== null) ? Math.round((lastFatRatio - firstFatRatio) * 10) / 10 : null;
@@ -476,8 +502,9 @@ async function sendWeeklySummaryForUser(userId, customEmail = null) {
 
   const numDays = 7;
   const stats = await aggregateNutritionAndHealth(meals, healthMetrics, numDays, userId, sevenDaysAgo);
-  const avgTotalBurned = bmr + stats.avgActiveCalories;
-  const avgNetCalories = stats.avgEatenCalories - avgTotalBurned;
+  // Without a BMR the total burn is unknown - not 1800 + active.
+  const avgTotalBurned = bmr !== null ? bmr + stats.avgActiveCalories : null;
+  const avgNetCalories = avgTotalBurned !== null ? stats.avgEatenCalories - avgTotalBurned : null;
 
     // ===== Divergence between the physique/weight goal and the actual rate. Wired into the
     // existing weekly email because that is the least invasive place: the user receives it
@@ -521,17 +548,17 @@ async function sendWeeklySummaryForUser(userId, customEmail = null) {
 You are a professional AI sports dietician working in the "Dietetyk AI" app.
 Analyze the weekly nutrition and training report for user ${user.first_name || user.username}, addressing them by name:
 Daily goals:
-- Calorie target: ${targetCalories} kcal
-- Macronutrients: P:${targetProtein}g, C:${targetCarbs}g, F:${targetFat}g
-- BMR: ${bmr} kcal
+- Calorie target: ${goalText(targetCalories, ' kcal', 'en')}
+- Macronutrients: P:${goalText(targetProtein, 'g', 'en')}, C:${goalText(targetCarbs, 'g', 'en')}, F:${goalText(targetFat, 'g', 'en')}
+- BMR: ${goalText(bmr, ' kcal', 'en')}
 
 Weekly stats (daily averages):
-- Average daily energy intake: ${stats.avgEatenCalories} kcal (Protein: ${stats.avgProtein}g, Carbs: ${stats.avgCarbs}g, Fat: ${stats.avgFat}g, Fiber: ${stats.avgFiber}g, Sugar: ${stats.avgSugar}g, Sodium: ${stats.avgSodium}mg)
+- Average daily energy intake: ${stats.avgEatenCalories} kcal (Protein: ${stats.avgProtein}g, Carbs: ${stats.avgCarbs}g, Fat: ${stats.avgFat}g, Fiber: ${formatEstimateForPrompt(stats.avgFiber, 'g', 'en')}, Sugar: ${formatEstimateForPrompt(stats.avgSugar, 'g', 'en')}, Sodium: ${formatEstimateForPrompt(stats.avgSodium, 'mg', 'en')})
 - Average physical activity (active calories): ${stats.avgActiveCalories} kcal
-- Average total daily burn: ${avgTotalBurned} kcal
-- Average daily net balance: ${avgNetCalories} kcal
+- Average total daily burn: ${avgTotalBurned !== null ? `${avgTotalBurned} kcal` : 'unknown (BMR not set)'}
+- Average daily net balance: ${avgNetCalories !== null ? `${avgNetCalories} kcal` : 'unknown (BMR not set)'}
 - Average daily steps: ${stats.avgSteps}
-- Average daily hydration: ${stats.avgWaterMl}ml (target: ${targetWaterMl}ml)
+- Average daily hydration: ${stats.avgWaterMl}ml (target: ${goalText(targetWaterMl, 'ml', 'en')})
 - Supplements recorded this week: ${stats.supplementsLogged.length > 0 ? stats.supplementsLogged.join('; ') : 'none'}
 ${goalPaceAnalysis ? `
 Body goal and pace discrepancy:
@@ -569,17 +596,17 @@ Format the response strictly in Markdown: short introductory sentence, header "#
 Jesteś profesjonalnym dietetykiem sportowym AI pracującym w aplikacji "Dietetyk AI".
 Przeanalizuj tygodniowy raport żywieniowo-treningowy użytkownika ${user.first_name || user.username}, zwracając się do niego po imieniu:
 Cele dobowe:
-- Cel kaloryczny: ${targetCalories} kcal
-- Makroskładniki: B:${targetProtein}g, W:${targetCarbs}g, T:${targetFat}g
-- BMR: ${bmr} kcal
+- Cel kaloryczny: ${goalText(targetCalories, ' kcal')}
+- Makroskładniki: B:${goalText(targetProtein, 'g')}, W:${goalText(targetCarbs, 'g')}, T:${goalText(targetFat, 'g')}
+- BMR: ${goalText(bmr, ' kcal')}
 
 Tygodniowe statystyki (średnie dzienne):
-- Średnie dzienne spożycie energii: ${stats.avgEatenCalories} kcal (Białko: ${stats.avgProtein}g, Węglowodany: ${stats.avgCarbs}g, Tłuszcz: ${stats.avgFat}g, Błonnik: ${stats.avgFiber}g, Cukry: ${stats.avgSugar}g, Sód: ${stats.avgSodium}mg)
+- Średnie dzienne spożycie energii: ${stats.avgEatenCalories} kcal (Białko: ${stats.avgProtein}g, Węglowodany: ${stats.avgCarbs}g, Tłuszcz: ${stats.avgFat}g, Błonnik: ${formatEstimateForPrompt(stats.avgFiber, 'g', 'pl')}, Cukry: ${formatEstimateForPrompt(stats.avgSugar, 'g', 'pl')}, Sód: ${formatEstimateForPrompt(stats.avgSodium, 'mg', 'pl')})
 - Średnia aktywność fizyczna (aktywne kalorie): ${stats.avgActiveCalories} kcal
-- Średnia całkowitego dziennego spalania: ${avgTotalBurned} kcal
-- Średni dobowy bilans netto: ${avgNetCalories} kcal
+- Średnia całkowitego dziennego spalania: ${avgTotalBurned !== null ? `${avgTotalBurned} kcal` : 'nieznana (BMR nieustawiony)'}
+- Średni dobowy bilans netto: ${avgNetCalories !== null ? `${avgNetCalories} kcal` : 'nieznany (BMR nieustawiony)'}
 - Średni dobowy kroki: ${stats.avgSteps}
-- Średnie dobowe nawodnienie: ${stats.avgWaterMl}ml (cel: ${targetWaterMl}ml)
+- Średnie dobowe nawodnienie: ${stats.avgWaterMl}ml (cel: ${goalText(targetWaterMl, 'ml')})
 - Suplementy zapisane w tym tygodniu: ${stats.supplementsLogged.length > 0 ? stats.supplementsLogged.join('; ') : 'brak zapisanych suplementów'}
 ${goalPaceAnalysis ? `
 Cel sylwetki i rozbieżność tempa:
@@ -634,14 +661,14 @@ Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek 
     // measured against a daily target. Steps, calories burned and water stay as daily
     // averages, because those are metrics the user genuinely syncs and tracks day by day
     // rather than weekly.
-      { label: 'Kalorie Spożyte (tydzień)', value: `${stats.totalEatenCalories} kcal`, target: `${targetCalories * 7} kcal` },
-      { label: 'Białko (tydzień)', value: `${stats.totalProteinG}g`, target: `${targetProtein * 7}g` },
-      { label: 'Węglowodany (tydzień)', value: `${stats.totalCarbsG}g`, target: `${targetCarbs * 7}g` },
-      { label: 'Tłuszcz (tydzień)', value: `${stats.totalFatG}g`, target: `${targetFat * 7}g` },
+      { label: 'Kalorie Spożyte (tydzień)', value: `${stats.totalEatenCalories} kcal`, target: goalText(targetCalories, ' kcal', 'pl', 7) },
+      { label: 'Białko (tydzień)', value: `${stats.totalProteinG}g`, target: goalText(targetProtein, 'g', 'pl', 7) },
+      { label: 'Węglowodany (tydzień)', value: `${stats.totalCarbsG}g`, target: goalText(targetCarbs, 'g', 'pl', 7) },
+      { label: 'Tłuszcz (tydzień)', value: `${stats.totalFatG}g`, target: goalText(targetFat, 'g', 'pl', 7) },
       { label: 'Kroki (śr. dobowa)', value: stats.avgSteps },
       { label: 'Kalorie Spalone (śr. dobowa, Aktywne)', value: `${stats.avgActiveCalories} kcal` },
       { label: 'Treningi w tygodniu', value: stats.workoutsCount },
-      { label: 'Woda (śr. dobowa)', value: `${stats.avgWaterMl}ml`, target: `${targetWaterMl}ml` },
+      { label: 'Woda (śr. dobowa)', value: `${stats.avgWaterMl}ml`, target: goalText(targetWaterMl, 'ml') },
     // The weight-goal row is shown only when there is enough data to compute the rate (see
     // buildGoalPaceAnalysis above) - otherwise the table would imply a judgement of pace
     // made without sufficient data.
@@ -699,8 +726,8 @@ async function sendDailySummaryForUser(userId, customEmail = null) {
   const health = await db.get(`SELECT * FROM health_metrics WHERE user_id = ? AND date = ?`, [userId, date]) || getDefaultHealthMetrics();
 
   const activeCalories = health.active_calories || 0;
-  const totalBurned = health.total_calories_burned || (bmr + activeCalories);
-  const netCalories = totalEaten.calories - totalBurned;
+  const totalBurned = health.total_calories_burned || (bmr !== null ? bmr + activeCalories : null);
+  const netCalories = totalBurned !== null ? totalEaten.calories - totalBurned : null;
 
   const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [userId]);
   const language = langRow ? langRow.value : 'pl';
@@ -724,17 +751,17 @@ async function sendDailySummaryForUser(userId, customEmail = null) {
 You are a professional, friendly AI sports dietician working in the "Dietetyk AI" app.
 Analyze today's balance for user ${user.first_name || user.username} for date ${date}, addressing them by name:
 User Goals:
-- Calorie target: ${targetCalories} kcal
-- Protein target: ${targetProtein}g, Carbs target: ${targetCarbs}g, Fat target: ${targetFat}g
-- BMR: ${bmr} kcal
+- Calorie target: ${goalText(targetCalories, ' kcal', 'en')}
+- Protein target: ${goalText(targetProtein, 'g', 'en')}, Carbs target: ${goalText(targetCarbs, 'g', 'en')}, Fat target: ${goalText(targetFat, 'g', 'en')}
+- BMR: ${goalText(bmr, ' kcal', 'en')}
 
 Today's Balance:
 - Total eaten: ${totalEaten.calories} kcal (Protein: ${totalEaten.protein}g, Carbs: ${totalEaten.carbs}g, Fat: ${totalEaten.fat}g)
 - Active calories burned: ${activeCalories} kcal
-- Total calories burned (BMR + Active): ${totalBurned} kcal
-- Net balance (eaten - burned): ${netCalories} kcal
+- Total calories burned (BMR + Active): ${totalBurned !== null ? `${totalBurned} kcal` : 'unknown (BMR not set)'}
+- Net balance (eaten - burned): ${netCalories !== null ? `${netCalories} kcal` : 'unknown (BMR not set)'}
 - Steps today: ${health.steps || 0}
-- Water intake today: ${health.water_ml || 0}ml (target: ${targetWaterMl}ml)
+- Water intake today: ${health.water_ml || 0}ml (target: ${goalText(targetWaterMl, 'ml', 'en')})
 
 Current time and weather (context, not a user-logged metric):
 ${weatherTimeContext}
@@ -763,17 +790,17 @@ Format the response strictly in Markdown: one short introductory sentence, heade
 Jesteś profesjonalnym, przyjaznym dietetykiem sportowym AI pracującym w aplikacji "Dietetyk AI".
 Przeanalizuj dzisiejszy bilans użytkownika ${user.first_name || user.username} dla dnia ${date}, zwracając się do niego po imieniu:
 Cele użytkownika:
-- Cel kaloryczny spożycia: ${targetCalories} kcal
-- Cel Białka: ${targetProtein}g, Węglowodanych: ${targetCarbs}g, Tłuszczu: ${targetFat}g
-- BMR (Podstawowa Przemiana Materii): ${bmr} kcal
+- Cel kaloryczny spożycia: ${goalText(targetCalories, ' kcal')}
+- Cel Białka: ${goalText(targetProtein, 'g')}, Węglowodanych: ${goalText(targetCarbs, 'g')}, Tłuszczu: ${goalText(targetFat, 'g')}
+- BMR (Podstawowa Przemiana Materii): ${goalText(bmr, ' kcal')}
 
 Aktualny bilans dzisiejszy:
 - Łącznie zjedzone: ${totalEaten.calories} kcal (Białko: ${totalEaten.protein}g, Węgle: ${totalEaten.carbs}g, Tłuszcz: ${totalEaten.fat}g)
 - Aktywne kalorie spalone: ${activeCalories} kcal
-- Łącznie spalone kalorie (BMR + Aktywne): ${totalBurned} kcal
-- Bilans netto (zjedzone - spalone): ${netCalories} kcal
+- Łącznie spalone kalorie (BMR + Aktywne): ${totalBurned !== null ? `${totalBurned} kcal` : 'nieznane (BMR nieustawiony)'}
+- Bilans netto (zjedzone - spalone): ${netCalories !== null ? `${netCalories} kcal` : 'nieznany (BMR nieustawiony)'}
 - Wykonane kroki dzisiaj: ${health.steps || 0}
-- Wypita woda dzisiaj: ${health.water_ml || 0}ml (cel: ${targetWaterMl}ml)
+- Wypita woda dzisiaj: ${health.water_ml || 0}ml (cel: ${goalText(targetWaterMl, 'ml')})
 
 Aktualny czas i pogoda (kontekst, nie metryka zapisana przez użytkownika):
 ${weatherTimeContext}
@@ -814,14 +841,14 @@ Sformatuj odpowiedź w strukturze Markdown: jedno krótkie zdanie wstępu, nagł
     statsSectionTitle: 'Twoje Statystyki Dzisiejsze',
     valueColumnLabel: 'Dzisiaj',
     statRows: [
-      { label: 'Kalorie Spożyte', value: `${totalEaten.calories} kcal`, target: `${targetCalories} kcal` },
-      { label: 'Białko', value: `${totalEaten.protein}g`, target: `${targetProtein}g` },
-      { label: 'Węglowodany', value: `${totalEaten.carbs}g`, target: `${targetCarbs}g` },
-      { label: 'Tłuszcz', value: `${totalEaten.fat}g`, target: `${targetFat}g` },
+      { label: 'Kalorie Spożyte', value: `${totalEaten.calories} kcal`, target: goalText(targetCalories, ' kcal') },
+      { label: 'Białko', value: `${totalEaten.protein}g`, target: goalText(targetProtein, 'g') },
+      { label: 'Węglowodany', value: `${totalEaten.carbs}g`, target: goalText(targetCarbs, 'g') },
+      { label: 'Tłuszcz', value: `${totalEaten.fat}g`, target: goalText(targetFat, 'g') },
       { label: 'Kroki', value: health.steps || 0 },
       { label: 'Kalorie Spalone (Aktywne)', value: `${activeCalories} kcal` },
       { label: 'Waga ciała', value: health.weight !== null ? health.weight + ' kg' : 'brak' },
-      { label: 'Woda', value: `${health.water_ml || 0}ml`, target: `${targetWaterMl}ml` }
+      { label: 'Woda', value: `${health.water_ml || 0}ml`, target: goalText(targetWaterMl, 'ml') }
     ],
     aiHtml: markdownToHtml(aiAdvice)
   });
@@ -865,8 +892,9 @@ async function sendMonthlySummaryForUser(userId, customEmail = null) {
 
   const numDays = 30;
   const stats = await aggregateNutritionAndHealth(meals, healthMetrics, numDays, userId, thirtyDaysAgo);
-  const avgTotalBurned = bmr + stats.avgActiveCalories;
-  const avgNetCalories = stats.avgEatenCalories - avgTotalBurned;
+  // Without a BMR the total burn is unknown - not 1800 + active.
+  const avgTotalBurned = bmr !== null ? bmr + stats.avgActiveCalories : null;
+  const avgNetCalories = avgTotalBurned !== null ? stats.avgEatenCalories - avgTotalBurned : null;
 
   const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [userId]);
   const language = langRow ? langRow.value : 'pl';
@@ -880,18 +908,18 @@ async function sendMonthlySummaryForUser(userId, customEmail = null) {
 You are a professional AI sports dietician working in the "Dietetyk AI" app.
 Analyze the monthly nutrition and training report for user ${user.first_name || user.username} (last 30 days), addressing them by name:
 Daily goals:
-- Calorie target: ${targetCalories} kcal
-- Macronutrients: P:${targetProtein}g, C:${targetCarbs}g, F:${targetFat}g
-- BMR: ${bmr} kcal
+- Calorie target: ${goalText(targetCalories, ' kcal', 'en')}
+- Macronutrients: P:${goalText(targetProtein, 'g', 'en')}, C:${goalText(targetCarbs, 'g', 'en')}, F:${goalText(targetFat, 'g', 'en')}
+- BMR: ${goalText(bmr, ' kcal', 'en')}
 
 Monthly stats (daily averages from last 30 days):
-- Average daily energy intake: ${stats.avgEatenCalories} kcal (Protein: ${stats.avgProtein}g, Carbs: ${stats.avgCarbs}g, Fat: ${stats.avgFat}g, Fiber: ${stats.avgFiber}g, Sugar: ${stats.avgSugar}g, Sodium: ${stats.avgSodium}mg)
+- Average daily energy intake: ${stats.avgEatenCalories} kcal (Protein: ${stats.avgProtein}g, Carbs: ${stats.avgCarbs}g, Fat: ${stats.avgFat}g, Fiber: ${formatEstimateForPrompt(stats.avgFiber, 'g', 'en')}, Sugar: ${formatEstimateForPrompt(stats.avgSugar, 'g', 'en')}, Sodium: ${formatEstimateForPrompt(stats.avgSodium, 'mg', 'en')})
 - Average physical activity (active calories): ${stats.avgActiveCalories} kcal
-- Average total daily burn: ${avgTotalBurned} kcal
-- Average daily net balance: ${avgNetCalories} kcal
+- Average total daily burn: ${avgTotalBurned !== null ? `${avgTotalBurned} kcal` : 'unknown (BMR not set)'}
+- Average daily net balance: ${avgNetCalories !== null ? `${avgNetCalories} kcal` : 'unknown (BMR not set)'}
 - Average daily steps: ${stats.avgSteps}
 - Workouts in the month (number of sessions, not days - two sessions on one day count as two): ${stats.workoutsCount}
-- Average daily hydration: ${stats.avgWaterMl}ml (target: ${targetWaterMl}ml)
+- Average daily hydration: ${stats.avgWaterMl}ml (target: ${goalText(targetWaterMl, 'ml', 'en')})
 - Supplements recorded this month: ${stats.supplementsLogged.length > 0 ? stats.supplementsLogged.length + ' entries - ' + stats.supplementsLogged.slice(0, 10).join('; ') : 'none'}
 
 Oura & Withings data (monthly averages and change trend from start to end):
@@ -915,18 +943,18 @@ Format the response strictly in Markdown: short introductory sentence, header "#
 Jesteś profesjonalnym dietetykiem sportowym AI pracującym w aplikacji "Dietetyk AI".
 Przeanalizuj miesięczny raport żywieniowo-treningowy użytkownika ${user.first_name || user.username} (ostatnie 30 dni), zwracając się do niego po imieniu:
 Cele dobowe:
-- Cel kaloryczny: ${targetCalories} kcal
-- Makroskładniki: B:${targetProtein}g, W:${targetCarbs}g, T:${targetFat}g
-- BMR: ${bmr} kcal
+- Cel kaloryczny: ${goalText(targetCalories, ' kcal')}
+- Makroskładniki: B:${goalText(targetProtein, 'g')}, W:${goalText(targetCarbs, 'g')}, T:${goalText(targetFat, 'g')}
+- BMR: ${goalText(bmr, ' kcal')}
 
 Miesięczne statystyki (średnie dzienne z ostatnich 30 dni):
-- Średnie dzienne spożycie energii: ${stats.avgEatenCalories} kcal (Białko: ${stats.avgProtein}g, Węglowodany: ${stats.avgCarbs}g, Tłuszcz: ${stats.avgFat}g, Błonnik: ${stats.avgFiber}g, Cukry: ${stats.avgSugar}g, Sód: ${stats.avgSodium}mg)
+- Średnie dzienne spożycie energii: ${stats.avgEatenCalories} kcal (Białko: ${stats.avgProtein}g, Węglowodany: ${stats.avgCarbs}g, Tłuszcz: ${stats.avgFat}g, Błonnik: ${formatEstimateForPrompt(stats.avgFiber, 'g', 'pl')}, Cukry: ${formatEstimateForPrompt(stats.avgSugar, 'g', 'pl')}, Sód: ${formatEstimateForPrompt(stats.avgSodium, 'mg', 'pl')})
 - Średnia aktywność fizyczna (aktywne kalorie): ${stats.avgActiveCalories} kcal
-- Średnia całkowitego dziennego spalania: ${avgTotalBurned} kcal
-- Średni dobowy bilans netto: ${avgNetCalories} kcal
+- Średnia całkowitego dziennego spalania: ${avgTotalBurned !== null ? `${avgTotalBurned} kcal` : 'nieznana (BMR nieustawiony)'}
+- Średni dobowy bilans netto: ${avgNetCalories !== null ? `${avgNetCalories} kcal` : 'nieznany (BMR nieustawiony)'}
 - Średni dobowy kroki: ${stats.avgSteps}
 - Treningi w miesiącu (liczba sesji, nie dni - dwa treningi jednego dnia liczą się jako dwa): ${stats.workoutsCount}
-- Średnie dobowe nawodnienie: ${stats.avgWaterMl}ml (cel: ${targetWaterMl}ml)
+- Średnie dobowe nawodnienie: ${stats.avgWaterMl}ml (cel: ${goalText(targetWaterMl, 'ml')})
 - Suplementy zapisane w tym miesiącu: ${stats.supplementsLogged.length > 0 ? stats.supplementsLogged.length + ' wpisów - ' + stats.supplementsLogged.slice(0, 10).join('; ') : 'brak zapisanych suplementów'}
 
 Dane z Oura & Withings (średnie miesięczne i zmiana trendu od początku do końca okresu):
@@ -970,14 +998,14 @@ Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek 
     statsSectionTitle: 'Twoje Statystyki (30 dni)',
     valueColumnLabel: 'Wartość',
     statRows: [
-      { label: 'Kalorie Spożyte (śr. dobowa)', value: `${stats.avgEatenCalories} kcal`, target: `${targetCalories} kcal` },
-      { label: 'Białko (śr. dobowa)', value: `${stats.avgProtein}g`, target: `${targetProtein}g` },
-      { label: 'Węglowodany (śr. dobowa)', value: `${stats.avgCarbs}g`, target: `${targetCarbs}g` },
-      { label: 'Tłuszcz (śr. dobowa)', value: `${stats.avgFat}g`, target: `${targetFat}g` },
+      { label: 'Kalorie Spożyte (śr. dobowa)', value: `${stats.avgEatenCalories} kcal`, target: goalText(targetCalories, ' kcal') },
+      { label: 'Białko (śr. dobowa)', value: `${stats.avgProtein}g`, target: goalText(targetProtein, 'g') },
+      { label: 'Węglowodany (śr. dobowa)', value: `${stats.avgCarbs}g`, target: goalText(targetCarbs, 'g') },
+      { label: 'Tłuszcz (śr. dobowa)', value: `${stats.avgFat}g`, target: goalText(targetFat, 'g') },
       { label: 'Kroki (śr. dobowa)', value: stats.avgSteps },
       { label: 'Kalorie Spalone (śr. dobowa, Aktywne)', value: `${stats.avgActiveCalories} kcal` },
       { label: 'Treningi w miesiącu', value: stats.workoutsCount },
-      { label: 'Woda (śr. dobowa)', value: `${stats.avgWaterMl}ml`, target: `${targetWaterMl}ml` },
+      { label: 'Woda (śr. dobowa)', value: `${stats.avgWaterMl}ml`, target: goalText(targetWaterMl, 'ml') },
       { label: 'Zmiana wagi (w miesiącu)', value: stats.weightChange !== null ? (stats.weightChange > 0 ? '+' : '') + stats.weightChange + ' kg' : 'brak danych' },
       { label: 'Zmiana % tłuszczu (w miesiącu)', value: stats.fatRatioChange !== null ? (stats.fatRatioChange > 0 ? '+' : '') + stats.fatRatioChange + ' pp' : 'brak danych' },
       { label: 'Zmiana masy mięśniowej (w miesiącu)', value: stats.muscleMassChange !== null ? (stats.muscleMassChange > 0 ? '+' : '') + stats.muscleMassChange + ' kg' : 'brak danych' }

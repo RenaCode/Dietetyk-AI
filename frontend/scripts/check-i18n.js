@@ -171,7 +171,73 @@ const coverage = dictionary.size > 0
 console.log(`Dictionary coverage by real t() calls: ${coverage}%`);
 console.log('');
 
+// ===== Polish text OUTSIDE t() (audit 2026-10-09, S3) =====
+// Everything above only looks at texts that already go through t(). A sentence typed straight
+// into JSX never reaches t(), so it is neither "missing" nor "hardcoded despite a translation"
+// - it was simply invisible, and a green check-i18n sat next to an English mode that was
+// largely Polish (291 such lines when this was added).
+//
+// The detector: in .jsx files, a line (comments and t() calls removed) that still carries a
+// Polish diacritic. Words without diacritics slip through, so the count is a lower bound. It
+// cannot fail on the existing backlog - translating that is a project of its own - so it
+// compares per file with a committed baseline (scripts/i18n-hardcoded-baseline.json) and
+// FAILS when a file has MORE such lines than recorded: new untranslated text is caught, and
+// the baseline only ever goes down (`--update-baseline` after translating some).
+const POLISH_RE = /[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]/;
+const BASELINE_FILE = path.join(__dirname, 'i18n-hardcoded-baseline.json');
+
+export function countPolishOutsideT(source) {
+  let count = 0;
+  let inBlockComment = false;
+  for (const rawLine of source.split('\n')) {
+    let line = rawLine;
+    if (inBlockComment) {
+      const end = line.indexOf('*/');
+      if (end === -1) continue;
+      line = line.slice(end + 2);
+      inBlockComment = false;
+    }
+    line = line.replace(/\/\*.*?\*\//g, '').replace(/\{\/\*.*?\*\/\}/g, '');
+    const blockStart = line.indexOf('/*');
+    if (blockStart !== -1) {
+      inBlockComment = true;
+      line = line.slice(0, blockStart);
+    }
+    const trimmed = line.trim();
+    if (trimmed.startsWith('//') || trimmed.startsWith('*')) continue;
+    line = line.replace(/(^|[^:])\/\/.*$/, '$1');
+    line = line.replace(/\bt\(\s*(['"`])(?:\\.|(?!\1)[^\\])*?\1/g, 't(');
+    if (POLISH_RE.test(line)) count++;
+  }
+  return count;
+}
+
+const hardcodedPolish = {};
+for (const file of files.filter(f => f.endsWith('.jsx'))) {
+  const n = countPolishOutsideT(fs.readFileSync(file, 'utf8'));
+  if (n > 0) hardcodedPolish[path.relative(SRC_DIR, file)] = n;
+}
+const totalHardcodedPolish = Object.values(hardcodedPolish).reduce((a, b) => a + b, 0);
+
+if (process.argv.includes('--update-baseline')) {
+  fs.writeFileSync(BASELINE_FILE, JSON.stringify(hardcodedPolish, null, 2) + '\n');
+  console.log(`✏️  Baseline written: ${totalHardcodedPolish} lines of Polish outside t().`);
+}
+const baseline = fs.existsSync(BASELINE_FILE) ? JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8')) : {};
+const grown = Object.entries(hardcodedPolish)
+  .filter(([file, n]) => n > (baseline[file] || 0))
+  .map(([file, n]) => ({ file, n, was: baseline[file] || 0 }));
+
+console.log(`ℹ️  ${totalHardcodedPolish} JSX lines carry Polish text outside t() (baseline ${Object.values(baseline).reduce((a, b) => a + b, 0)}).`);
+if (grown.length) {
+  console.log('❌ NEW Polish text outside t() - wrap it in t() and add the translation:');
+  grown.forEach(g => console.log(`     ${g.file}: ${g.n} lines (baseline ${g.was})`));
+  console.log('   (after translating existing text, run "npm run check-i18n -- --update-baseline")');
+}
+console.log('');
+
 if (missing.length === 0) {
+  if (grown.length) process.exit(1);
   console.log('✅ Every t() text has a translation. The English version is complete.');
   process.exit(0);
 }

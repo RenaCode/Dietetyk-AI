@@ -58,3 +58,31 @@ test('bar height scales linearly and never divides by zero', () => {
   assert.equal(barHeight(0, 0, 65), 0);
   assert.ok(Number.isFinite(barHeight(5, 0, 65)));
 });
+
+// S5 (audit 2026-10-09): the weight chart's scale started at 1, so 81-83 kg was a flat line.
+import { lineChartScale } from './chart.js';
+
+test('a weight scale spans the data, not 1..110', () => {
+  const { min, max, ticks } = lineChartScale([81.2, 82.0, 82.9], [80, 95, 110], { fromData: true });
+  assert.ok(min > 79 && min < 81.2, `min ${min}`);
+  assert.ok(max > 82.9 && max < 85, `max ${max}`);
+  assert.ok(ticks.every(t => t >= min && t <= max), 'ticks lie inside the scale');
+  // A 1.7 kg range now fills most of the chart height instead of ~2% of it.
+  assert.ok((82.9 - 81.2) / (max - min) > 0.5);
+});
+
+test('a perfectly flat week still has a usable range', () => {
+  const { min, max } = lineChartScale([80, 80, 80], [80, 95, 110], { fromData: true });
+  assert.ok(max - min >= 2);
+});
+
+test('0-100 scores keep their fixed axis', () => {
+  const { min, max, ticks } = lineChartScale([72, 80], [0, 50, 100]);
+  assert.equal(min, 0);
+  assert.equal(max, 100);
+  assert.deepEqual(ticks, [0, 50, 100]);
+});
+
+test('no data falls back to the fixed ticks', () => {
+  assert.deepEqual(lineChartScale([null, undefined], [80, 95, 110], { fromData: true }).ticks, [80, 95, 110]);
+});

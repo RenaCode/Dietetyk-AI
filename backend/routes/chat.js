@@ -8,7 +8,7 @@ const { escapeUserInputTag } = require('../utils/mealSanitize');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
 const { buildAppleHealthPromptContext, buildAppleHealthPeriodContext } = require('../utils/appleHealthPrompt');
 const { generateContentWithFallback } = require('../config');
-const { getTargetCalories, getBmr, getTargetWaterMl } = require('../utils/defaultSettings');
+const { getBmr, userGoal, goalText } = require('../utils/defaultSettings');
 const { decrypt } = require('../utils/encryption');
 const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/weatherContext');
 const {
@@ -21,8 +21,17 @@ const {
 
 router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
   const { message, date, history } = req.body;
-  if (!message || !message.trim()) {
+  // Shape checks BEFORE anything calls a string method (audit 2026-10-09, S6). `message.trim()`
+  // on a number or an array threw outside the try below; Express 4 does not catch a rejected
+  // async handler, so the request hung with no response at all while still counting against
+  // the AI rate limit. A malformed history entry reached `.text.trim()` inside the try and
+  // came back as a 500 blaming the AI.
+  if (typeof message !== 'string' || !message.trim()) {
     return res.status(400).json({ error: 'Treść wiadomości jest wymagana.' });
+  }
+  if (history !== undefined && history !== null && (!Array.isArray(history)
+      || history.some(h => !h || typeof h !== 'object' || typeof h.text !== 'string' || (h.sender !== undefined && typeof h.sender !== 'string')))) {
+    return res.status(400).json({ error: 'Nieprawidłowy format historii rozmowy.' });
   }
   if (message.length > MAX_CHAT_MESSAGE_LENGTH) {
     return res.status(400).json({ error: `Wiadomość jest zbyt długa (maks. ${MAX_CHAT_MESSAGE_LENGTH} znaków).` });
@@ -47,7 +56,11 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
       settings[r.key] = Number(r.value);
     });
 
+    // The balance needs SOME burn figure, so the default stays in the arithmetic - but the
+    // prompt says when it is a default rather than the user's BMR (S2), so the model does not
+    // present 1800 kcal to the user as theirs.
     const bmr = getBmr(settings);
+    const bmrIsSet = userGoal(settings, 'bmr') !== null;
 
     // Fetch today's health data
     const health = await db.get(`SELECT * FROM health_metrics WHERE user_id = ? AND date = ?`, [req.user.id, queryDate]) || getDefaultHealthMetrics();
@@ -270,9 +283,9 @@ You are helping user ${displayName} optimize their diet, recovery, sleep, and wo
 You can also answer workout questions: what workouts to add, what exercises to perform, and how to build strength progression. Base these recommendations on the available data (types and frequency of workouts, their duration and intensity by heart rate, readiness/recovery score, sleep, weight trends, and body measurements) and general strength training principles (load progression, volume, frequency, form, role of protein, and recovery). The app DOES NOT log detailed series/reps/weights for specific exercises - if the user asks for something requiring such data (e.g., "is my bench press weight increasing"), clearly note this limitation and suggest how they can track such progress independently.
 
 User Profile and Goals:
-- Target daily calorie intake: ${getTargetCalories(settings)} kcal
-- Target macronutrients: Protein: ${settings.target_protein ?? 150}g, Carbs: ${settings.target_carbs ?? 250}g, Fat: ${settings.target_fat ?? 80}g
-- BMR (Basal Metabolic Rate): ${bmr} kcal
+- Target daily calorie intake: ${goalText(userGoal(settings, 'target_calories'), ' kcal', 'en')}
+- Target macronutrients: Protein: ${goalText(userGoal(settings, 'target_protein'), 'g', 'en')}, Carbs: ${goalText(userGoal(settings, 'target_carbs'), 'g', 'en')}, Fat: ${goalText(userGoal(settings, 'target_fat'), 'g', 'en')}
+- BMR (Basal Metabolic Rate): ${bmrIsSet ? `${bmr} kcal` : `not set by the user - ${bmr} kcal assumed for the balance below, an approximation`}
 - User body goal description: ${bodyGoalText || 'not described in Settings'}
 
 Current User Stats for ${queryDate}:
@@ -298,7 +311,7 @@ Current User Stats for ${queryDate}:
 - Sleep Score: ${health.sleep_score !== null ? health.sleep_score : 'no data'} (Duration: ${health.sleep_duration || 0}h, Deep: ${health.sleep_deep || 0}h, REM: ${health.sleep_rem || 0}h)
 - Readiness Score: ${health.readiness_score !== null ? health.readiness_score : 'no data'}
 - Resting Heart Rate (RHR): ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms
-- Water intake: ${health.water_ml || 0}ml (target: ${getTargetWaterMl(settings)}ml)
+- Water intake: ${health.water_ml || 0}ml (target: ${goalText(userGoal(settings, 'target_water_ml'), 'ml', 'en')})
 - Subjective state (user rating, scale 1-5): Energy: ${health.energy_level != null ? health.energy_level + '/5' : 'not rated'}, Mood: ${health.mood != null ? health.mood + '/5' : 'not rated'}${appleExtrasLine ? '\n' + appleExtrasLine : ''}
 
 Current time and weather (context, not a user-provided metric):
@@ -316,9 +329,9 @@ Pomagasz użytkownikowi ${displayName} w optymalizacji jego diety, regeneracji, 
 Możesz też odpowiadać na pytania o trening: co dodać treningowo, jakie ćwiczenia wykonywać i jak budować progres siłowy - opieraj takie porady na dostępnych danych (typy i częstotliwość treningów, ich długość i intensywność wg tętna, wskaźnik gotowości/regeneracji, sen, trend wagi i obwodów ciała) oraz na ogólnej wiedzy o treningu siłowym (progresja obciążeń, objętość, częstotliwość, technika, rola białka i regeneracji). Aplikacja NIE rejestruje szczegółowego dziennika serii/powtórzeń/ciężarów na konkretnych ćwiczeniach - jeśli użytkownik pyta o coś, co wymagałoby takich danych (np. "czy mój ciężar na wyciskaniu rośnie"), jasno zaznacz ten brak i zaproponuj, jak samodzielnie śledzić taki progres.
 
 Informacje o profilu i celach użytkownika:
-- Cel kaloryczny spożycia: ${getTargetCalories(settings)} kcal
-- Cel makroskładników: Białko: ${settings.target_protein ?? 150}g, Węglowodany: ${settings.target_carbs ?? 250}g, Tłuszcz: ${settings.target_fat ?? 80}g
-- BMR (Podstawowa Przemiana Materii): ${bmr} kcal
+- Cel kaloryczny spożycia: ${goalText(userGoal(settings, 'target_calories'), ' kcal')}
+- Cel makroskładników: Białko: ${goalText(userGoal(settings, 'target_protein'), 'g')}, Węglowodany: ${goalText(userGoal(settings, 'target_carbs'), 'g')}, Tłuszcz: ${goalText(userGoal(settings, 'target_fat'), 'g')}
+- BMR (Podstawowa Przemiana Materii): ${bmrIsSet ? `${bmr} kcal` : `nieustawiony przez użytkownika - do bilansu poniżej przyjęto ${bmr} kcal jako przybliżenie`}
 - Cel sylwetki opisany przez użytkownika: ${bodyGoalText || 'nie opisany w Ustawieniach'}
 
 Aktualne statystyki użytkownika na dzień ${queryDate}:
@@ -344,7 +357,7 @@ Aktualne statystyki użytkownika na dzień ${queryDate}:
 - Wynik Snu: ${health.sleep_score !== null ? health.sleep_score : 'brak danych'} (Czas: ${health.sleep_duration || 0}h, Głęboki: ${health.sleep_deep || 0}h, REM: ${health.sleep_rem || 0}h)
 - Wynik Gotowości (Readiness): ${health.readiness_score !== null ? health.readiness_score : 'brak danych'}
 - Tętno spoczynkowe: ${health.rhr || '-'} bpm, HRV: ${health.hrv || '-'} ms
-- Wypita woda: ${health.water_ml || 0}ml (cel: ${getTargetWaterMl(settings)}ml)
+- Wypita woda: ${health.water_ml || 0}ml (cel: ${goalText(userGoal(settings, 'target_water_ml'), 'ml')})
 - Samopoczucie (ręczna ocena użytkownika, skala 1-5): Energia: ${health.energy_level != null ? health.energy_level + '/5' : 'nie oceniono'}, Nastrój: ${health.mood != null ? health.mood + '/5' : 'nie oceniono'}${appleExtrasLine ? '\n' + appleExtrasLine : ''}
 
 Aktualny czas i pogoda (kontekst, nie metryka wpisana przez użytkownika):

@@ -20,3 +20,22 @@ export function formatHoursMins(hoursDecimal) {
   }
   return `${hours}h ${mins}m`;
 }
+
+// The clock time a meal was logged at, as HH:MM. The backend stores meal timestamps as
+// "YYYY-MM-DD HH:MM:SS" Warsaw wall-clock text, so the time is cut out of the string rather
+// than parsed: new Date() would read that text in the BROWSER's timezone and shift it for
+// anyone not on Polish time. Anything else (an ISO string from an older entry) falls back
+// to the browser's formatting. Shared by the meal log and the dashboard's meal tiles.
+export function formatMealTime(timestampStr) {
+  if (!timestampStr) return '';
+  try {
+    const parts = timestampStr.split(' ');
+    if (parts.length >= 2) {
+      return parts[1].substring(0, 5);
+    }
+    const d = new Date(timestampStr);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch (e) {
+    return '';
+  }
+}

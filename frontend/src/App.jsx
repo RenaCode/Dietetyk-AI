@@ -9,6 +9,7 @@ import SummaryUnavailable from './components/SummaryUnavailable';
 import { t, setLanguage, getLanguage } from './utils/i18n';
 import { getWarsawDateString } from './utils/dates';
 import { parseGoogleReturn } from './utils/googleReturn';
+import { NavIcon, LogoMark } from './components/NavIcons';
 
 // Today's date in YYYY-MM-DD, in the timezone the BACKEND uses (Europe/Warsaw).
 //
@@ -1274,81 +1275,90 @@ export default function App() {
     );
   }
 
+  // Tabs of the main navigation. One list feeds both layouts: the text bar in the header on
+  // wide screens and the icon bar pinned to the bottom of the screen on phones - it is the
+  // SAME <nav> restyled by CSS, not a second copy, so there is only ever one .nav-tab per
+  // tab (the e2e tests and screen readers both rely on that). `short` is the caption under
+  // the icon in the phone bar, where ~60px per tab cannot hold "Dziennik posiłków"; the full
+  // label stays in the button for assistive technology (see .nav-tab-label in index.css).
+  const navTabs = [
+    { id: 'dashboard', label: t('Dashboard'), short: t('Pulpit'), icon: 'dashboard' },
+    { id: 'meals', label: t('Dziennik posiłków'), short: t('Posiłki'), icon: 'meals' },
+    { id: 'trends', label: t('Trendy'), short: t('Trendy'), icon: 'trends' },
+    { id: 'activity', label: t('Aktywność'), short: t('Ruch'), icon: 'activity' },
+    { id: 'setup', label: t('Ustawienia'), short: t('Profil'), icon: 'settings' },
+    ...(userProfile.role === 'admin' ? [{ id: 'admin', label: t('Panel Admina'), short: t('Admin'), icon: 'admin' }] : [])
+  ];
+  // Shortcuts in the narrow rail on the left (wide screens only): the three places a user
+  // goes to while eating - log a meal, look at the trend, change goals/profile.
+  const railTabs = [
+    { id: 'meals', label: t('Dziennik posiłków'), short: t('Posiłki'), icon: 'meals' },
+    { id: 'trends', label: t('Trendy'), icon: 'trends' },
+    { id: 'setup', label: t('Ustawienia'), icon: 'settings' }
+  ];
+
   return (
     <div className="app-container">
-      <header>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-          <div className="logo-container">
-            <span className="logo-icon">🥗</span>
-            <div>
-              <span className="logo-text">Dietetyk AI</span>
-              <span className="logo-badge">Gemini AI</span>
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 12px', background: 'rgba(255, 255, 255, 0.05)', borderRadius: '20px', border: '1px solid var(--border-glass)' }}>
-            {userProfile.avatar_base64 ? (
-              <img src={userProfile.avatar_base64} alt="Avatar" style={{ width: '24px', height: '24px', borderRadius: '50%', objectFit: 'cover' }} />
-            ) : (
-              <div style={{ width: '24px', height: '24px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--primary-color), var(--primary-hover))', color: '#fff', display: 'flex', justifyContent: 'center', alignItems: 'center', fontWeight: 'bold', fontSize: '0.8rem' }}>
-                {userProfile.username ? userProfile.username[0].toUpperCase() : '?'}
-              </div>
-            )}
-            <span style={{ fontSize: '0.85rem', color: 'var(--text-main)', fontWeight: 500 }}>{userProfile.username}</span>
-          </div>
+      <div className="app-frame">
+      <header className="app-header">
+        <div className="logo-container">
+          <LogoMark />
+          <span className="logo-text">Dietetyk <span className="logo-text-ai">AI</span></span>
         </div>
 
-        <nav className="nav-tabs">
-          <button
-            className={`nav-tab ${currentTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setCurrentTab('dashboard')}
-          >
-            {t("Dashboard")}
-          </button>
-          <button
-            className={`nav-tab ${currentTab === 'meals' ? 'active' : ''}`}
-            onClick={() => setCurrentTab('meals')}
-          >
-            {t("Dziennik posiłków")}
-          </button>
-          <button
-            className={`nav-tab ${currentTab === 'trends' ? 'active' : ''}`}
-            onClick={() => setCurrentTab('trends')}
-          >
-            {t("Trendy")}
-          </button>
-          <button
-            className={`nav-tab ${currentTab === 'activity' ? 'active' : ''}`}
-            onClick={() => setCurrentTab('activity')}
-          >
-            {t("Aktywność")}
-          </button>
-          <button
-            className={`nav-tab ${currentTab === 'setup' ? 'active' : ''}`}
-            onClick={() => setCurrentTab('setup')}
-          >
-            {t("Ustawienia")}
-          </button>
-          {userProfile.role === 'admin' && (
+        <nav className="nav-tabs" aria-label={t("Nawigacja główna")}>
+          {navTabs.map((tab) => (
             <button
-              className={`nav-tab ${currentTab === 'admin' ? 'active' : ''}`}
-              onClick={() => setCurrentTab('admin')}
+              key={tab.id}
+              className={`nav-tab ${currentTab === tab.id ? 'active' : ''}`}
+              aria-current={currentTab === tab.id ? 'page' : undefined}
+              onClick={() => setCurrentTab(tab.id)}
             >
-              {t("Panel Admina")}
+              <span className="nav-tab-icon"><NavIcon name={tab.icon} /></span>
+              <span className="nav-tab-label">{tab.label}</span>
+              <span className="nav-tab-short" aria-hidden="true">{tab.short}</span>
             </button>
-          )}
-          <button
-            className="nav-tab"
-            onClick={handleLogout}
-            style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#f87171', border: '1px solid rgba(239, 68, 68, 0.15)' }}
-          >
-            {t("Wyloguj")}
-          </button>
+          ))}
         </nav>
+
+        <div className="header-user">
+          <div className="user-chip">
+            {userProfile.avatar_base64 ? (
+              <img src={userProfile.avatar_base64} alt="" className="user-chip-avatar" />
+            ) : (
+              <span className="user-chip-avatar user-chip-initial" aria-hidden="true">
+                {userProfile.username ? userProfile.username[0].toUpperCase() : '?'}
+              </span>
+            )}
+            <span className="user-chip-name">{userProfile.username}</span>
+          </div>
+          <button type="button" className="logout-btn" onClick={handleLogout}>
+            <NavIcon name="logout" size={18} />
+            <span>{t("Wyloguj")}</span>
+          </button>
+        </div>
       </header>
 
+      <div className="app-body">
+      <nav className="app-rail" aria-label={t("Skróty")}>
+        {railTabs.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            className={`rail-btn ${currentTab === tab.id ? 'active' : ''}`}
+            aria-label={tab.label}
+            title={tab.label}
+            aria-current={currentTab === tab.id ? 'page' : undefined}
+            onClick={() => setCurrentTab(tab.id)}
+          >
+            <NavIcon name={tab.icon} size={22} />
+          </button>
+        ))}
+      </nav>
+
+      <div className="app-content">
       {/* Global controls: date and errors */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="app-toolbar">
         <div className="date-selector">
           <span>{t("Dzień:")}</span>
           <input
@@ -1360,7 +1370,7 @@ export default function App() {
           />
         </div>
 
-        {isLoading && <div style={{ fontSize: '0.9rem', color: 'var(--text-dim)' }}>Aktualizowanie danych...</div>}
+        {isLoading && <div className="app-toolbar-status" role="status">Aktualizowanie danych...</div>}
       </div>
 
       {errorMessage && (
@@ -1384,7 +1394,7 @@ export default function App() {
                 at the single point where the component is mounted - that way no code path
                 inside it can reach for a value the backend never sent. */}
             {dashboardData.summary
-              ? <Dashboard summary={dashboardData.summary} aiAdvice={dashboardData.aiAdvice} sessionToken={sessionToken} selectedDate={selectedDate} onNavigate={setCurrentTab} onRefresh={fetchDashboardData} onLogout={handleLogout} userProfile={userProfile} language={appLang} />
+              ? <Dashboard summary={dashboardData.summary} aiAdvice={dashboardData.aiAdvice} meals={dashboardData.meals} sessionToken={sessionToken} selectedDate={selectedDate} onNavigate={setCurrentTab} onRefresh={fetchDashboardData} onLogout={handleLogout} userProfile={userProfile} language={appLang} />
               : <SummaryUnavailable hasFailed={dashboardLoadFailed} onRetry={fetchDashboardData} />}
           </div>
         )}
@@ -1432,12 +1442,13 @@ export default function App() {
           </div>
         )}
       </main>
+      </div>
+      </div>
+      </div>
 
       {/* Footer inside the application */}
-      <footer>
-        <div style={{ textAlign: 'center', marginTop: '40px', padding: '20px 0', borderTop: '1px solid var(--border-glass)' }}>
-          <AppFooter />
-        </div>
+      <footer className="app-footer">
+        <AppFooter />
       </footer>
     </div>
   );

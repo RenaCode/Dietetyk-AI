@@ -6,6 +6,8 @@ import { useInsights } from '../utils/useInsights';
 import { getWarsawDateString } from '../utils/dates';
 import AppleHealthMetricsCard from './AppleHealthMetricsCard';
 import AppleHealthEventsCard from './AppleHealthEventsCard';
+import { CalorieRingCard, MacroCard, TodayMealsCard } from './DashboardHero';
+import { NavIcon } from './NavIcons';
 
 // Insights are fetched with ONE batched request (/api/dashboard/insights).
 // Previously each of them had its own useEffect and its own fetch - opening the
@@ -276,7 +278,7 @@ const getLast7Days = (endDateStr) => {
   return days;
 };
 
-export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDate, onNavigate, onRefresh, onLogout, userProfile = {}, language = 'pl' }) {
+export default function Dashboard({ summary, aiAdvice, meals = [], sessionToken, selectedDate, onNavigate, onRefresh, onLogout, userProfile = {}, language = 'pl' }) {
   const [historyData, setHistoryData] = useState([]);
 // Set when /api/health/history could not be read. Without it a 503 left historyData as []
 // and the body-composition card told the user "Brak danych - zsynchronizuj wagę z
@@ -1032,29 +1034,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   const hrZone4Max = Math.round(hrReserve * 0.9 + rhrForZones);
   const hrZone5Min = Math.round(hrReserve * 0.9 + rhrForZones);
   
-  // Nutrition
-  // We use ?? (not ||), because a goal deliberately set to 0 (an elimination diet for one
-  // macronutrient, say) should not be overwritten with a default - the same bug pattern
-  // already fixed earlier for target_steps/target_active_calories/etc.
-  const targetCalories = summary.target_calories ?? 2000;
-  const eatenCalories = summary.calories_eaten || 0;
-  const targetProtein = summary.target_protein ?? 150;
-  const targetCarbs = summary.target_carbs ?? 250;
-  const targetFat = summary.target_fat ?? 80;
-  const eatenProtein = summary.eaten_protein || 0;
-  const eatenCarbs = summary.eaten_carbs || 0;
-  const eatenFat = summary.eaten_fat || 0;
-  // FIX (audit round 17): previously the bar fill percentages computed
-  // `eatenX / (targetX || 2000)` and so on - `||` again overwrote a deliberately stored 0
-  // (a disabled or zeroed goal) with a default, even though targetX is already computed
-  // correctly with `??` above. On top of that, dividing by 0 (had goal=0 reached the division
-  // directly) would give Infinity/NaN. The guard follows the waterPct pattern: goal<=0 ->
-  // percentage 0, no division by zero.
-  const caloriesPct = targetCalories > 0 ? Math.min((eatenCalories / targetCalories) * 100, 100) : 0;
-  const carbsPct = targetCarbs > 0 ? Math.min((eatenCarbs / targetCarbs) * 100, 100) : 0;
-  const proteinPct = targetProtein > 0 ? Math.min((eatenProtein / targetProtein) * 100, 100) : 0;
-  const fatPct = targetFat > 0 ? Math.min((eatenFat / targetFat) * 100, 100) : 0;
-
   // Licznik wody
   const waterMl = summary.water_ml || 0;
   // FIX (audit round 4): as above - `??` preserves a deliberately stored 0 (goal switched
@@ -1165,6 +1144,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 
   // State for the built-in chat with the Dietetyk AI assistant
   const [isChatOpen, setIsChatOpen] = useState(false);
+// The advice card sits in the dashboard's first screen next to the calorie ring, so a long
+// answer (Gemini's "## Analiza / ## Rekomendacje" runs to a dozen lines) is clamped there and
+// opened on request instead of pushing the meals below the fold on a phone.
+  const [isAdviceExpanded, setIsAdviceExpanded] = useState(false);
+  const isAdviceLong = typeof aiAdvice === 'string' && aiAdvice.length > 280;
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState([
     { sender: 'ai', text: t('Cześć! Jestem Twoim inteligentnym asystentem w aplikacji Dietetyk AI. Przeanalizowałem Twoje dzisiejsze wyniki gotowości (Readiness), snu oraz treningów. W czym mogę Ci pomóc w kontekście diety lub obciążenia treningowego?') }
@@ -1377,8 +1361,20 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         </div>
       )}
 
+      {/* HERO: calories, macros, AI advice and the day's meals - the four things a user
+          checks while eating. Real values only; see DashboardHero.jsx for the no-goal rule. */}
+      <div className="dash-hero">
+      <CalorieRingCard summary={summary} selectedDate={selectedDate} language={language} />
+      <MacroCard summary={summary} language={language} />
+
       {/* AI RECOVERY HEADER */}
       <div className="dietetyk-ai-banner" style={{ boxShadow: getReadinessColor(), border: getReadinessBorder() }}>
+        <div className="hero-card-head">
+          <h3 className="hero-card-title">
+            <span className="hero-card-icon" aria-hidden="true"><NavIcon name="insights" size={18} /></span>
+            {t('Wskazówki AI')}
+          </h3>
+        </div>
         <div className="premium-title-row">
           <span className="dietetyk-greeting">
             {userProfile?.first_name
@@ -1393,7 +1389,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
         </div>
         {aiAdvice && aiAdvice.length > 30 ? (
           <div
-            className="dietetyk-ai-advice-text"
+            id="dietetyk-ai-advice"
+            className={`dietetyk-ai-advice-text${isAdviceLong && !isAdviceExpanded ? ' is-clamped' : ''}`}
             dangerouslySetInnerHTML={{ __html: renderAdviceMarkdown(aiAdvice) }}
           />
         ) : (
@@ -1402,9 +1399,25 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             {`Twoja regeneracja trzyma stabilny poziom (${readinessScore}%). HRV wynosi ${hrv != null ? hrv + ' ms' : '(brak danych)'} i mieści się w normie, więc organizm nie protestuje przeciwko aktywności. Dobrym wyborem będzie lekki tlenowy wysiłek kardio lub sesja mobility.`}
           </p>
         )}
-        <button className="btn-dietetyk-ask" onClick={() => setIsChatOpen(true)}>
-          ✨ Zapytaj agenta
-        </button>
+        <div className="dietetyk-ai-actions">
+          {isAdviceLong && (
+            <button
+              type="button"
+              className="btn-secondary btn-advice-toggle"
+              aria-expanded={isAdviceExpanded}
+              aria-controls="dietetyk-ai-advice"
+              onClick={() => setIsAdviceExpanded(v => !v)}
+            >
+              {isAdviceExpanded ? t('Zwiń') : t('Pokaż całą poradę')}
+            </button>
+          )}
+          <button className="btn-dietetyk-ask" onClick={() => setIsChatOpen(true)}>
+            ✨ Zapytaj agenta
+          </button>
+        </div>
+      </div>
+
+      <TodayMealsCard meals={meals} selectedDate={selectedDate} onOpenMeals={() => onNavigate && onNavigate('meals')} />
       </div>
 
       {/* SYNC STATUS - data that had long been collected (last_sync, activity_source)
@@ -4070,77 +4083,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
       </div>
 
       <div className="dashboard-column">
-        {/* NUTRITION */}
-        <div className="premium-card">
-          <div className="premium-title-row">
-            <span className="premium-title">{t("Odżywianie")}</span>
-            <span className="premium-title-info">▶</span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '24px', margin: '8px 0' }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-              <div style={{ position: 'relative', width: 92, height: 92, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {/* Calories circular gauge */}
-                <RenderProgressCircle size={92} strokeWidth={8} percentage={caloriesPct} color="var(--color-secondary)" />
-                <div style={{ position: 'absolute', textAlign: 'center' }}>
-                  <div style={{ fontSize: '1.25rem', fontWeight: '800', color: '#fff', lineHeight: 1 }}>
-                    {eatenCalories}
-                  </div>
-                  <div style={{ fontSize: '0.65rem', color: 'rgba(255, 255, 255, 0.4)', textTransform: 'uppercase', marginTop: '2px' }}>
-                    cals
-                  </div>
-                </div>
-              </div>
-              {/* Net calorie balance (eaten - burned) - data from summary.net_calories,
-                  computed in dashboard.js. Colour: red = a surplus of >200 kcal (bulking),
-                  green = a deficit of < -200 kcal (cutting), yellow = balance (+/-200 kcal). */}
-              {summary.net_calories != null && (
-                <div style={{ fontSize: '0.7rem', textAlign: 'center', lineHeight: 1.3 }}>
-                  <span style={{ color: 'rgba(255,255,255,0.4)' }}>netto </span>
-                  <strong style={{
-                    color: summary.net_calories > 200 ? '#f87171'
-                      : summary.net_calories < -200 ? '#34d399'
-                      : '#fbbf24'
-                  }}>
-                    {summary.net_calories > 0 ? '+' : ''}{Math.round(summary.net_calories)} kcal
-                  </strong>
-                </div>
-              )}
-            </div>
-
-            {/* Macronutrients Progress Bars */}
-            <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '2px' }}>
-                  <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>{t("Węglowodany")}</span>
-                  <span style={{ fontWeight: '700' }}>{Math.round(eatenCarbs)}g / {targetCarbs}g</span>
-                </div>
-                <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', background: '#06b6d4', width: `${carbsPct}%` }}></div>
-                </div>
-              </div>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '2px' }}>
-                  <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>{t("Białko")}</span>
-                  <span style={{ fontWeight: '700' }}>{Math.round(eatenProtein)}g / {targetProtein}g</span>
-                </div>
-                <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', background: '#7c3aed', width: `${proteinPct}%` }}></div>
-                </div>
-              </div>
-              <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', marginBottom: '2px' }}>
-                  <span style={{ color: 'rgba(255, 255, 255, 0.6)' }}>{t("Tłuszcz")}</span>
-                  <span style={{ fontWeight: '700' }}>{Math.round(eatenFat)}g / {targetFat}g</span>
-                </div>
-                <div style={{ height: 4, background: 'rgba(255,255,255,0.05)', borderRadius: 2, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', background: '#fbbf24', width: `${fatPct}%` }}></div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
         {/* WEIGHT AND BODY COMPOSITION */}
         <div className="premium-card">
           <div className="premium-title-row">

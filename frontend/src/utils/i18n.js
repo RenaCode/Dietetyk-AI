@@ -571,6 +571,8 @@ const TRANSLATIONS = {
   "Nie możesz zeskanować kodu? Wpisz w aplikacji ten klucz:": "Cannot scan the code? Enter this key in the app:",
   "Zeskanuj poniższy kod QR w aplikacji Google Authenticator lub Authy, a następnie wpisz wygenerowany 6-cyfrowy kod.": "Scan the QR code below in Google Authenticator or Authy, then enter the 6-digit code it shows.",
   "Kopiuj": "Copy",
+  "cel domyślny - ustaw w Ustawieniach": "default goal - set it in Settings",
+  "Przybliżenie: BMR nieustawiony, przyjęto {bmr} kcal. Ustaw BMR w Ustawieniach.": "Approximation: BMR not set, {bmr} kcal assumed. Set your BMR in Settings.",
   "Skopiowano": "Copied",
   "Konto założone przez Google nie ma znanego hasła. Potwierdź tożsamość przez Google, aby je ustawić - potem możesz też wyłączyć 2FA albo usunąć konto.": "An account created through Google has no known password. Confirm your identity with Google to set one - then you can also turn off 2FA or delete the account.",
   "Błąd eksportu danych.": "Could not export the data.",

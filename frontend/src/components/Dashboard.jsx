@@ -3773,6 +3773,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             <span className="premium-title">💧 Nawodnienie</span>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
               {waterMl.toLocaleString('pl-PL')} / {targetWaterMl.toLocaleString('pl-PL')} ml
+              {/* A default the user never chose - labelled, not shown as their goal (S2). */}
+              {summary.target_water_ml_is_default && (
+                <span data-testid="water-goal-default"> ({t('cel domyślny - ustaw w Ustawieniach')})</span>
+              )}
             </span>
           </div>
 

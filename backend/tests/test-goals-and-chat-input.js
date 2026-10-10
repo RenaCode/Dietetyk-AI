@@ -130,6 +130,10 @@ async function run() {
     prompts.length = 0;
     const dash = await fetch(`${baseUrl}/api/dashboard`, { headers: { Authorization: `Bearer ${advToken}` } });
     assert(dash.status === 200, `the dashboard answers (got ${dash.status})`);
+    // ...and the numbers the dashboard itself shows say which goals are defaults (S2, round 2).
+    const summary = (await dash.clone().json()).summary || {};
+    assert(summary.target_water_ml_is_default === true, 'the 2500 ml water goal is flagged as a default');
+    assert(summary.bmr_is_default === true && summary.calories_burned_is_estimate === true, 'the BMR-based burn and balance are flagged as an approximation');
     // The advice is generated in the background; wait for the prompt to reach the stub.
     for (let i = 0; i < 50 && !prompts.some(p => /Cel kaloryczny spożycia/.test(p)); i++) {
       await new Promise(r => setTimeout(r, 100));
@@ -140,6 +144,12 @@ async function run() {
     assert(!/Cel kaloryczny spożycia: 2500 kcal/.test(advice), 'not 2500 kcal');
     assert(/cel: brak celu/.test(advice) && !/cel: 2500ml/.test(advice), 'and the water goal is not 2500 ml');
     assert(/BMR[^\n]*nieustawiony/.test(advice), 'an unset BMR is labelled as an approximation');
+
+    await db.run(`INSERT INTO settings (user_id, key, value) VALUES (?, 'bmr', '1500'), (?, 'target_water_ml', '2000')`, [advUser, advUser]);
+    const dash2 = await fetch(`${baseUrl}/api/dashboard`, { headers: { Authorization: `Bearer ${advToken}` } });
+    const summary2 = (await dash2.json()).summary || {};
+    assert(summary2.target_water_ml === 2000 && summary2.target_water_ml_is_default === false, 'a water goal the user set is not flagged');
+    assert(summary2.bmr_is_default === false && summary2.calories_burned_is_estimate === false, 'nor a BMR the user set');
   } finally {
     server.close();
   }

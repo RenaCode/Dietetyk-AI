@@ -965,6 +965,14 @@ Używaj **pogrubienia** dla kluczowych liczb i fraz w Analizie i Rekomendacjach.
         target_sleep_duration: (settings.target_sleep_duration === undefined || isNaN(settings.target_sleep_duration)) ? 7.2 : settings.target_sleep_duration,
         target_active_minutes: (settings.target_active_minutes === undefined || isNaN(settings.target_active_minutes)) ? 30 : settings.target_active_minutes,
         target_water_ml: getTargetWaterMl(settings),
+        // The water target and BMR above still carry the defaults when the user set none
+        // (2500 ml, 1800 kcal) - the progress bar and the balance need SOME number. These flags
+        // say which ones are defaults, so the dashboard labels them instead of presenting them
+        // as the user's own (S2, audit round 2). `calories_burned_is_estimate`: the total burn
+        // (and so the net balance) rests on a default BMR, with no device-measured total.
+        target_water_ml_is_default: userGoal(settings, 'target_water_ml') === null,
+        bmr_is_default: userGoal(settings, 'bmr') === null,
+        calories_burned_is_estimate: !displayTotalCaloriesBurned && userGoal(settings, 'bmr') === null,
         // Cel wagowy (kg) - pole opcjonalne (0 = brak ustawionego celu), używane
         // przez ActivityTracker.jsx do prognozy "do celu" (regresja liniowa).
         // Bez wpisania tu nie wracałoby z /api/dashboard mimo zapisania w

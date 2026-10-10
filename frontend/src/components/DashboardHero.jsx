@@ -114,8 +114,14 @@ function CalorieRingCard({ summary, selectedDate, language }) {
         <p className="calorie-ring-net">
           {t('Bilans netto')}{' '}
           <strong className={summary.net_calories > 200 ? 'is-surplus' : summary.net_calories < -200 ? 'is-deficit' : 'is-even'}>
-            {summary.net_calories > 0 ? '+' : ''}{formatNumber(summary.net_calories, language)} kcal
+            {summary.calories_burned_is_estimate ? '≈' : ''}{summary.net_calories > 0 ? '+' : ''}{formatNumber(summary.net_calories, language)} kcal
           </strong>
+          {/* The burn behind this balance uses a default BMR, not the user's (S2). */}
+          {summary.calories_burned_is_estimate && (
+            <span data-testid="bmr-default-note" style={{ display: 'block', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+              {t('Przybliżenie: BMR nieustawiony, przyjęto {bmr} kcal. Ustaw BMR w Ustawieniach.', { bmr: summary.bmr })}
+            </span>
+          )}
         </p>
       )}
     </section>

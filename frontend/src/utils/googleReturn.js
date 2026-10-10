@@ -17,3 +17,18 @@ export function parseGoogleReturn(hash, search) {
   if (error) return { error };
   return null;
 }
+
+// The tab a `?tab=` parameter opens, or null to stay where the app is (audit round 2, N-S2).
+// The backend's Google re-authentication and linking flows redirected to `?tab=settings`, but
+// the Settings tab is called `setup` - App.jsx set currentTab to a name no tab renders and the
+// user landed on an empty page with only the date picker, the "set a password" form for a
+// Google-created account out of sight. Old links (and any bookmark) still say `settings`, so
+// that name is mapped; anything else unknown is ignored rather than rendered as nothing.
+export const APP_TABS = ['dashboard', 'meals', 'activity', 'trends', 'setup', 'admin'];
+const LEGACY_TAB_NAMES = { settings: 'setup' };
+
+export function resolveTabParam(tab) {
+  if (!tab) return null;
+  const name = LEGACY_TAB_NAMES[tab] || tab;
+  return APP_TABS.includes(name) ? name : null;
+}

@@ -8,8 +8,9 @@ import Trends from './components/Trends';
 import SummaryUnavailable from './components/SummaryUnavailable';
 import { t, setLanguage, getLanguage } from './utils/i18n';
 import { getWarsawDateString } from './utils/dates';
-import { parseGoogleReturn } from './utils/googleReturn';
+import { parseGoogleReturn, resolveTabParam } from './utils/googleReturn';
 import { newMealSubmission, retryMealSubmission } from './utils/mealSubmission';
+import TotpSecretKey from './components/TotpSecretKey';
 import { NavIcon, LogoMark } from './components/NavIcons';
 
 // Today's date in YYYY-MM-DD, in the timezone the BACKEND uses (Europe/Warsaw).
@@ -49,6 +50,7 @@ export default function App() {
   const [loginStep, setLoginStep] = useState('password'); // 'password', 'setup_2fa', 'require_2fa', 'force_password_change'
   const [tempToken, setTempToken] = useState('');
   const [qrCode, setQrCode] = useState('');
+  const [totpSecret, setTotpSecret] = useState('');
   const [loginError, setLoginError] = useState('');
   const [newPasswordForced, setNewPasswordForced] = useState('');
   const [confirmPasswordForced, setConfirmPasswordForced] = useState('');
@@ -102,6 +104,7 @@ export default function App() {
         } else {
           setTempToken(data.tempToken);
           setQrCode(data.qrCode);
+          setTotpSecret(data.secret || '');
           setLoginStep('setup_2fa');
           setIsPublicRegister(false);
           setRegisterUsernameInput('');
@@ -293,8 +296,10 @@ export default function App() {
       const googleLinkErrorParam = params.get('google_link_error');
       const googleReauthErrorParam = params.get('google_reauth_error');
 
-      if (tabParam) {
-        setCurrentTab(tabParam);
+      // Through resolveTabParam: an unknown name used to become an empty page (N-S2).
+      const tabToOpen = resolveTabParam(tabParam);
+      if (tabToOpen) {
+        setCurrentTab(tabToOpen);
       }
 
 // Return from the flow that links an account with Google (Settings -> "Connect with Google").
@@ -303,7 +308,7 @@ export default function App() {
       if (googleLinkParam === 'success') {
         setSuccessMessage(t('Pomyślnie połączono konto z Google!'));
         setTimeout(() => setSuccessMessage(''), 6000);
-        window.history.replaceState({}, document.title, '/?tab=settings');
+        window.history.replaceState({}, document.title, '/?tab=setup');
         fetchUserProfile();
       } else if (googleReauthErrorParam) {
         // Return from the Google re-authentication that lets a Google-created account set a
@@ -313,7 +318,7 @@ export default function App() {
           ? t('Zalogowano innym kontem Google niż to połączone z tym kontem.')
           : t('Nie udało się potwierdzić tożsamości przez Google.'));
         setTimeout(() => setErrorMessage(''), 6000);
-        window.history.replaceState({}, document.title, '/?tab=settings');
+        window.history.replaceState({}, document.title, '/?tab=setup');
       } else if (googleLinkErrorParam) {
         let msg = t('Nie udało się połączyć konta z Google.');
         if (googleLinkErrorParam === 'already_linked') {
@@ -321,7 +326,7 @@ export default function App() {
         }
         setErrorMessage(msg);
         setTimeout(() => setErrorMessage(''), 6000);
-        window.history.replaceState({}, document.title, '/?tab=settings');
+        window.history.replaceState({}, document.title, '/?tab=setup');
       }
 
       if (successParam === 'oura') {
@@ -424,6 +429,7 @@ export default function App() {
         } else {
           setTempToken(data.tempToken);
           setQrCode(data.qrCode);
+          setTotpSecret(data.secret || '');
           setLoginStep('setup_2fa');
           window.history.replaceState({}, document.title, '/');
           setRegisterToken('');
@@ -745,6 +751,7 @@ export default function App() {
     } else if (data.status === 'setup_2fa') {
       setTempToken(data.tempToken);
       setQrCode(data.qrCode);
+      setTotpSecret(data.secret || '');
       setLoginStep('setup_2fa');
       setTotpCode('');
     } else if (data.status === 'force_password_change') {
@@ -811,6 +818,7 @@ export default function App() {
         } else if (data.status === 'setup_2fa') {
           setTempToken(data.tempToken);
           setQrCode(data.qrCode);
+          setTotpSecret(data.secret || '');
           setLoginStep('setup_2fa');
           setTotpCode('');
         } else {
@@ -1199,12 +1207,13 @@ export default function App() {
                 <form onSubmit={handleVerifySetup2FA} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <h3 style={{ fontSize: '1.1rem', color: 'var(--text-main)', marginBottom: '8px' }}>🔐 Skonfiguruj 2FA</h3>
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', lineHeight: '1.4' }}>
-                    Zeskanuj poniższy kod QR w aplikacji **Google Authenticator** lub **Authy**, a następnie wpisz wygenerowany 6-cyfrowy kod.
+                    {t('Zeskanuj poniższy kod QR w aplikacji Google Authenticator lub Authy, a następnie wpisz wygenerowany 6-cyfrowy kod.')}
                   </p>
                   
                   <div style={{ display: 'flex', justifyContent: 'center', margin: '12px 0' }}>
                     <img src={qrCode} alt="2FA QR" style={{ borderRadius: '12px', border: '1px solid var(--border-glass)', padding: '6px', background: '#fff', width: '180px', height: '180px' }} />
                   </div>
+                  <TotpSecretKey secret={totpSecret} />
 
                   <div className="input-group" style={{ textAlign: 'left' }}>
                     <label className="input-label">6-cyfrowy kod weryfikacyjny</label>

@@ -224,6 +224,15 @@ const initDb = async () => {
   await addColumn("ALTER TABLE users ADD COLUMN email_changed_at TEXT");
   await addColumn("ALTER TABLE users ADD COLUMN email_changed_by_session TEXT");
 
+  // Whether the user KNOWS their password (audit round 2, N-S4). An account created through
+  // "Sign in with Google" gets a random hash nobody knows (routes/auth.js), and the UI asked
+  // it for "your current password" anyway - every attempt failed and counted towards the
+  // lockout. 0 only for those accounts until they set one (set-password, change-password,
+  // forced change set it to 1). Existing rows default to 1: an older Google-created account
+  // cannot be told apart from one that linked Google later, and on production Google sign-in
+  // has been disabled, so treating it as "has a password" is the conservative default.
+  await addColumn("ALTER TABLE users ADD COLUMN password_set INTEGER NOT NULL DEFAULT 1");
+
   // Migration: Google sign-in (a step towards eventually dropping password login)
   await addColumn("ALTER TABLE users ADD COLUMN google_id TEXT");
   await createUniqueIndexWhenDataAllows({

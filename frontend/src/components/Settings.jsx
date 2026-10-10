@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { t } from '../utils/i18n';
 import { EMPTY_SETTINGS_FORM, formFromLoadedSettings, settingsPatch } from '../utils/settingsForm';
+import TotpSecretKey from './TotpSecretKey';
 
 export default function Settings({ syncToken, sessionToken, userProfile = { username: '', avatar_base64: '' }, onProfileUpdate, onLogout, onLanguageChange }) {
   // Starts EMPTY and stays read-only for saving until GET /api/settings succeeds - see
@@ -39,7 +40,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   // set a password it never had (audit 2026-10-09, B-S4).
   const [googleReauthGrant] = useState(() => {
     const grant = new URLSearchParams((window.location.hash || '').replace(/^#/, '')).get('google_reauth');
-    if (grant) window.history.replaceState({}, document.title, '/?tab=settings');
+    if (grant) window.history.replaceState({}, document.title, '/?tab=setup');
     return grant || '';
   });
   const [isPasswordOpen, setIsPasswordOpen] = useState(!!googleReauthGrant);
@@ -813,6 +814,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   const handleDeleteAccount = async (e) => {
     e.preventDefault();
     setDeleteMessage({ type: '', text: '' });
+    if (!requirePasswordOrExplain(setDeleteMessage)) return;
 
     if (!confirm('Czy na pewno chcesz trwale usunąć swoje konto? Tej operacji nie można odwrócić - wszystkie posiłki, ustawienia i historia zdrowotna zostaną usunięte.')) {
       return;
@@ -849,12 +851,24 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
+  // An account created through Google has no password it knows (backend password_set, N-S4):
+  // every place that would ask for "your current password" sends it to "set a password via
+  // Google" instead, so no doomed attempt counts towards the lockout.
+  const hasPassword = userProfile.password_set !== false;
+  const requirePasswordOrExplain = (setMsg) => {
+    if (hasPassword) return true;
+    setMsg({ type: 'error', text: t('To konto zostało założone przez Google i nie ma hasła. Najpierw ustaw hasło przez Google w sekcji „Zmiana hasła”.') });
+    setIsPasswordOpen(true);
+    return false;
+  };
+
   const handleSaveProfile = async (e) => {
     e.preventDefault();
     // Changing the e-mail address needs the current password (backend B-W2): that address
     // receives the summaries with health data, so a session alone must not be able to move it.
     let currentPassword;
     if ((emailInput || '').trim() !== (userProfile.email || '')) {
+      if (!requirePasswordOrExplain(setAvatarMessage)) return;
       currentPassword = prompt(t('Aby zmienić adres e-mail, potwierdź swoje aktualne hasło:'));
       if (!currentPassword) return;
     }
@@ -908,6 +922,17 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   };
 
   const handleSendTestEmail = async (type = 'weekly') => {
+    // To the saved address by default. A different address typed into the field (not saved
+    // yet) needs the password - the backend refuses it otherwise (N-S1): summaries carry
+    // health data, and a session alone must not be able to mail them anywhere.
+    const typed = (emailInput || '').trim();
+    const elsewhere = typed && typed.toLowerCase() !== (userProfile.email || '').toLowerCase();
+    let currentPassword;
+    if (elsewhere) {
+      if (!requirePasswordOrExplain(setAvatarMessage)) return;
+      currentPassword = prompt(t('Wysyłka na inny adres niż zapisany wymaga hasła. Podaj aktualne hasło:'));
+      if (!currentPassword) return;
+    }
     setIsSendingEmail(true);
     setAvatarMessage({ type: '', text: '' });
 
@@ -919,7 +944,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${sessionToken}`
         },
-        body: JSON.stringify({ email: emailInput })
+        body: JSON.stringify(elsewhere ? { email: typed, currentPassword } : {})
       });
 
       if (res.ok) {
@@ -943,6 +968,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   };
 
   const handleSetup2FA = async () => {
+    if (!requirePasswordOrExplain(setTotpMessage)) return;
     // Switching 2FA on needs the password as well (backend B-W2): otherwise a stolen session
     // could enrol its own authenticator and lock the owner out at the next login.
     const password = prompt(t('Aby włączyć 2FA, potwierdź swoje aktualne hasło:'));
@@ -1014,7 +1040,8 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     if (!confirm(t('Czy na pewno chcesz wyłączyć dwuetapową weryfikację (2FA) na swoim koncie? Obniży to bezpieczeństwo profilu.'))) return;
   // The backend now requires re-verification with the current password before disabling 2FA
   // (see backend/routes/account.js) - simply holding an active session is not enough.
-    const password = prompt('Aby wyłączyć 2FA, potwierdź swoje aktualne hasło:');
+    if (!requirePasswordOrExplain(setTotpMessage)) return;
+    const password = prompt(t('Aby wyłączyć 2FA, potwierdź swoje aktualne hasło:'));
     if (!password) return;
     setIsDisabling2fa(true);
     setTotpMessage({ type: '', text: '' });
@@ -1144,12 +1171,18 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     await startOAuthFlow('google_link', { password, code });
   };
 
+  // Needs the password (backend N-S3); an account without one is told to set it first -
+  // unlinking its only way in would lock the owner out for good.
   const handleUnlinkGoogle = async () => {
+    if (!requirePasswordOrExplain(setMessage)) return;
     if (!confirm(t('Czy na pewno chcesz odłączyć konto Google? Logowanie będzie wtedy możliwe tylko hasłem.'))) return;
+    const password = prompt(t('Aby odłączyć konto Google, potwierdź swoje aktualne hasło:'));
+    if (!password) return;
     try {
       const res = await fetch('/api/user/unlink-google', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${sessionToken}` }
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
+        body: JSON.stringify({ password })
       });
       if (res.ok) {
         onProfileUpdate();
@@ -1833,13 +1866,16 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 {userProfile.has_google && (
                   <div style={{ marginBottom: '16px' }}>
                     <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0 0 8px' }}>
-                      {t('Konto założone przez Google nie ma znanego hasła. Potwierdź tożsamość przez Google, aby je ustawić - potem możesz też wyłączyć 2FA albo usunąć konto.')}
+                      {hasPassword
+                        ? t('Nie pamiętasz hasła? Ustaw nowe po potwierdzeniu tożsamości przez Google.')
+                        : t('Konto założone przez Google nie ma znanego hasła. Potwierdź tożsamość przez Google, aby je ustawić - potem możesz też wyłączyć 2FA albo usunąć konto.')}
                     </p>
                     <button type="button" className="btn-secondary" onClick={() => startOAuthFlow('google_reauth')}>
                       {t('Ustaw hasło przez Google')}
                     </button>
                   </div>
                 )}
+                {hasPassword && (
                 <form onSubmit={handleChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   <div className="input-group">
                     <label className="input-label">{t("Obecne hasło")}</label>
@@ -1878,6 +1914,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                     {isChangingPassword ? 'Zmienianie...' : t('Zmień hasło')}
                   </button>
                 </form>
+                )}
                 </>
                 )}
               </div>
@@ -1957,6 +1994,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                         style={{ borderRadius: '12px', border: '1px solid var(--border-glass)', padding: '6px', background: '#fff', width: '150px', height: '150px' }}
                       />
                     </div>
+                    <TotpSecretKey secret={totpSetupData.secret} />
 
                     <div className="input-group">
                       <label className="input-label">Kod z aplikacji (6 cyfr)</label>

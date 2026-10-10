@@ -266,7 +266,7 @@ async function testGoogleAccountCanSetPassword(baseUrl) {
 
   const ok = await googleReauthRoundTrip(baseUrl, sessionToken, { sub: 'g-sub-owner', email: user.email });
   const grant = grantFrom(ok.location);
-  assert(!!grant && ok.location.startsWith('/?tab=settings#'), 'the linked Google account yields a grant in the fragment');
+  assert(!!grant && ok.location.startsWith('/?tab=setup#'), 'the linked Google account yields a grant in the fragment');
 
   // A grant is bound to the account that earned it.
   const other = await createUser();

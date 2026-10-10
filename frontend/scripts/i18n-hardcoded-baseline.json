@@ -1,0 +1,11 @@
+{
+  "App.jsx": 10,
+  "components/ActivityTracker.jsx": 16,
+  "components/AdminPanel.jsx": 16,
+  "components/AppleHealthEventsCard.jsx": 8,
+  "components/AppleHealthMetricsCard.jsx": 1,
+  "components/Dashboard.jsx": 171,
+  "components/MealLogger.jsx": 4,
+  "components/Settings.jsx": 41,
+  "components/Trends.jsx": 15
+}

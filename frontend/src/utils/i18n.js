@@ -679,6 +679,24 @@ const TRANSLATIONS = {
   "cel {goal} g": "goal {goal} g",
   "brak celu": "no goal",
   "Wskazówki AI": "AI insights",
+
+  // Data integrity (audit 2026-10-09: settings load guard, meal retries, AI estimates)
+  "Brak zmian do zapisania.": "Nothing to save.",
+  "Ustawienia nie zostały wczytane - zapis zablokowany.": "The settings did not load - saving is blocked.",
+  "Zapis jest zablokowany, dopóki ustawienia się nie wczytają - inaczej nadpisałby Twoje cele.": "Saving is blocked until the settings load - otherwise it would overwrite your goals.",
+  "nie ustawiono": "not set",
+  "Serwer zwrócił kod błędu {status} ({detail}).": "The server returned error {status} ({detail}).",
+  "Połączenie zostało przerwane. Jeśli posiłek pojawił się na liście, jest zapisany. Użyj „Ponów wysłanie” - nie utworzy duplikatu.": "The connection was interrupted. If the meal appears in the list, it was saved. Use \"Retry sending\" - it will not create a duplicate.",
+  "🔁 Ponów wysłanie (bez duplikatu)": "🔁 Retry sending (no duplicate)",
+  "Ten posiłek był już zapisany - nie dodano go drugi raz.": "This meal had already been saved - it was not added a second time.",
+  "Cukier": "Sugar",
+  "Sód i cukier": "Sodium and sugar",
+  "Szacunek AI, nie pomiar": "AI estimate, not a measurement",
+  "szac. AI": "AI est.",
+  "≈ {what} to szacunek AI na podstawie opisu lub zdjęcia posiłku, nie pomiar.": "≈ {what} is an AI estimate from the meal description or photo, not a measurement.",
+  "Pominięto dni bez pełnego szacunku: {n}.": "Days without a complete estimate left out: {n}.",
+  "Porównanie dwóch średnich z Twoich danych, nie dowód naukowy.": "A comparison of two averages from your data, not scientific proof.",
+  "⚠️ Dziś spożycie sodu (szacunek AI): ≈{sodium} mg - powyżej zalecanego dziennego limitu ({limit} mg, wytyczne WHO/AHA).": "⚠️ Today's sodium intake (AI estimate): ≈{sodium} mg - above the recommended daily limit ({limit} mg, WHO/AHA guidelines).",
 };
 
 let currentLang = localStorage.getItem("language") || "pl";

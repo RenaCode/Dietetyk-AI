@@ -56,7 +56,7 @@ export default function AppleHealthMetricsCard({ sessionToken, selectedDate, onS
     <div className="premium-card">
       <div className="premium-title-row">
         <span className="premium-title">{t("Pozostałe dane z Apple Health")}</span>
-        <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>
+        <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
           {metrics.length}
         </span>
       </div>

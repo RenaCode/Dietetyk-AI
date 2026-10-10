@@ -3,6 +3,7 @@ const db = require('../db');
 const path = require('path');
 const { getUserSettings, aggregateNutritionAndHealth } = require('./summaries');
 const { getLocalDateString, shiftDate } = require('../utils/dates');
+const { goalText } = require('../utils/defaultSettings');
 
 // PDF export for a doctor or dietician - a document the user downloads themselves and shows
 // to a professional. Deliberately WITHOUT any Gemini-generated text (unlike the summary
@@ -132,10 +133,12 @@ async function buildHealthReportPdf(userId, requestedDays, { endDate } = {}) {
 
       // --- Cele ---
       sectionTitle('Cele dobowe');
-      row('Cel kaloryczny', `${settings.targetCalories} kcal`);
-      row('Makroskładniki', `Białko ${settings.targetProtein} g, Węglowodany ${settings.targetCarbs} g, Tłuszcz ${settings.targetFat} g`);
-      row('BMR (podstawowa przemiana materii)', `${settings.bmr} kcal`);
-      row('Cel nawodnienia', `${settings.targetWaterMl} ml`);
+      // Only goals the user set - "brak celu" otherwise (S2): a doctor reading "BMR 1800 kcal"
+      // takes it for a measured or chosen value, not the default every account was seeded with.
+      row('Cel kaloryczny', goalText(settings.targetCalories, ' kcal'));
+      row('Makroskładniki', `Białko ${goalText(settings.targetProtein, ' g')}, Węglowodany ${goalText(settings.targetCarbs, ' g')}, Tłuszcz ${goalText(settings.targetFat, ' g')}`);
+      row('BMR (podstawowa przemiana materii)', goalText(settings.bmr, ' kcal'));
+      row('Cel nawodnienia', goalText(settings.targetWaterMl, ' ml'));
       if (settings.targetWeightKg) {
         row('Docelowa waga', `${settings.targetWeightKg} kg`);
       }
@@ -144,7 +147,10 @@ async function buildHealthReportPdf(userId, requestedDays, { endDate } = {}) {
       sectionTitle(`Średnie dzienne z okresu (${days} dni, wyłącznie dni z zalogowanymi danymi)`);
       row('Energia', `${stats.avgEatenCalories} kcal`);
       row('Białko / Węglowodany / Tłuszcz', `${stats.avgProtein} g / ${stats.avgCarbs} g / ${stats.avgFat} g`);
-      row('Błonnik / Cukry / Sód', `${stats.avgFiber} g / ${stats.avgSugar} g / ${stats.avgSodium} mg`);
+      // AI estimates, not measurements - labelled as such in a document meant for a doctor, and
+      // "brak szacunku" where no day had a complete estimate (utils/estimatedNutrients.js).
+      const estimate = (v, unit) => (v === null || v === undefined ? 'brak szacunku' : `${v} ${unit}`);
+      row('Błonnik / Cukry / Sód (szacunek AI)', `${estimate(stats.avgFiber, 'g')} / ${estimate(stats.avgSugar, 'g')} / ${estimate(stats.avgSodium, 'mg')}`);
       row('Kroki', `${stats.avgSteps}`);
       row('Aktywne kalorie spalone', `${stats.avgActiveCalories} kcal`);
       row('Nawodnienie', `${stats.avgWaterMl} ml`);

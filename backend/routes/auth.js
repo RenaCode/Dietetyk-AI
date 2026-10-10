@@ -543,16 +543,11 @@ router.get('/api/auth/google/callback', async (req, res) => {
         VALUES (?, ?, ?, 0, ?, 'user', 'active', ?)
       `, [username, passwordHash, syncToken, profile.email || null, profile.sub]);
 
-      const defaultSettings = [
-        { key: 'target_calories', value: '2500' },
-        { key: 'target_protein', value: '150' },
-        { key: 'target_carbs', value: '250' },
-        { key: 'target_fat', value: '80' },
-        { key: 'bmr', value: '1800' }
-      ];
-      for (const s of defaultSettings) {
-        await db.run(`INSERT OR IGNORE INTO settings (user_id, key, value) VALUES (?, ?, ?)`, [result.id, s.key, s.value]);
-      }
+      // No targets are seeded (audit 2026-10-09, S2). Every account used to get the same
+      // 2500 kcal / 150/250/80 g / BMR 1800, indistinguishable from values the user chose, and
+      // e-mails, the PDF and the chat quoted them as "your goal". An account created from an
+      // invitation never had them; the dashboard and Settings show "not set" until the user
+      // enters their own.
 
       user = await db.get(`SELECT * FROM users WHERE id = ?`, [result.id]);
     }
@@ -1061,17 +1056,11 @@ router.post('/api/register-public', async (req, res) => {
       VALUES (?, ?, ?, 0, ?, 'user', 'active', ?)
     `, [username, passwordHash, syncToken, email || null, secret]);
 
-    // Insert the default targets for the new user
-    const defaultSettings = [
-      { key: 'target_calories', value: '2500' },
-      { key: 'target_protein', value: '150' },
-      { key: 'target_carbs', value: '250' },
-      { key: 'target_fat', value: '80' },
-      { key: 'bmr', value: '1800' }
-    ];
-    for (const s of defaultSettings) {
-      await db.run(`INSERT OR IGNORE INTO settings (user_id, key, value) VALUES (?, ?, ?)`, [result.id, s.key, s.value]);
-    }
+    // No targets are seeded (audit 2026-10-09, S2). Every account used to get the same
+    // 2500 kcal / 150/250/80 g / BMR 1800, indistinguishable from values the user chose, and
+    // e-mails, the PDF and the chat quoted them as "your goal". An account created from an
+    // invitation never had them; the dashboard and Settings show "not set" until the user
+    // enters their own.
 
     const force2faRow = await db.get(`SELECT value FROM app_config WHERE key = 'force_2fa'`);
     const isForce2faEnabled = force2faRow && force2faRow.value === '1';

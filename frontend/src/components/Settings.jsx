@@ -1,27 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { t } from '../utils/i18n';
+import { EMPTY_SETTINGS_FORM, formFromLoadedSettings, settingsPatch } from '../utils/settingsForm';
 
 export default function Settings({ syncToken, sessionToken, userProfile = { username: '', avatar_base64: '' }, onProfileUpdate, onLogout, onLanguageChange }) {
-  const [settings, setSettings] = useState({
-    target_calories: 2500,
-    target_protein: 150,
-    target_carbs: 250,
-    target_fat: 80,
-    bmr: 1800,
-    target_water_ml: 2500,
-    height_cm: '',
-    target_weight_kg: '',
-    target_body_fat_pct: '',
-    oura_client_id: '',
-    oura_client_secret: '',
-    withings_client_id: '',
-    withings_client_secret: '',
-    withings_redirect_uri: '',
-    gemini_api_key: '',
-    weather_lat: '',
-    weather_lon: '',
-    weather_location_label: ''
-  });
+  // Starts EMPTY and stays read-only for saving until GET /api/settings succeeds - see
+  // utils/settingsForm.js for the silent overwrite of real targets with defaults (W1).
+  const [settings, setSettings] = useState(() => ({ ...EMPTY_SETTINGS_FORM }));
+  const [loadedSettings, setLoadedSettings] = useState(null);
+  const [settingsLoadError, setSettingsLoadError] = useState('');
 
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -188,10 +174,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
       if (res.ok) {
         const data = await res.json();
-        setSettings(prev => ({
-          ...prev,
-          ...data
-        }));
+        const form = formFromLoadedSettings(data);
+        setSettings(form);
+        setLoadedSettings(form);
+        setSettingsLoadError('');
       } else if (res.status === 401) {
           // This handling used to be missing - an expired session on entering Settings ended
           // with silently empty or default forms, with no sign-out and no information for the
@@ -199,12 +185,39 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         if (onLogout) onLogout();
         setMessage({ type: 'error', text: t('Sesja wygasła. Zaloguj się ponownie.') });
       } else {
-        setMessage({ type: 'error', text: t('Nie udało się wczytać ustawień.') });
+        setSettingsLoadError(t('Nie udało się wczytać ustawień.'));
       }
     } catch (err) {
       console.error('Failed to fetch the settings:', err);
-      setMessage({ type: 'error', text: t('Błąd połączenia z serwerem podczas wczytywania ustawień.') });
+      setSettingsLoadError(t('Błąd połączenia z serwerem podczas wczytywania ustawień.'));
     }
+  };
+
+  // Shown next to every form that saves settings while the GET has not succeeded: the fields
+  // are empty (not defaults) and the save buttons are disabled, so nothing can be overwritten.
+  const settingsLoadAlert = !loadedSettings && settingsLoadError ? (
+    <div className="alert alert-error" style={{ marginBottom: '16px' }}>
+      {settingsLoadError} {t('Zapis jest zablokowany, dopóki ustawienia się nie wczytają - inaczej nadpisałby Twoje cele.')}{' '}
+      <button type="button" className="btn-secondary" onClick={fetchSettings} style={{ marginLeft: '8px' }}>
+        {t('Spróbuj ponownie')}
+      </button>
+    </div>
+  ) : null;
+
+  // POSTs only what changed since the load. Returns { ok, nothing, status }.
+  const saveChangedSettings = async () => {
+    const patch = settingsPatch(loadedSettings, settings);
+    if (Object.keys(patch).length === 0) return { ok: true, nothing: true };
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${sessionToken}`
+      },
+      body: JSON.stringify(patch)
+    });
+    if (res.ok) setLoadedSettings({ ...loadedSettings, ...patch });
+    return { ok: res.ok, status: res.status };
   };
 
   const handleManualSync = async () => {
@@ -324,21 +337,21 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
   const handleSave = async (e) => {
     e.preventDefault();
+    if (!loadedSettings) {
+      setMessage({ type: 'error', text: t('Ustawienia nie zostały wczytane - zapis zablokowany.') });
+      return;
+    }
     setIsSaving(true);
     setMessage({ type: '', text: '' });
 
     try {
-      const res = await fetch('/api/settings', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${sessionToken}`
-        },
-        body: JSON.stringify(settings)
-      });
+      const res = await saveChangedSettings();
 
       if (res.status === 401) { if (onLogout) onLogout(); return; }
-      if (res.ok) {
+      if (res.nothing) {
+        setMessage({ type: 'success', text: t('Brak zmian do zapisania.') });
+        setTimeout(() => setMessage({ type: '', text: '' }), 5000);
+      } else if (res.ok) {
         setMessage({ type: 'success', text: t('Ustawienia zostały pomyślnie zaktualizowane!') });
         onProfileUpdate();
         setTimeout(() => setMessage({ type: '', text: '' }), 5000);
@@ -870,8 +883,12 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           monthly_summary_enabled: monthlySummaryEnabled ? '1' : '0',
           monthly_summary_day: String(monthlySummaryDay),
           monthly_summary_time: monthlySummaryTime,
-          target_weight_kg: settings.target_weight_kg,
-          target_body_fat_pct: settings.target_body_fat_pct
+          // Only once the settings are loaded: before that these fields are empty, and posting
+          // them would clear the stored targets (W1).
+          ...(loadedSettings ? {
+            target_weight_kg: settings.target_weight_kg,
+            target_body_fat_pct: settings.target_body_fat_pct
+          } : {})
         })
       });
 
@@ -1060,15 +1077,12 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     // window.location.href ran unconditionally, so a session that expired during the save
     // (401) still sent the user to the external provider with stale or wrong configuration
     // data, which ended in an unexplained authorisation error after coming back.
+    if (!loadedSettings) {
+      setMessage({ type: 'error', text: t('Ustawienia nie zostały wczytane - zapis zablokowany.') });
+      return;
+    }
     try {
-      const res = await fetch('/api/settings', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${sessionToken}`
-        },
-        body: JSON.stringify(settings)
-      });
+      const res = await saveChangedSettings();
       if (!res.ok) {
         if (res.status === 401 && onLogout) onLogout();
         setMessage({ type: 'error', text: t('Nie udało się zapisać poświadczeń integracji - połączenie przerwane.') });
@@ -1203,6 +1217,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             Skonfiguruj swoje dzienne limity, aby Dietetyk AI mógł poprawnie obliczać Twój bilans i dawać spersonalizowane porady.
           </p>
 
+          {settingsLoadAlert}
           {message.text && (
             <div className={`alert alert-${message.type}`} style={{ marginBottom: '16px' }}>
               {message.text}
@@ -1292,7 +1307,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   onChange={handleInputChange}
                   min="0"
                   max="10000"
-                  required
+                  placeholder={t('nie ustawiono')}
                 />
               </div>
 
@@ -1319,7 +1334,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               ** Wzrost jest opcjonalny, ale bez niego BMI na Pulpicie nie będzie wyliczane (nie zgadujemy go za Ciebie).
             </p>
 
-            <button type="submit" className="btn-primary" disabled={isSaving}>
+            <button type="submit" className="btn-primary" disabled={isSaving || !loadedSettings}>
               {isSaving ? t('Zapisywanie...') : t('Zapisz cele')}
             </button>
           </form>
@@ -2239,6 +2254,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           </div>
         )}
 
+        {settingsLoadAlert}
         <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           {/* Location for the weather context in the AI advice (chat and the daily tip on
               the Dashboard - see backend/utils/weatherContext.js) - by default the server
@@ -2693,7 +2709,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             </div>
           </div>
 
-          <button type="submit" className="btn-primary" disabled={isSaving} style={{ width: '100%', padding: '12px', marginTop: '10px' }}>
+          <button type="submit" className="btn-primary" disabled={isSaving || !loadedSettings} style={{ width: '100%', padding: '12px', marginTop: '10px' }}>
             {isSaving ? t('Zapisywanie...') : t('Zapisz poświadczenia integracji')}
           </button>
         </form>

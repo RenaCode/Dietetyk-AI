@@ -34,6 +34,67 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000); // co 5 minut
 
+// ===== Idempotency of POST /api/meals (audit 2026-10-09, W2) =====
+// See the meal_submissions migration in db.js for the production duplicate that motivated it.
+// The browser generates one key per submission of the meal form and re-sends the SAME key when
+// it retries, so a retry after a dropped connection gets the meals the first request saved
+// instead of a second, differently-estimated copy. The key is optional: a request without one
+// (an old cached frontend) behaves exactly as before.
+const IDEMPOTENCY_KEY_REGEX = /^[A-Za-z0-9-]{16,64}$/;
+// A 'pending' row older than this belongs to a request that died mid-analysis (a restart, a
+// crash) - one AI call is bounded by GEMINI_WORST_CASE_MS (config.js), so nothing alive can
+// still be working on it, and the retry may take it over.
+const STALE_SUBMISSION_MS = 5 * 60 * 1000;
+// Finished submissions are only useful while a retry is plausible.
+const SUBMISSION_RETENTION_DAYS = 7;
+
+// Returns { state: 'claimed' } when this request owns the submission and must run it,
+// { state: 'done', mealIds } when an earlier request already finished it, or
+// { state: 'pending' } when an earlier request is still running.
+async function claimMealSubmission(userId, key) {
+  const inserted = await db.run(
+    `INSERT OR IGNORE INTO meal_submissions (user_id, idempotency_key, status) VALUES (?, ?, 'pending')`,
+    [userId, key]
+  );
+  if (inserted.changes === 1) return { state: 'claimed' };
+
+  const row = await db.get(
+    `SELECT status, meal_ids, created_at FROM meal_submissions WHERE user_id = ? AND idempotency_key = ?`,
+    [userId, key]
+  );
+  if (!row) return claimMealSubmission(userId, key); // released between the two statements
+  if (row.status === 'done') {
+    let mealIds = [];
+    try { mealIds = JSON.parse(row.meal_ids || '[]'); } catch (e) { mealIds = []; }
+    return { state: 'done', mealIds };
+  }
+  const startedMs = new Date(String(row.created_at).replace(' ', 'T') + 'Z').getTime();
+  if (Number.isFinite(startedMs) && Date.now() - startedMs > STALE_SUBMISSION_MS) {
+    // Conditional on the same created_at, so two retries racing for a stale row cannot both win.
+    const takeover = await db.run(
+      `UPDATE meal_submissions SET created_at = datetime('now') WHERE user_id = ? AND idempotency_key = ? AND status = 'pending' AND created_at = ?`,
+      [userId, key, row.created_at]
+    );
+    if (takeover.changes === 1) return { state: 'claimed' };
+  }
+  return { state: 'pending' };
+}
+
+async function releaseMealSubmission(userId, key) {
+  await db.run(`DELETE FROM meal_submissions WHERE user_id = ? AND idempotency_key = ? AND status = 'pending'`, [userId, key]);
+}
+
+async function completeMealSubmission(userId, key, mealIds) {
+  await db.run(
+    `UPDATE meal_submissions SET status = 'done', meal_ids = ? WHERE user_id = ? AND idempotency_key = ?`,
+    [JSON.stringify(mealIds), userId, key]
+  );
+  await db.run(
+    `DELETE FROM meal_submissions WHERE user_id = ? AND status = 'done' AND created_at < datetime('now', ?)`,
+    [userId, `-${SUBMISSION_RETENTION_DAYS} days`]
+  );
+}
+
 const updateLastMealModifiedAt = async (userId, date) => {
   const nowIso = new Date().toISOString();
   try {
@@ -84,6 +145,7 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
   }
 
   const userId = req.user.id;
+
   const now = Date.now();
   const requestKey = {
     rawText: safeRawText,
@@ -92,7 +154,11 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
     imageSample: image ? image.slice(-100) : ''
   };
 
-  const lastRequest = recentRequests.get(userId);
+  // Content-based, so only for requests WITHOUT an idempotency key (an old cached frontend).
+  // With a key, the key alone decides what is a retry (audit 2026-10-10, round 2): two
+  // deliberate entries of the same meal within 15 s are two meals, and this window used to
+  // answer the second with the first one's result.
+  const lastRequest = req.body.idempotencyKey ? null : recentRequests.get(userId);
   if (lastRequest &&
       (now - lastRequest.timestamp < 15000) &&
       lastRequest.key.rawText === requestKey.rawText &&
@@ -114,6 +180,38 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
     };
     return res.status(200).json(restoredResponse);
   }
+
+  const { idempotencyKey } = req.body;
+  if (idempotencyKey !== undefined && idempotencyKey !== null
+      && (typeof idempotencyKey !== 'string' || !IDEMPOTENCY_KEY_REGEX.test(idempotencyKey))) {
+    return res.status(400).json({ error: 'Nieprawidłowy klucz idempotencji.' });
+  }
+  let ownsSubmission = false;
+  // Express 4 does not catch a rejected promise in an async handler - a database error here,
+  // outside the try below, would leave the request hanging with no response.
+  if (idempotencyKey) try {
+    const claim = await claimMealSubmission(userId, idempotencyKey);
+    if (claim.state === 'done') {
+      const placeholders = claim.mealIds.map(() => '?').join(',') || 'NULL';
+      const rows = await db.all(
+        `SELECT id, date, raw_text, calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND id IN (${placeholders})`,
+        [userId, ...claim.mealIds]
+      );
+      console.log(`[API LOG] Meal submission retried for user ${userId}: returning the ${rows.length} meal(s) already saved.`);
+      return res.status(200).json({ count: rows.length, meals: rows, replayed: true });
+    }
+    if (claim.state === 'pending') {
+      return res.status(409).json({
+        error: 'Ten posiłek jest jeszcze analizowany. Odśwież listę za chwilę - nie wysyłaj go ponownie.',
+        pending: true
+      });
+    }
+    ownsSubmission = true;
+  } catch (err) {
+    console.error('[API ERROR] Meal submission lookup failed:', err);
+    return res.status(500).json({ error: 'Błąd serwera.' });
+  }
+  let submissionCompleted = false;
 
   try {
     console.log(`[API LOG] POST /api/meals - starting analysis for user ${req.user.username} (${targetDate})`);
@@ -288,13 +386,28 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
       response: cachedResponse
     });
 
+    if (ownsSubmission) {
+      await completeMealSubmission(userId, idempotencyKey, insertedMeals.map(m => m.id));
+      submissionCompleted = true;
+    }
+
     await updateLastMealModifiedAt(req.user.id, targetDate);
 
     res.status(201).json(responsePayload);
 
   } catch (err) {
     console.error('[API ERROR] AI meal analysis failed:', err);
-    res.status(500).json({ error: 'Wystąpił błąd podczas analizowania posiłku przez AI: ' + err.message });
+    // Only the application's own, user-actionable messages reach the client (audit
+    // 2026-10-09, N2): err.message used to be appended whatever it was, so SQLite and Gemini
+    // SDK internals ended up on the user's screen.
+    const userFacing = /^(Usługa AI jest obecnie niedostępna|AI nie zwróciło)/.test(err && err.message ? err.message : '');
+    res.status(500).json({ error: 'Wystąpił błąd podczas analizowania posiłku przez AI' + (userFacing ? ': ' + err.message : '. Spróbuj ponownie za chwilę.') });
+  } finally {
+    // Nothing was saved (validation refusal, AI error): the key is free again, so the user's
+    // retry runs a fresh analysis rather than waiting on a submission that will never finish.
+    if (ownsSubmission && !submissionCompleted) {
+      await releaseMealSubmission(userId, idempotencyKey).catch((e) => console.error('[API ERROR] Failed to release a meal submission:', e.message));
+    }
   }
 });
 

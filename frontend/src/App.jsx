@@ -9,6 +9,7 @@ import SummaryUnavailable from './components/SummaryUnavailable';
 import { t, setLanguage, getLanguage } from './utils/i18n';
 import { getWarsawDateString } from './utils/dates';
 import { parseGoogleReturn } from './utils/googleReturn';
+import { newMealSubmission, retryMealSubmission } from './utils/mealSubmission';
 import { NavIcon, LogoMark } from './components/NavIcons';
 
 // Today's date in YYYY-MM-DD, in the timezone the BACKEND uses (Europe/Warsaw).
@@ -176,6 +177,10 @@ export default function App() {
 // The set of meal IDs that already have a delete request in flight - see the comment in
 // handleDeleteMeal (protection against a double click sending a duplicate DELETE).
   const deletingMealIdsRef = useRef(new Set());
+  // The last meal submission the server has not confirmed (dropped connection, 5xx, 409):
+  // what the "retry" button re-sends, with the same idempotency key. null when there is
+  // nothing to retry. State, not a ref, because MealLogger shows the button from it.
+  const [retryableMeal, setRetryableMeal] = useState(null);
 
 // The login screen's Google button - asked only while signed out, which is the only time the
 // button is rendered.
@@ -575,9 +580,14 @@ export default function App() {
     }
   };
 
-  const handleAddMeal = async (rawText, imageBase64) => {
+  // `retry` = re-send the unconfirmed submission with its key (the "retry" button); anything
+  // else is a new submission with a new key, even with identical content - a second portion
+  // of the same meal is a real meal (utils/mealSubmission.js).
+  const handleAddMeal = async (rawText, imageBase64, { retry = false } = {}) => {
     setIsAnalyzing(true);
     setErrorMessage('');
+    const submission = retry ? retryMealSubmission(retryableMeal) : newMealSubmission(rawText, selectedDate, imageBase64);
+    setRetryableMeal(null);
 // The returned boolean (success/failure) - MealLogger.jsx waits for it so it can show the
 // "Meal saved" message ONLY after the save genuinely succeeded, rather than optimistically
 // right after the click (previously the form gave no confirmation beyond a new entry in the
@@ -591,13 +601,20 @@ export default function App() {
           'Authorization': `Bearer ${sessionToken}`
         },
         body: JSON.stringify({
-          rawText,
-          date: selectedDate,
-          image: imageBase64
+          rawText: submission.rawText,
+          date: submission.date,
+          image: submission.imageBase64,
+          idempotencyKey: submission.key
         })
       });
 
       if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.replayed) {
+          // The first attempt had been saved after all - say so, rather than "saved" again.
+          setSuccessMessage(t('Ten posiłek był już zapisany - nie dodano go drugi raz.'));
+          setTimeout(() => setSuccessMessage(''), 6000);
+        }
 // The meal was added successfully - reload the dashboard
         await fetchDashboardData();
 // The new meal may have changed the "frequent meals" ranking (reaching the 2-repetition
@@ -614,13 +631,23 @@ export default function App() {
             const errData = await res.json();
             errorMsg = errData.error || errorMsg;
           } catch (e) {
-            errorMsg = `Serwer zwrócił kod błędu ${res.status} (${res.statusText || t('Błąd połączenia/Limit czasu')}).`;
+            errorMsg = t('Serwer zwrócił kod błędu {status} ({detail}).', { status: res.status, detail: res.statusText || t('Błąd połączenia/Limit czasu') });
           }
           setErrorMessage(errorMsg);
+          // A gateway timeout or a 409 "still analysing" may mean the meal IS saved - show
+          // whatever the server has, and offer the retry that cannot duplicate it.
+          if (res.status >= 500 || res.status === 409) {
+            fetchDashboardData();
+            setRetryableMeal(submission);
+          }
         }
       }
     } catch (err) {
-      setErrorMessage(t('Nie udało się połączyć z serwerem w celu analizy posiłku.'));
+      // The connection dropped: the server may well have finished and saved the meal (that is
+      // how the duplicate of 08.10.2026 happened). Refresh the list, and say a retry is safe.
+      setErrorMessage(t('Połączenie zostało przerwane. Jeśli posiłek pojawił się na liście, jest zapisany. Użyj „Ponów wysłanie” - nie utworzy duplikatu.'));
+      fetchDashboardData();
+      setRetryableMeal(submission);
       console.error(err);
     } finally {
       setIsAnalyzing(false);
@@ -1422,6 +1449,8 @@ export default function App() {
               meals={dashboardData.meals}
               mealsUnknown={dashboardData.summary === null}
               onAddMeal={handleAddMeal}
+              canRetryMeal={!!retryableMeal}
+              onRetryMeal={() => handleAddMeal(null, null, { retry: true })}
               onDeleteMeal={handleDeleteMeal}
               isAnalyzing={isAnalyzing}
               frequentMeals={frequentMeals}

@@ -420,6 +420,32 @@ const initDb = async () => {
   // Assign legacy meals without a user_id to the first user
   await run(`UPDATE meals SET user_id = 1 WHERE user_id IS NULL OR user_id = 0`);
 
+  // Idempotency of POST /api/meals (audit 2026-10-09, W2). One row per submission of the meal
+  // form, keyed by a UUID the browser generates and re-sends when it retries. On production
+  // (08.10.2026) a phone dropped the connection during a 15-28 s photo analysis: the server
+  // finished and saved the meal anyway, the app showed "could not connect", the user sent the
+  // same photo again and got a second meal - double-counted calories until they found and
+  // deleted it. The 15-second in-memory duplicate window in routes/meals.js could not catch it,
+  // because it starts when the FIRST request finishes.
+  //
+  // A separate table rather than a UNIQUE column on meals: one photo can legitimately produce
+  // several meal rows (breakfast/lunch/dinner from one screenshot), so the key identifies the
+  // submission, not a meal. `status` 'pending' marks an analysis in flight, so a retry that
+  // arrives while the first request is still running waits instead of starting a second paid
+  // analysis. Existing meals have no submission row and need none - nothing is backfilled.
+  await run(`
+    CREATE TABLE IF NOT EXISTS meal_submissions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      meal_ids TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(user_id, idempotency_key),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
   // Drop the unused Apple Health sync table
   await run(`DROP TABLE IF EXISTS health_sync`);
 

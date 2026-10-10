@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { formatHoursMins } from '../utils/format';
 import { t } from '../utils/i18n';
 import { getWarsawDateString } from '../utils/dates';
-import { resolveCurrentMetricValue, barHeight } from '../utils/chart';
+import { resolveCurrentMetricValue, barHeight, lineChartScale } from '../utils/chart';
 
 export default function Trends({ selectedDate, sessionToken, onLogout }) {
   const [historyData, setHistoryData] = useState([]);
@@ -436,7 +436,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
   };
 
   // Renderowanie wykresu liniowego/obszarowego (Wynik Snu, Regeneracja, HRV, RHR, Waga)
-  const renderLineChart = (title, key, unit, ticks, isWeight = false, formatFn = (v) => v) => {
+  const renderLineChart = (title, key, unit, fixedTicks, isWeight = false, formatFn = (v) => v) => {
     const stats = calculateStats(key);
     const currentWeekVals = getMetricData(currentWeekDays, key);
 
@@ -447,8 +447,12 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
   // Y-scale bounds - computed from validVals (already filtered of null/undefined, see above)
   // rather than from || 9999 / || 0, which would confuse missing data with a real zero.
     // (analogicznie do getMinMax w ActivityTracker.jsx).
-    const minVal = Math.min(...(validVals.length ? validVals : [0]), ...ticks, 1);
-    const maxVal = Math.max(...(validVals.length ? validVals : [0]), ...ticks, 1);
+    // See lineChartScale in utils/chart.js: weight, RHR and HRV scale to the data (the forced
+    // 1 made the weight chart a flat line); 0-100 scores keep their fixed axis.
+    const scale = lineChartScale(validVals, fixedTicks, { fromData: isWeight || key === 'rhr' || key === 'hrv' });
+    const ticks = scale.ticks;
+    const minVal = scale.min;
+    const maxVal = scale.max;
     const range = maxVal - minVal || 1;
 
     const svgWidth = 240;
@@ -1003,7 +1007,7 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
   // F-N3: no data in either week - do not show a misleading '0%'
     if (isNoData) {
       return (
-        <span style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '12px', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.3)', fontWeight: '600', display: 'inline-flex', alignItems: 'center' }}>
+        <span style={{ fontSize: '0.72rem', padding: '2px 8px', borderRadius: '12px', background: 'rgba(255,255,255,0.04)', color: 'var(--text-dim)', fontWeight: '600', display: 'inline-flex', alignItems: 'center' }}>
           — brak danych
         </span>
       );

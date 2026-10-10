@@ -21,3 +21,16 @@ test('an ordinary page load does nothing', () => {
   assert.equal(parseGoogleReturn('', ''), null);
   assert.equal(parseGoogleReturn('#', '?tab=settings'), null);
 });
+
+// N-S2 (audit round 2): `?tab=settings` from the Google flows opened a tab that does not exist.
+import { resolveTabParam } from './googleReturn.js';
+
+test('the legacy settings tab name opens the setup tab', () => {
+  assert.equal(resolveTabParam('settings'), 'setup');
+  assert.equal(resolveTabParam('setup'), 'setup');
+});
+
+test('an unknown tab name is ignored, not rendered as an empty page', () => {
+  assert.equal(resolveTabParam('nonsense'), null);
+  assert.equal(resolveTabParam(null), null);
+});

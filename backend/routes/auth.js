@@ -11,8 +11,7 @@ const logger = require('../services/logger');
 const { getAppConfig, isGoogleConfigured, generateOAuthState, verifyOAuthState, readCookie, isSecureRequest, startBrowserBoundOAuthState, verifyBrowserBoundOAuthState } = require('../services/oauthHelpers');
 const { consumeTicket, issueTicket, GOOGLE_REAUTH_GRANT_SERVICE, GOOGLE_REAUTH_GRANT_TTL_MS } = require('../services/authTickets');
 const { isValidUsername, USERNAME_RULE_MESSAGE } = require('../utils/username');
-const { revokeUserSessions } = require('../middleware/auth');
-const { revokeAllSharesForUser } = require('../services/sharedReports');
+const { cleanUpAfterCredentialReset } = require('../services/accountCleanup');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 
 // Helper for creating a session (temporary or permanent) - extracted because the same
@@ -422,15 +421,15 @@ router.get('/api/auth/google/callback', async (req, res) => {
 
   if (error) {
     console.error('[GOOGLE LOGIN CALLBACK ERROR]', error);
-    return res.redirect(isLinkFlow || isReauthFlow ? `/?tab=settings&${settingsErrorParam}=auth_failed` : '/?google_error=auth_failed');
+    return res.redirect(isLinkFlow || isReauthFlow ? `/?tab=setup&${settingsErrorParam}=auth_failed` : '/?google_error=auth_failed');
   }
   if (!code || !verified || (!isLoginFlow && !isLinkFlow && !isReauthFlow)) {
     // A signed google_link state without the matching cookie is still answered on the
     // settings screen, where the user started it.
     const claimsLink = !!(verified && verified.userId > 0 && verified.service === 'google_link');
     const claimsReauth = !!(verified && verified.userId > 0 && verified.service === 'google_reauth');
-    if (claimsReauth) return res.redirect('/?tab=settings&google_reauth_error=csrf_failed');
-    return res.redirect(claimsLink ? '/?tab=settings&google_link_error=csrf_failed' : '/?google_error=csrf_failed');
+    if (claimsReauth) return res.redirect('/?tab=setup&google_reauth_error=csrf_failed');
+    return res.redirect(claimsLink ? '/?tab=setup&google_link_error=csrf_failed' : '/?google_error=csrf_failed');
   }
 
   try {
@@ -481,19 +480,19 @@ router.get('/api/auth/google/callback', async (req, res) => {
       const owner = await db.get(`SELECT google_id FROM users WHERE id = ?`, [linkVerified.userId]);
       if (!owner || !owner.google_id || owner.google_id !== profile.sub) {
         logger.security('Google re-authentication refused: a different Google account', 'AUTH_GOOGLE_REAUTH', { userId: linkVerified.userId }, req.ip, linkVerified.userId);
-        return res.redirect('/?tab=settings&google_reauth_error=mismatch');
+        return res.redirect('/?tab=setup&google_reauth_error=mismatch');
       }
       const grant = issueTicket(linkVerified.userId, GOOGLE_REAUTH_GRANT_SERVICE, GOOGLE_REAUTH_GRANT_TTL_MS);
-      return res.redirect(`/?tab=settings#google_reauth=${grant}`);
+      return res.redirect(`/?tab=setup#google_reauth=${grant}`);
     }
 
     if (isLinkFlow) {
       const conflictingUser = await db.get(`SELECT id FROM users WHERE google_id = ? AND id != ?`, [profile.sub, verified.userId]);
       if (conflictingUser) {
-        return res.redirect('/?tab=settings&google_link_error=already_linked');
+        return res.redirect('/?tab=setup&google_link_error=already_linked');
       }
       await db.run(`UPDATE users SET google_id = ? WHERE id = ?`, [profile.sub, verified.userId]);
-      return res.redirect('/?tab=settings&google_link=success');
+      return res.redirect('/?tab=setup&google_link=success');
     }
 
       // 1. Look for a user already linked to this Google account
@@ -539,8 +538,8 @@ router.get('/api/auth/google/callback', async (req, res) => {
       }
 
       const result = await db.run(`
-        INSERT INTO users (username, password_hash, sync_token, totp_enabled, email, role, status, google_id)
-        VALUES (?, ?, ?, 0, ?, 'user', 'active', ?)
+        INSERT INTO users (username, password_hash, sync_token, totp_enabled, email, role, status, google_id, password_set)
+        VALUES (?, ?, ?, 0, ?, 'user', 'active', ?, 0)
       `, [username, passwordHash, syncToken, profile.email || null, profile.sub]);
 
       // No targets are seeded (audit 2026-10-09, S2). Every account used to get the same
@@ -564,7 +563,7 @@ router.get('/api/auth/google/callback', async (req, res) => {
     res.redirect(`/#google_code=${exchangeCode}`);
   } catch (err) {
     console.error('[GOOGLE LOGIN CALLBACK ERROR]', err.message);
-    res.redirect(isLinkFlow || isReauthFlow ? `/?tab=settings&${settingsErrorParam}=exchange_failed` : '/?google_error=exchange_failed');
+    res.redirect(isLinkFlow || isReauthFlow ? `/?tab=setup&${settingsErrorParam}=exchange_failed` : '/?google_error=exchange_failed');
   }
 });
 
@@ -845,7 +844,7 @@ router.post('/api/change-password-forced', async (req, res) => {
     const newHash = await bcrypt.hash(newPassword, 10);
     await db.run(`
       UPDATE users
-      SET password_hash = ?, force_password_change = 0
+      SET password_hash = ?, force_password_change = 0, password_set = 1
       WHERE id = ?
     `, [newHash, session.user_id]);
 
@@ -855,12 +854,20 @@ router.post('/api/change-password-forced', async (req, res) => {
     // after an administrator resets a compromised account - if any session from before the
     // reset survives it, the reset was theatre. The tempToken is kept for the few lines below
     // that still need it (2FA / setup_2fa branches delete it themselves).
-    const revokedSessions = await revokeUserSessions(session.user_id, tempToken);
-    const revokedShares = await revokeAllSharesForUser(session.user_id);
+    //
+    // And the same cleanup as a voluntary change (audit round 2, N-W2): this path used to stop
+    // at sessions and share links, so after the reset the summaries still went to the address
+    // the attacker had set, a Google identity they had linked still logged them in, and the
+    // Apple Health webhook still took their data. The tempToken never changed anything, so an
+    // e-mail change made from ANY real session of this account is undone.
+    const { revokedSessions, revokedShares, emailRevert, unlinkedGoogle } = await cleanUpAfterCredentialReset(session.user_id, {
+      keepSessionToken: tempToken,
+      unlinkGoogle: true
+    });
     logger.security(
-      `Forced password change: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s) (UID: ${session.user_id})`,
+      `Forced password change: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s), rotated sync token${unlinkedGoogle ? ', unlinked Google' : ''}${emailRevert ? ', reverted e-mail change' : ''} (UID: ${session.user_id})`,
       'AUTH_PASSWORD_CHANGE',
-      { userId: session.user_id, revokedSessions, revokedShares },
+      { userId: session.user_id, revokedSessions, revokedShares, unlinkedGoogle, emailReverted: !!emailRevert },
       req.ip,
       session.user_id
     );

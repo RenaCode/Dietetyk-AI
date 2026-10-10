@@ -135,6 +135,21 @@ async function run() {
     const repeatMeal = await post(baseUrl, { rawText: 'owsianka z jagodami', idempotencyKey: newKey() });
     assert(repeatMeal.status === 201 && await mealCount() === 4, 'the same text with a NEW key is a second, intended meal');
 
+    console.log('\n--- TEST: two deliberate entries of the same meal are two meals (round 2) ---');
+    // No clock advance: within the old 15-second content window, which used to swallow the
+    // second one, and with identical content, which the frontend used to map to the same key.
+    const before = await mealCount();
+    const callsBefore = gemini.calls;
+    const keyTwo = newKey();
+    const one = await post(baseUrl, { rawText: 'banan', idempotencyKey: newKey() });
+    const two = await post(baseUrl, { rawText: 'banan', idempotencyKey: keyTwo });
+    assert(one.status === 201 && two.status === 201 && !two.body.replayed, `both are saved (got ${one.status}, ${two.status})`);
+    assert(await mealCount() === before + 2, 'two meals exist');
+    assert(gemini.calls === callsBefore + 2, 'each was analysed');
+    const retryTwo = await post(baseUrl, { rawText: 'banan', idempotencyKey: keyTwo });
+    assert(retryTwo.status === 200 && retryTwo.body.replayed === true, 'a retry of the second with ITS key is answered from the saved meal');
+    assert(await mealCount() === before + 2, 'and adds nothing');
+
     console.log('\n--- TEST: requests without a key behave as before; a malformed key is refused ---');
     advanceClock(60 * 1000);
     const legacy = await post(baseUrl, { rawText: 'jabłko' });

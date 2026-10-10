@@ -48,6 +48,8 @@ const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { getUserSettings } = require('../services/summaries');
 const { goalText } = require('../utils/defaultSettings');
+const { encrypt } = require('../utils/encryption');
+const { getLocalDateString } = require('../utils/dates');
 
 async function withTimeout(promise, ms) {
   return Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`no response within ${ms} ms`)), ms))]);
@@ -60,6 +62,7 @@ async function run() {
   app.use('/api', requireAuth);
   app.use(require('../routes/auth'));
   app.use(require('../routes/chat'));
+  app.use(require('../routes/dashboard'));
   const server = await new Promise((resolve) => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
 
@@ -109,6 +112,34 @@ async function run() {
     assert(ok.status === 200, `a well-formed message still works (got ${ok.status})`);
     assert(/brak celu \(nieustawiony\)|nieustawiony przez użytkownika/.test(prompts[0] || ''), 'the chat prompt marks goals the user never set');
     assert(!/Białko: 150g/.test(prompts[0] || ''), 'and does not present 150 g of protein as the user\'s goal');
+
+    console.log('\n--- TEST (S2, round 2): the daily advice prompt does not invent 2500 kcal / 2500 ml ---');
+    const advUser = (await db.run(
+      `INSERT INTO users (username, password_hash, sync_token, role, status) VALUES ('advice_user', 'x', 'sync_advice_user_xxxxxxxxxxxx', 'user', 'active')`
+    )).id;
+    await db.run(`INSERT INTO settings (user_id, key, value) VALUES (?, 'gemini_api_key', ?)`, [advUser, encrypt('user-own-test-key')]);
+    await db.run(
+      `INSERT INTO meals (user_id, date, raw_text, calories, protein, carbs, fat, analysis_json) VALUES (?, ?, 'owsianka', 400, 15, 60, 10, '{}')`,
+      [advUser, getLocalDateString()]
+    );
+    const advToken = 'sess_goals_advice_' + 'y'.repeat(30);
+    await db.run(`
+      INSERT INTO sessions (token, user_id, expires_at, absolute_expires_at, is_verified_2fa, is_temp)
+      VALUES (?, ?, datetime('now', '+1 day'), datetime('now', '+1 day'), 0, 0)
+    `, [advToken, advUser]);
+    prompts.length = 0;
+    const dash = await fetch(`${baseUrl}/api/dashboard`, { headers: { Authorization: `Bearer ${advToken}` } });
+    assert(dash.status === 200, `the dashboard answers (got ${dash.status})`);
+    // The advice is generated in the background; wait for the prompt to reach the stub.
+    for (let i = 0; i < 50 && !prompts.some(p => /Cel kaloryczny spożycia/.test(p)); i++) {
+      await new Promise(r => setTimeout(r, 100));
+    }
+    const advice = prompts.find(p => /Cel kaloryczny spożycia/.test(p)) || '';
+    assert(advice.length > 0, 'the advice prompt was built');
+    assert(/Cel kaloryczny spożycia: brak celu/.test(advice), 'an unset calorie goal reads "brak celu"');
+    assert(!/Cel kaloryczny spożycia: 2500 kcal/.test(advice), 'not 2500 kcal');
+    assert(/cel: brak celu/.test(advice) && !/cel: 2500ml/.test(advice), 'and the water goal is not 2500 ml');
+    assert(/BMR[^\n]*nieustawiony/.test(advice), 'an unset BMR is labelled as an approximation');
   } finally {
     server.close();
   }

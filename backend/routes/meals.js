@@ -154,7 +154,11 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
     imageSample: image ? image.slice(-100) : ''
   };
 
-  const lastRequest = recentRequests.get(userId);
+  // Content-based, so only for requests WITHOUT an idempotency key (an old cached frontend).
+  // With a key, the key alone decides what is a retry (audit 2026-10-10, round 2): two
+  // deliberate entries of the same meal within 15 s are two meals, and this window used to
+  // answer the second with the first one's result.
+  const lastRequest = req.body.idempotencyKey ? null : recentRequests.get(userId);
   if (lastRequest &&
       (now - lastRequest.timestamp < 15000) &&
       lastRequest.key.rawText === requestKey.rawText &&

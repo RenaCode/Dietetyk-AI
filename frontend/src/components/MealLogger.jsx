@@ -5,7 +5,7 @@ import { formatMealTime } from '../utils/format';
 // mealsUnknown: the day's data (/api/dashboard) failed to load, so an empty `meals` array
 // means "we do not know", not "the user ate nothing". Without this distinction a 500 from
 // the backend rendered as the confident claim "Brak wprowadzonych posiłków na ten dzień".
-export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing, frequentMeals, onRepeatMeal, mealsUnknown = false }) {
+export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing, frequentMeals, onRepeatMeal, mealsUnknown = false, canRetryMeal = false, onRetryMeal }) {
   const [mealText, setMealText] = useState('');
   const [imageSrc, setImageSrc] = useState(null);
   const [isCompressing, setIsCompressing] = useState(false);
@@ -106,6 +106,24 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
         setSuccessMessage(t('Posiłek zapisany!'));
         if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
         successTimeoutRef.current = setTimeout(() => setSuccessMessage(''), 4000);
+      }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // Re-sends the unconfirmed submission with its idempotency key (App.jsx, handleAddMeal):
+  // the server returns the meal the first attempt saved, or saves it once. Pressing "Add"
+  // instead is a NEW meal by design, so the form is cleared once the retry succeeds.
+  const handleRetry = async () => {
+    if (isAnalyzing || isSubmitting || !onRetryMeal) return;
+    setIsSubmitting(true);
+    try {
+      const ok = await onRetryMeal();
+      if (ok) {
+        setMealText('');
+        setImageSrc(null);
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
     } finally {
       setIsSubmitting(false);
@@ -282,6 +300,17 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
               </>
             )}
           </button>
+          {canRetryMeal && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleRetry}
+              disabled={isAnalyzing || isSubmitting}
+              style={{ marginTop: '8px' }}
+            >
+              {t('🔁 Ponów wysłanie (bez duplikatu)')}
+            </button>
+          )}
         </form>
       </div>
 

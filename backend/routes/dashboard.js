@@ -7,7 +7,7 @@ const { requireAuth } = require('../middleware/auth');
 const { getLocalDateString, getWarsawWallClock, shiftDate, isCalendarDateString, resolveQueryDate: resolveDateValue } = require('../utils/dates');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
 const { getCalorieBaseline, detectMealAnomalies } = require('../utils/mealAnomaly');
-const { DEFAULT_TARGET_WATER_ML, getTargetCalories, getBmr, getTargetWaterMl } = require('../utils/defaultSettings');
+const { DEFAULT_TARGET_WATER_ML, getTargetCalories, getBmr, getTargetWaterMl, userGoal, goalText } = require('../utils/defaultSettings');
 const { genAI, generateContentWithFallback } = require('../config');
 const { buildGoalPaceAnalysis } = require('../services/summaries');
 const { buildAppleHealthPromptContext, buildAppleHealthPeriodContext } = require('../utils/appleHealthPrompt');
@@ -714,15 +714,18 @@ router.get('/api/dashboard', async (req, res) => {
         const userLocation = await getUserLocationOverride(req.user.id);
         const weatherTimeContext = await getWeatherAndTimeContext(language, userLocation?.lat, userLocation?.lon);
 
+        // Goals go into the prompt only when the user set them (S2, audit round 2): the advice
+        // used to tell people their target was 2500 kcal / 2500 ml when those were defaults
+        // nobody chose. BMR keeps its default in the balance arithmetic, labelled as such.
         let advicePrompt = '';
         if (language === 'en') {
           advicePrompt = `
 You are a professional, friendly AI sports dietician working in the "Dietetyk AI" app.
 Analyze today's balance for user ${displayName} on date ${date}:
 User Goals:
-- Target daily calorie intake: ${getTargetCalories(settings)} kcal
-- Target Protein: ${settings.target_protein}g, Carbs: ${settings.target_carbs}g, Fat: ${settings.target_fat}g
-- BMR (Basal Metabolic Rate): ${bmr} kcal
+- Target daily calorie intake: ${goalText(userGoal(settings, 'target_calories'), ' kcal', 'en')}
+- Target Protein: ${goalText(userGoal(settings, 'target_protein'), 'g', 'en')}, Carbs: ${goalText(userGoal(settings, 'target_carbs'), 'g', 'en')}, Fat: ${goalText(userGoal(settings, 'target_fat'), 'g', 'en')}
+- BMR (Basal Metabolic Rate): ${userGoal(settings, 'bmr') !== null ? `${bmr} kcal` : `not set by the user - ${bmr} kcal assumed for the balance below, an approximation`}
 - User body goal description: ${bodyGoalText || 'not described in Settings'}${bodyGoalImagePart ? '\n- The user also attached a reference photo of their body goal (see the attached image) - analyze it visually and relate recommendations to the body shape shown in the photo (e.g., muscle level, fat tissue, proportions), in the context of other data.' : ''}
 
 Today's Balance:
@@ -732,7 +735,7 @@ Today's Balance:
 - Net balance (eaten - burned): ${netCalories} kcal
 - Steps today: ${displaySteps || 0}
 - Activity today: ${displayActiveMinutes || 0} min active, Distance: ${displayDistanceMeters ? (Math.round(displayDistanceMeters / 100) / 10) + ' km' : '0 km'}, Sedentary time: ${displaySedentaryMinutes || 0} min, Light activity: ${displayLowActivityMinutes || 0} min
-- Water intake today: ${health.water_ml || 0}ml (target: ${getTargetWaterMl(settings)}ml)
+- Water intake today: ${health.water_ml || 0}ml (target: ${goalText(userGoal(settings, 'target_water_ml'), 'ml', 'en')})
 - Supplements taken today: ${health.supplements || 'none (user did not save any supplements today)'}
 - Subjective state (user rating, scale 1-5): Energy: ${health.energy_level != null ? health.energy_level + '/5' : 'not rated'}, Mood: ${health.mood != null ? health.mood + '/5' : 'not rated'}
 - Workouts registered today (Apple Health): ${workouts.length > 0 ? workouts.map(w => {
@@ -819,9 +822,9 @@ Use **bolding** for key numbers and phrases in the Analysis and Recommendations.
 Jesteś profesjonalnym, przyjaznym dietetykiem sportowym AI pracującym w aplikacji "Dietetyk AI".
 Przeanalizuj dzisiejszy bilans użytkownika ${displayName} dla dnia ${date}:
 Cele użytkownika:
-- Cel kaloryczny spożycia: ${getTargetCalories(settings)} kcal
-- Cel Białka: ${settings.target_protein}g, Węglowodanych: ${settings.target_carbs}g, Tłuszczu: ${settings.target_fat}g
-- BMR (Podstawowa Przemiana Materii): ${bmr} kcal
+- Cel kaloryczny spożycia: ${goalText(userGoal(settings, 'target_calories'), ' kcal')}
+- Cel Białka: ${goalText(userGoal(settings, 'target_protein'), 'g')}, Węglowodanych: ${goalText(userGoal(settings, 'target_carbs'), 'g')}, Tłuszczu: ${goalText(userGoal(settings, 'target_fat'), 'g')}
+- BMR (Podstawowa Przemiana Materii): ${userGoal(settings, 'bmr') !== null ? `${bmr} kcal` : `nieustawiony przez użytkownika - do bilansu poniżej przyjęto ${bmr} kcal jako przybliżenie`}
 - Cel sylwetki opisany przez użytkownika: ${bodyGoalText || 'użytkownik nie opisał celu sylwetki w Ustawieniach'}${bodyGoalImagePart ? '\n- Użytkownik dołączył też zdjęcie referencyjne celu sylwetki (patrz załączony obraz) - przeanalizuj je wizualnie i odnieś rekomendacje do tego, jak wygląda sylwetka na zdjęciu (np. poziom umięśnienia, tkanki tłuszczowej, proporcje), w kontekście pozostałych danych.' : ''}
 
 Aktualny bilans dzisiejszy:
@@ -831,7 +834,7 @@ Aktualny bilans dzisiejszy:
 - Bilans netto (zjedzone - spalone): ${netCalories} kcal
 - Wykonane kroki dzisiaj: ${displaySteps || 0}
 - Aktywność dzisiaj: ${displayActiveMinutes || 0} min aktywności, Dystans: ${displayDistanceMeters ? (Math.round(displayDistanceMeters / 100) / 10) + ' km' : '0 km'}, Czas siedzący: ${displaySedentaryMinutes || 0} min, Niska intensywność: ${displayLowActivityMinutes || 0} min
-- Wypita woda dzisiaj: ${health.water_ml || 0}ml (cel: ${getTargetWaterMl(settings)}ml)
+- Wypita woda dzisiaj: ${health.water_ml || 0}ml (cel: ${goalText(userGoal(settings, 'target_water_ml'), 'ml')})
 - Przyjęte suplementy dzisiaj: ${health.supplements || 'brak (użytkownik nie zapisał dzisiaj żadnych suplementów)'}
 - Samopoczucie (ręczna ocena użytkownika, skala 1-5): Energia: ${health.energy_level != null ? health.energy_level + '/5' : 'nie oceniono'}, Nastrój: ${health.mood != null ? health.mood + '/5' : 'nie oceniono'}
 - Treningi zarejestrowane dzisiaj (Apple Health): ${workouts.length > 0 ? workouts.map(w => {

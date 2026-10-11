@@ -1,7 +1,7 @@
 {
   "App.jsx": 8,
   "components/ActivityTracker.jsx": 16,
-  "components/AdminPanel.jsx": 16,
+  "components/AdminPanel.jsx": 10,
   "components/AppleHealthEventsCard.jsx": 8,
   "components/AppleHealthMetricsCard.jsx": 1,
   "components/Dashboard.jsx": 171,

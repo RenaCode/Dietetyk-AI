@@ -693,6 +693,33 @@ const TRANSLATIONS = {
   "Pominięto dni bez pełnego szacunku: {n}.": "Days without a complete estimate left out: {n}.",
   "Porównanie dwóch średnich z Twoich danych, nie dowód naukowy.": "A comparison of two averages from your data, not scientific proof.",
   "⚠️ Dziś spożycie sodu (szacunek AI): ≈{sodium} mg - powyżej zalecanego dziennego limitu ({limit} mg, wytyczne WHO/AHA).": "⚠️ Today's sodium intake (AI estimate): ≈{sodium} mg - above the recommended daily limit ({limit} mg, WHO/AHA guidelines).",
+
+  // Admin panel: every action confirmed with the admin's own password (audit D-4)
+  "Twoje hasło administratora": "Your administrator password",
+  "Wpisz swoje hasło administratora.": "Enter your administrator password.",
+  "Akcje administracyjne wymagają hasła także po zalogowaniu przez SSO.": "Admin actions need your password even when signed in through SSO.",
+  "Niepoprawne hasło.": "Incorrect password.",
+  "Potwierdź": "Confirm",
+  "Sprawdzanie...": "Checking...",
+  "Zapisać konfigurację systemową?": "Save the system configuration?",
+  "Zmiana dotyczy wszystkich użytkowników (poczta, rejestracja, wymuszanie 2FA, integracje).": "The change applies to all users (mail, registration, 2FA enforcement, integrations).",
+  "Wysłać zaproszenie?": "Send the invitation?",
+  "Zaprosić nowego ADMINISTRATORA?": "Invite a new ADMINISTRATOR?",
+  "Konto {email} dostanie pełne uprawnienia administratora: zarządzanie użytkownikami i konfiguracją.": "The account {email} will get full administrator rights: managing users and the configuration.",
+  "Na adres {email} zostanie wysłany link do rejestracji (rola: użytkownik).": "A registration link will be sent to {email} (role: user).",
+  "Zaproszenie zostało wysłane na adres {email} (rola: {role}).": "The invitation was sent to {email} (role: {role}).",
+  "Wymusić zmianę hasła?": "Force a password change?",
+  "Użytkownik {username} zostanie wylogowany i przy kolejnym logowaniu ustawi nowe hasło.": "{username} will be signed out and will set a new password at the next sign-in.",
+  "Wymuś zmianę hasła": "Force password change",
+  "Zresetować 2FA?": "Reset 2FA?",
+  "Weryfikacja 2FA użytkownika {username} zostanie wyłączona, a jego sesje zakończone.": "2FA for {username} will be switched off and their sessions ended.",
+  "Resetuj 2FA": "Reset 2FA",
+  "Wymusić 2FA?": "Force 2FA?",
+  "Użytkownik {username} zostanie wylogowany i przy kolejnym logowaniu skonfiguruje 2FA.": "{username} will be signed out and will set up 2FA at the next sign-in.",
+  "Wymuś 2FA": "Force 2FA",
+  "Usunąć użytkownika?": "Delete the user?",
+  "Konto {username} i wszystkie jego dane zostaną usunięte. Tej operacji nie można cofnąć.": "The account {username} and all its data will be deleted. This cannot be undone.",
+  "Serwer zwrócił błąd ({status}) bez szczegółów.": "The server returned an error ({status}) without details.",
 };
 
 let currentLang = localStorage.getItem("language") || "pl";

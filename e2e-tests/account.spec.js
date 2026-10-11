@@ -61,7 +61,8 @@ test.describe('Konto: wymuszone 2FA, stare linki i brak Google', () => {
     // used: the E2E database has no Mailgun settings, and those fields are `required` in the form.
     const token = await page.evaluate(() => localStorage.getItem('diet_session_token'));
     const setGoogleFit = async (config) => {
-      const res = await page.request.post('/api/admin/config', { headers: { Authorization: `Bearer ${token}` }, data: config });
+      // Admin actions need the admin's password in the request (routes/admin.js).
+      const res = await page.request.post('/api/admin/config', { headers: { Authorization: `Bearer ${token}` }, data: { ...config, currentPassword: '3bda877d518c8cf7a80b32bb' } });
       expect(res.status()).toBe(200);
     };
 

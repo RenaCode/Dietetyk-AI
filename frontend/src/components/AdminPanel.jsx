@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { t } from '../utils/i18n';
+import AdminPasswordDialog from './AdminPasswordDialog';
 
 export default function AdminPanel({ sessionToken, onLogout }) {
   const [config, setConfig] = useState({
@@ -30,6 +31,9 @@ export default function AdminPanel({ sessionToken, onLogout }) {
   // buttons stayed clickable for the whole duration of the fetch - risking several parallel
   // requests from rapid repeated clicks.
   const [actioningUserId, setActioningUserId] = useState(null);
+  // The action waiting for the admin's password (see AdminPasswordDialog) - every change made
+  // from this panel goes through it, because the backend refuses them without the password.
+  const [passwordRequest, setPasswordRequest] = useState(null);
 
   useEffect(() => {
   // F-W4: an async IIFE with `cancelled` checked AFTER every await - guards against
@@ -44,6 +48,26 @@ export default function AdminPanel({ sessionToken, onLogout }) {
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Sends an admin action with the password the dialog collected. A non-JSON body (a proxy's
+  // HTML error page) comes back as {} - the caller then reports the bare status code.
+  const sendAdminAction = async (url, method, body) => {
+    const res = await fetch(url, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${sessionToken}`
+      },
+      body: JSON.stringify(body)
+    });
+    let data = {};
+    try {
+      data = await res.json();
+    } catch (_parseErr) {
+      data = {};
+    }
+    return { res, data };
+  };
 
   const fetchConfig = async () => {
     try {
@@ -91,130 +115,148 @@ export default function AdminPanel({ sessionToken, onLogout }) {
     }
   };
 
-  const handleSaveConfig = async (e) => {
+  const handleSaveConfig = (e) => {
     e.preventDefault();
-    setIsSavingConfig(true);
     setConfigMessage({ type: '', text: '' });
-
-    try {
-      const res = await fetch('/api/admin/config', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${sessionToken}`
-        },
-        body: JSON.stringify(config)
-      });
-
-      if (res.ok) {
-        setConfigMessage({ type: 'success', text: t('Konfiguracja systemowa została zapisana pomyślnie!') });
-        setTimeout(() => setConfigMessage({ type: '', text: '' }), 5000);
-      } else if (res.status === 401) {
-        if (onLogout) onLogout();
-      } else {
-        const data = await res.json();
-        setConfigMessage({ type: 'error', text: data.error || t('Błąd zapisu konfiguracji.') });
-      }
-    } catch (err) {
-      setConfigMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
-    } finally {
-      setIsSavingConfig(false);
-    }
-  };
-
-  const handleInvite = async (e) => {
-    e.preventDefault();
-    if (!inviteEmail.trim()) return;
-    setIsInviting(true);
-    setInviteMessage({ type: '', text: '' });
-
-    try {
-      const res = await fetch('/api/admin/invite', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${sessionToken}`
-        },
-        body: JSON.stringify({
-          email: inviteEmail.trim(),
-          role: inviteRole
-        })
-      });
-
-      if (res.ok) {
-        setInviteMessage({ type: 'success', text: `Zaproszenie zostało pomyślnie wysłane na adres ${inviteEmail} (rola: ${inviteRole})!` });
-        setInviteEmail('');
-        setInviteRole('user'); // Reset to default
-        fetchUsers(); // Refresh list to show pending user
-        setTimeout(() => setInviteMessage({ type: '', text: '' }), 5000);
-      } else if (res.status === 401) {
-        if (onLogout) onLogout();
-      } else {
-        const data = await res.json();
-        setInviteMessage({ type: 'error', text: data.error || t('Błąd wysyłania zaproszenia.') });
-      }
-    } catch (err) {
-      setInviteMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
-    } finally {
-      setIsInviting(false);
-    }
-  };
-
-  const handleUserAction = async (userId, action, confirmMsg) => {
-    if (confirmMsg && !confirm(confirmMsg)) return;
-    setUserActionMessage({ type: '', text: '' });
-    setActioningUserId(userId);
-
-    try {
-      let url = `/api/admin/users/${userId}/${action}`;
-      let method = 'POST';
-
-      if (action === 'delete') {
-        url = `/api/admin/users/${userId}`;
-        method = 'DELETE';
-      }
-
-      const res = await fetch(url, {
-        method,
-        headers: { 'Authorization': `Bearer ${sessionToken}` }
-      });
-
-      if (res.status === 401) {
-        if (onLogout) onLogout();
-        return;
-      }
-
-      // res.json() throws when the response is not JSON (a 500 returned by a proxy or the
-      // server as an HTML page rather than by our Express handler). That exception used to
-      // fall into the catch(err) below and display the generic connection-error message,
-      // which is misleading for a real 500 (a database operation failed) as opposed to an
-      // actual connection failure.
-      let data = {};
-      try {
-        data = await res.json();
-      } catch (_parseErr) {
-        if (!res.ok) {
-          setUserActionMessage({ type: 'error', text: `Serwer zwrócił błąd (${res.status}) bez szczegółów.` });
-          return;
+    setPasswordRequest({
+      title: t('Zapisać konfigurację systemową?'),
+      message: t('Zmiana dotyczy wszystkich użytkowników (poczta, rejestracja, wymuszanie 2FA, integracje).'),
+      confirmLabel: t('Zapisz konfigurację'),
+      execute: async (password) => {
+        setIsSavingConfig(true);
+        try {
+          return await sendAdminAction('/api/admin/config', 'POST', { ...config, currentPassword: password });
+        } finally {
+          setIsSavingConfig(false);
+        }
+      },
+      onDone: (res, data) => {
+        if (res.ok) {
+          setConfigMessage({ type: 'success', text: t('Konfiguracja systemowa została zapisana pomyślnie!') });
+          setTimeout(() => setConfigMessage({ type: '', text: '' }), 5000);
+        } else {
+          setConfigMessage({ type: 'error', text: data.error || t('Błąd zapisu konfiguracji.') });
         }
       }
+    });
+  };
 
-      if (res.ok) {
-        setUserActionMessage({ type: 'success', text: data.message || t('Operacja wykonana pomyślnie!') });
-        fetchUsers();
-        setTimeout(() => setUserActionMessage({ type: '', text: '' }), 5000);
-      } else {
-        setUserActionMessage({ type: 'error', text: data.error || t('Wystąpił błąd podczas wykonywania akcji.') });
+  const handleInvite = (e) => {
+    e.preventDefault();
+    const email = inviteEmail.trim();
+    if (!email) return;
+    const role = inviteRole;
+    const asAdmin = role === 'admin';
+    setInviteMessage({ type: '', text: '' });
+    setPasswordRequest({
+      // The admin role is named in the dialog's title itself: the backend also wants
+      // confirm_admin for it, and the dialog is where the admin explicitly confirms it.
+      title: asAdmin ? t('Zaprosić nowego ADMINISTRATORA?') : t('Wysłać zaproszenie?'),
+      message: asAdmin
+        ? t('Konto {email} dostanie pełne uprawnienia administratora: zarządzanie użytkownikami i konfiguracją.', { email })
+        : t('Na adres {email} zostanie wysłany link do rejestracji (rola: użytkownik).', { email }),
+      confirmLabel: t('Wyślij zaproszenie'),
+      danger: asAdmin,
+      execute: async (password) => {
+        setIsInviting(true);
+        try {
+          return await sendAdminAction('/api/admin/invite', 'POST', {
+            email,
+            role,
+            confirm_admin: asAdmin,
+            currentPassword: password
+          });
+        } finally {
+          setIsInviting(false);
+        }
+      },
+      onDone: (res, data) => {
+        if (res.ok) {
+          setInviteMessage({ type: 'success', text: t('Zaproszenie zostało wysłane na adres {email} (rola: {role}).', { email, role }) });
+          setInviteEmail('');
+          setInviteRole('user'); // Reset to default
+          fetchUsers(); // Refresh list to show pending user
+          setTimeout(() => setInviteMessage({ type: '', text: '' }), 5000);
+        } else {
+          setInviteMessage({ type: 'error', text: data.error || t('Błąd wysyłania zaproszenia.') });
+        }
       }
-    } catch (err) {
-      setUserActionMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
-    } finally {
-      setActioningUserId(null);
+    });
+  };
+
+  // What each per-user action asks in the password dialog.
+  const USER_ACTIONS = {
+    'force-password-change': {
+      title: t('Wymusić zmianę hasła?'),
+      message: (username) => t('Użytkownik {username} zostanie wylogowany i przy kolejnym logowaniu ustawi nowe hasło.', { username }),
+      confirmLabel: t('Wymuś zmianę hasła')
+    },
+    'reset-2fa': {
+      title: t('Zresetować 2FA?'),
+      message: (username) => t('Weryfikacja 2FA użytkownika {username} zostanie wyłączona, a jego sesje zakończone.', { username }),
+      confirmLabel: t('Resetuj 2FA'),
+      danger: true
+    },
+    'force-2fa': {
+      title: t('Wymusić 2FA?'),
+      message: (username) => t('Użytkownik {username} zostanie wylogowany i przy kolejnym logowaniu skonfiguruje 2FA.', { username }),
+      confirmLabel: t('Wymuś 2FA')
+    },
+    delete: {
+      title: t('Usunąć użytkownika?'),
+      message: (username) => t('Konto {username} i wszystkie jego dane zostaną usunięte. Tej operacji nie można cofnąć.', { username }),
+      confirmLabel: t('Usuń'),
+      danger: true
     }
+  };
+
+  const handleUserAction = (user, action) => {
+    const spec = USER_ACTIONS[action];
+    setUserActionMessage({ type: '', text: '' });
+    const url = action === 'delete' ? `/api/admin/users/${user.id}` : `/api/admin/users/${user.id}/${action}`;
+    const method = action === 'delete' ? 'DELETE' : 'POST';
+    setPasswordRequest({
+      title: spec.title,
+      message: spec.message(user.username),
+      confirmLabel: spec.confirmLabel,
+      danger: spec.danger,
+      execute: async (password) => {
+        setActioningUserId(user.id);
+        try {
+          return await sendAdminAction(url, method, { currentPassword: password });
+        } finally {
+          setActioningUserId(null);
+        }
+      },
+      onDone: (res, data) => {
+        if (res.ok) {
+          setUserActionMessage({ type: 'success', text: data.message || t('Operacja wykonana pomyślnie!') });
+          fetchUsers();
+          setTimeout(() => setUserActionMessage({ type: '', text: '' }), 5000);
+        } else {
+          // A response without a JSON body (a proxy's HTML error page) says only its status;
+          // it used to be reported as a connection failure, which a real 500 is not.
+          setUserActionMessage({
+            type: 'error',
+            text: data.error || t('Serwer zwrócił błąd ({status}) bez szczegółów.', { status: res.status })
+          });
+        }
+      }
+    });
   };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      <AdminPasswordDialog
+        request={passwordRequest}
+        onCancel={() => setPasswordRequest(null)}
+        onDone={(res, data) => {
+          const request = passwordRequest;
+          setPasswordRequest(null);
+          if (request) request.onDone(res, data);
+        }}
+        onLogout={onLogout}
+      />
       
       {/* Sekcja 1: Konfiguracja Systemowa i Integracje */}
       <div className="glass-card">
@@ -504,7 +546,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
                       {u.role !== 'admin' && (
                         <>
                           <button
-                            onClick={() => handleUserAction(u.id, 'force-password-change', `Czy na pewno chcesz wymusić zmianę hasła przy kolejnym logowaniu dla użytkownika ${u.username}?`)}
+                            onClick={() => handleUserAction(u, 'force-password-change')}
                             className="btn-secondary"
                             disabled={actioningUserId === u.id}
                             style={{ padding: '4px 8px', fontSize: '0.75rem', border: '1px solid var(--border-glass)', opacity: actioningUserId === u.id ? 0.5 : 1 }}
@@ -513,7 +555,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
                           </button>
                           {u.totp_enabled === 1 ? (
                             <button
-                              onClick={() => handleUserAction(u.id, 'reset-2fa', `Czy na pewno chcesz zresetować weryfikację 2FA dla użytkownika ${u.username}?`)}
+                              onClick={() => handleUserAction(u, 'reset-2fa')}
                               className="btn-secondary"
                               disabled={actioningUserId === u.id}
                               style={{ padding: '4px 8px', fontSize: '0.75rem', border: '1px solid var(--border-glass)', background: 'rgba(245, 158, 11, 0.05)', color: '#fbbf24', opacity: actioningUserId === u.id ? 0.5 : 1 }}
@@ -523,7 +565,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
                           ) : (
                             !u.force_2fa && (
                               <button
-                                onClick={() => handleUserAction(u.id, 'force-2fa', `Czy na pewno chcesz wymusić aktywację 2FA przy kolejnym logowaniu dla użytkownika ${u.username}?`)}
+                                onClick={() => handleUserAction(u, 'force-2fa')}
                                 className="btn-secondary"
                                 disabled={actioningUserId === u.id}
                                 style={{ padding: '4px 8px', fontSize: '0.75rem', border: '1px solid var(--border-glass)', background: 'rgba(56, 189, 248, 0.05)', color: '#38bdf8', opacity: actioningUserId === u.id ? 0.5 : 1 }}
@@ -533,7 +575,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
                             )
                           )}
                           <button
-                            onClick={() => handleUserAction(u.id, 'delete', `Czy na pewno chcesz usunąć użytkownika ${u.username} i wszystkie jego dane? Tej operacji nie można cofnąć.`)}
+                            onClick={() => handleUserAction(u, 'delete')}
                             className="btn-danger"
                             disabled={actioningUserId === u.id}
                             style={{ padding: '4px 8px', fontSize: '0.75rem', opacity: actioningUserId === u.id ? 0.5 : 1 }}

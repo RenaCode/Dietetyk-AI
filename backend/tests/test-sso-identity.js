@@ -73,7 +73,12 @@ function call(method, urlPath, { body, token, headers = {} } = {}) {
     if (token) req.setHeader('Authorization', `Bearer ${token}`);
     // An array value goes out as one header line per element - the repeated-header case.
     for (const [name, value] of Object.entries(headers)) req.setHeader(name, value);
-    req.end(method === 'GET' ? undefined : JSON.stringify(body || {}));
+    // An explicit length: without it Node's client sends a DELETE body chunked, and the
+    // server's parser answers that with a bare 400 before express ever sees the request - which
+    // is how "deleting the account needs the password" below used to pass on an empty body.
+    const payload = method === 'GET' ? undefined : JSON.stringify(body || {});
+    if (payload !== undefined) req.setHeader('Content-Length', Buffer.byteLength(payload));
+    req.end(payload);
   });
 }
 
@@ -368,7 +373,7 @@ async function testSensitiveActionsNeedThePassword() {
   const elsewhere = await call('POST', '/api/user/send-weekly-summary', { token, headers, body: { email: 'x@evil.invalid' } });
   assert(elsewhere.status === 400 && elsewhere.body.requirePassword === true, `a summary to another address needs the password (got ${elsewhere.status})`);
   const del = await call('DELETE', '/api/user/account', { token, headers, body: {} });
-  assert(del.status === 400, `deleting the account needs the password (got ${del.status})`);
+  assert(del.status === 400 && !!del.body.error, `deleting the account needs the password (got ${del.status} ${JSON.stringify(del.body)})`);
 
   const ok = await call('POST', '/api/user/change-password', { token, headers, body: { currentPassword: PASSWORD, newPassword: 'brandnew123' } });
   assert(ok.status === 200 && /portalu logowania/.test(ok.body.message), 'with it the change goes through, and says SSO devices are not cut off');

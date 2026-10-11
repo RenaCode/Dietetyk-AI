@@ -50,6 +50,7 @@ stubModule('utils/fetchWithTimeout.js', {
   }
 });
 
+const bcrypt = require('bcryptjs');
 const db = require('../db');
 const app = require('../app');
 const { syncAllGoogleFit } = require('../services/sync');
@@ -97,12 +98,15 @@ async function call(baseUrl, method, urlPath, { token, body, cookies } = {}) {
   return { status: res.status, location: res.headers.get('location') || '', json, res };
 }
 
+// Saving the admin config needs the admin's password (routes/admin.js, requireAdminPassword).
+const PASSWORD = 'gfitpass123';
+
 async function createUserWithSession(role) {
   const username = 'gfit_' + Math.random().toString(36).substring(2, 8);
   const result = await db.run(`
     INSERT INTO users (username, password_hash, sync_token, totp_enabled, role, status)
-    VALUES (?, 'x', ?, 0, ?, 'active')
-  `, [username, 'sync_' + 'f'.repeat(40) + Math.random().toString(36).substring(2, 6), role]);
+    VALUES (?, ?, ?, 0, ?, 'active')
+  `, [username, await bcrypt.hash(PASSWORD, 10), 'sync_' + 'f'.repeat(40) + Math.random().toString(36).substring(2, 6), role]);
   const token = 'sess_' + Math.random().toString(36).substring(2) + 'w'.repeat(30);
   await db.run(`
     INSERT INTO sessions (token, user_id, expires_at, absolute_expires_at, is_verified_2fa, is_temp)
@@ -160,7 +164,7 @@ async function testAdminTurnsItOn(baseUrl, admin) {
   console.log('\n--- TEST: the Admin Panel stores the switch and the Google client ---');
   const save = await call(baseUrl, 'POST', '/api/admin/config', {
     token: admin.token,
-    body: { google_fit_enabled: '1', google_client_id: 'cid.apps.example', google_client_secret: 'csecret' }
+    body: { google_fit_enabled: '1', google_client_id: 'cid.apps.example', google_client_secret: 'csecret', currentPassword: PASSWORD }
   });
   assert(save.status === 200, 'saving succeeds');
   const config = await call(baseUrl, 'GET', '/api/admin/config', { token: admin.token });
@@ -207,7 +211,7 @@ async function testOnWorksAsBefore(baseUrl, user, newcomer) {
 
 async function testOffAgainKeepsData(baseUrl, admin, user) {
   console.log('\n--- TEST: switching it off again keeps what is stored ---');
-  await call(baseUrl, 'POST', '/api/admin/config', { token: admin.token, body: { google_fit_enabled: '0' } });
+  await call(baseUrl, 'POST', '/api/admin/config', { token: admin.token, body: { google_fit_enabled: '0', currentPassword: PASSWORD } });
   const before = googleCalls();
   await syncAllGoogleFit();
   assert(googleCalls() === before, 'the hourly sync stops at once (no restart)');

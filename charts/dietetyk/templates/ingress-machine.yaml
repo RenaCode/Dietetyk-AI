@@ -1,0 +1,54 @@
+{{- if and .Values.ingress.enabled .Values.sso.enabled }}
+# With SSO on (values `sso`), the whole host is behind Authelia (main Ingress in ingress.yaml).
+# These two paths are called by something that cannot log in through a browser, so they get
+# their own routes WITHOUT forwardAuth:
+#
+#   POST /api/integrations/apple-health/:syncToken  - the iOS Shortcut / Health Auto Export
+#                                                     webhook; the sync token is the only secret.
+#   GET  /api/public/shared-reports/:token          - a PDF link sent to a doctor or dietician
+#                                                     with no account anywhere.
+#
+# Both are matched by method AND the whole path shape (token charset and length as in
+# routes/account.js SYNC_TOKEN_REGEX), so nothing next to them escapes SSO: GET on the webhook,
+# POST on a report, deeper paths and `..` (Traefik normalises the path before matching) all fall
+# through to the protected router. Checked on k3s v1.35.5 with the cluster's Traefik
+# (renacode-infra scripts/proba-authelia-k3s.sh).
+#
+# NOT here, on purpose: OAuth callbacks (Oura/Withings/Google Fit) - the user's own browser comes
+# back from the provider as a top-level GET, which carries the SameSite=Lax Authelia cookie, so
+# they pass SSO like any other page. /api/healthz - kubelet probes hit the pod directly.
+#
+# Identity headers (Remote-User etc.) supplied by the client are stripped here as well, so no
+# route through Traefik delivers them to the app unverified (renacode-infra
+# docs/sso-tozsamosc.md).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ include "dietetyk.fullname" . }}-machine
+  labels:
+    {{- include "dietetyk.labels" . | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`{{ .Values.ingress.host }}`) && Method(`POST`) && PathRegexp(`^/api/integrations/apple-health/[A-Za-z0-9_-]{16,128}$`)
+      kind: Rule
+      middlewares:
+        - name: {{ .Values.sso.stripHeadersMiddleware.name }}
+          namespace: {{ .Values.sso.stripHeadersMiddleware.namespace }}
+      services:
+        - name: {{ include "dietetyk.fullname" . }}-frontend
+          port: 80
+    - match: Host(`{{ .Values.ingress.host }}`) && (Method(`GET`) || Method(`HEAD`)) && PathRegexp(`^/api/public/shared-reports/[A-Za-z0-9_-]{16,128}$`)
+      kind: Rule
+      middlewares:
+        - name: {{ .Values.sso.stripHeadersMiddleware.name }}
+          namespace: {{ .Values.sso.stripHeadersMiddleware.namespace }}
+      services:
+        - name: {{ include "dietetyk.fullname" . }}-frontend
+          port: 80
+  # The certificate is issued for the main Ingress (cert-manager annotation there); these routes
+  # only use the same secret.
+  tls:
+    secretName: {{ .Values.ingress.tlsSecret }}
+{{- end }}

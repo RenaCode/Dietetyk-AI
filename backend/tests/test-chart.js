@@ -124,18 +124,22 @@ function run() {
   const disabled = render('--set', 'networkPolicy.enabled=false');
   assert(!/^kind: NetworkPolicy$/m.test(disabled), 'networkPolicy.enabled=false renders no policy (quick rollback)');
 
-  console.log('\n--- TEST: SSO (Authelia) only in front of /api/admin ---');
+  console.log('\n--- TEST: SSO (Authelia) in front of the whole host, machine paths beside it ---');
   assert(!/authelia/.test(rendered) && !/^kind: IngressRoute$/m.test(rendered), 'by default nothing goes behind SSO');
   const sso = render('--set', 'sso.enabled=true');
   const ssoDocs = sso.split(/^---$/m);
+  const main = ssoDocs.find(d => /^kind: Ingress$/m.test(d) && /^ {2}name: dietetyk$/m.test(d)) || '';
+  assert(/router\.middlewares: default-authelia-naglowki@kubernetescrd,default-authelia-sso@kubernetescrd\n/.test(main), 'the main Ingress strips client identity headers, then goes through Authelia');
+  assert(/cert-manager\.io\/cluster-issuer: letsencrypt-prod/.test(main) && /router\.entrypoints: websecure/.test(main), 'the main Ingress keeps its other annotations');
   const route = ssoDocs.find(d => /^kind: IngressRoute$/m.test(d)) || '';
-  assert(/match: Host\(`dietetyk\.renacode\.com`\) && PathRegexp\(`\(\?i\)\^\/api\/admin`\)/.test(route), 'the admin route matches /api/admin case-insensitively (Express routes ignore case)');
-  assert(/middlewares:\s*\n\s*- name: authelia-sso\s*\n\s*namespace: default/.test(route), 'the admin route goes through the Authelia forwardAuth middleware');
-  assert(/entryPoints:\s*\n\s*- websecure/.test(route) && /secretName: dietetyk-tls-cert/.test(route), 'HTTPS only, with the main certificate');
-  assert(!/cert-manager\.io\/cluster-issuer:/.test(route), 'the route requests no second certificate');
-  const mainWithSso = ssoDocs.find(d => /^kind: Ingress$/m.test(d) && /^ {2}name: dietetyk$/m.test(d)) || '';
-  assert(!/authelia/.test(mainWithSso) && /path: \//.test(mainWithSso), 'the public Ingress (users, Apple Health, OAuth callbacks, shared reports) stays without SSO');
-  assert(ssoDocs.filter(d => /authelia/.test(d)).length === 1, 'exactly one object references Authelia');
+  const matches = (route.match(/match: .*/g) || []);
+  assert(matches.length === 2, 'exactly two machine routes');
+  assert(/Method\(`POST`\) && PathRegexp\(`\^\/api\/integrations\/apple-health\/\[A-Za-z0-9_-\]\{16,128\}\$`\)/.test(matches[0]), 'Apple Health webhook: POST and the whole token-shaped path only');
+  assert(/\(Method\(`GET`\) \|\| Method\(`HEAD`\)\) && PathRegexp\(`\^\/api\/public\/shared-reports\/\[A-Za-z0-9_-\]\{16,128\}\$`\)/.test(matches[1]), 'shared report: GET/HEAD and the whole token-shaped path only');
+  assert(!/authelia-sso/.test(route) && (route.match(/name: authelia-naglowki/g) || []).length === 2, 'machine routes skip forwardAuth but still strip identity headers');
+  assert(/secretName: dietetyk-tls-cert/.test(route) && !/cert-manager\.io\/cluster-issuer:/.test(route), 'HTTPS with the main certificate, no second certificate');
+  const ssoRedirect = ssoDocs.find(d => /^ {2}name: dietetyk-http-redirect$/m.test(d)) || '';
+  assert(!/authelia/.test(ssoRedirect), 'the HTTP->HTTPS redirect needs no SSO (it never reaches the app)');
 }
 
 try {

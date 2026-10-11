@@ -370,32 +370,56 @@ const initDb = async () => {
     console.log('========================================================');
   }
 
-  // For existing installations: rename to admin, set the 'admin' role
-  // and the email (but only when the current email is empty or the default admin@dietetyk-ai.local
-  // and a different address is configured in the environment).
-  const currentAdmin = await get(`SELECT email FROM users WHERE id = 1`);
+  // The guarantee is "at least one ACTIVE admin exists", not "id 1 is the admin".
+  //
+  // This used to rewrite id 1 to username 'admin' and role 'admin' on EVERY start. That kept a
+  // fresh install administrable, but it also made id 1 an admin for ever: with single sign-on
+  // the owner's everyday account - the one holding years of history, which is id 1 - must be an
+  // ordinary user, with administration moved to a separate account. Demoting id 1 lasted until
+  // the next pod restart, and its username was renamed back to 'admin' each time too.
+  //
+  // Now id 1 is touched only when no active admin exists at all (a fresh database gets its
+  // admin from the INSERT above, so nothing changes there): it is promoted, as before, so an
+  // instance can never be left without an administrator. A pending invitation with the admin
+  // role does not count - nobody can log in to it yet, so demoting id 1 before the new admin
+  // has finished registering is undone at the next start instead of locking everyone out.
+  const activeAdmin = await get(`SELECT id FROM users WHERE role = 'admin' AND status = 'active' ORDER BY id LIMIT 1`);
+  const currentAdmin = await get(`SELECT email, role FROM users WHERE id = 1`);
   if (currentAdmin) {
+    const promote = !activeAdmin;
     const currentEmail = currentAdmin.email || '';
-    const shouldUpdateEmail = !currentEmail || (process.env.ADMIN_EMAIL && currentEmail === 'admin@dietetyk-ai.local' && currentEmail !== process.env.ADMIN_EMAIL);
+    // ADMIN_EMAIL fills the address of the ADMIN account (empty, or still the placeholder) -
+    // so only while id 1 is, or is about to become, that account. An ordinary user's address
+    // is theirs.
+    const shouldUpdateEmail = (promote || currentAdmin.role === 'admin')
+      && (!currentEmail || (process.env.ADMIN_EMAIL && currentEmail === 'admin@dietetyk-ai.local' && currentEmail !== process.env.ADMIN_EMAIL));
 
     if (shouldUpdateEmail) {
       try {
-        await run(`UPDATE users SET username = 'admin', email = ?, role = 'admin' WHERE id = 1`, [adminEmail]);
+        await run(`UPDATE users SET email = ? WHERE id = 1`, [adminEmail]);
       } catch (err) {
         // ONE expected failure, since users.email became UNIQUE above: the address in
         // ADMIN_EMAIL is already held by a different account. That is a configuration
         // conflict for an operator to resolve, not a reason to crash-loop the pod and lock
-        // everyone out - so the admin keeps the address it has, the role is still fixed,
-        // and the conflict is reported. Any other error is a real database problem and
-        // propagates, which stops the start (see start() in server.js).
+        // everyone out - so the admin keeps the address it has, and the conflict is reported.
+        // Any other error is a real database problem and propagates, which stops the start
+        // (see start() in server.js).
         if (!UNIQUE_CONSTRAINT_ERROR.test(err && err.message ? err.message : '')) throw err;
         const message = `[DB MIGRATE] ADMIN_EMAIL (${adminEmail}) is already used by another account - the admin account keeps its current address.`;
         console.error(message);
         pendingMigrationAlerts.push({ message, detail: err.message });
-        await run(`UPDATE users SET username = 'admin', role = 'admin' WHERE id = 1`);
       }
-    } else {
-      await run(`UPDATE users SET username = 'admin', role = 'admin' WHERE id = 1`);
+    }
+
+    if (promote) {
+      await run(`UPDATE users SET role = 'admin' WHERE id = 1`);
+      // The name only if it is free: once id 1 has been renamed, another account may have
+      // taken 'admin', and a UNIQUE failure here would stop the start - the one moment an
+      // instance without an admin most needs to come up.
+      await run(`UPDATE users SET username = 'admin' WHERE id = 1 AND NOT EXISTS (SELECT 1 FROM users WHERE username = 'admin' AND id != 1)`);
+      const message = '[DB MIGRATE] No active admin account - account id 1 was promoted to admin.';
+      console.error(message);
+      pendingMigrationAlerts.push({ message });
     }
   }
 

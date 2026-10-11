@@ -9,12 +9,17 @@
 //     10.43/16) - home LAN and VPN addresses look exactly like that,
 //   - any public IPv4 address - only the k3s ranges, 172.16/12, loopback and the
 //     documentation ranges (RFC 5737: 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24) pass,
-//   - e-mail addresses outside example domains, .invalid/.local and noreply addresses.
+//   - e-mail addresses outside example domains, .invalid/.local and noreply addresses,
+//   - the first names of the owner's household (audit 2026-10-11): they had leaked into a
+//     variable name, two code comments and two form placeholders. The names are compared as
+//     SHA-256 digests of lower-cased words, so this test does not publish them itself.
+//     LICENSE is exempt - the copyright line names the author on purpose.
 // Lockfiles are skipped (package versions look like IPs and contain registry URLs only).
 //
 // Run with: node tests/test-public-repo-hygiene.js
 
 const { execFileSync } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -38,6 +43,24 @@ function trackedFiles() {
 }
 
 const SKIP = /(^|\/)package-lock\.json$|\.(png|jpe?g|gif|ico|woff2?|ttf|pdf|db)$/i;
+
+const PERSONAL_NAME_DIGESTS = new Set([
+  '62552a91170383e3b54de21d508898927c9382c9c772109a9cc51677f4d37333',
+  'e89615782c18608d91e649ba5ebd1fe903e4aa2ca42f9fe1addb6661c17530b3'
+]);
+
+// Words of a line, camelCase split too, so `defaultXyzSettings` yields `xyz`.
+function wordsOf(line) {
+  return line
+    .replace(/([a-ząćęłńóśźż])([A-ZĄĆĘŁŃÓŚŹŻ])/g, '$1 $2')
+    .split(/[^A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]+/)
+    .filter(Boolean)
+    .map((w) => w.toLowerCase());
+}
+
+function isPersonalName(word) {
+  return PERSONAL_NAME_DIGESTS.has(crypto.createHash('sha256').update(word).digest('hex'));
+}
 
 function isAllowedIp(ip) {
   const [a, b, c] = ip.split('.').map(Number);
@@ -68,8 +91,10 @@ function run() {
   }
   const badIps = [];
   const badEmails = [];
+  const badNames = [];
   for (const rel of files) {
     if (SKIP.test(rel)) continue;
+    const checkNames = rel !== 'LICENSE';
     const full = path.join(root, rel);
     let text;
     try {
@@ -84,10 +109,13 @@ function run() {
       for (const m of line.matchAll(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g)) {
         if (!isAllowedEmail(m[0])) badEmails.push(`${rel}:${i + 1} ${m[0]}`);
       }
+      if (checkNames && wordsOf(line).some(isPersonalName)) badNames.push(`${rel}:${i + 1}`);
     });
   }
   assert(badIps.length === 0, `no home/VPN or public IPv4 address in tracked files${badIps.length ? ':\n   ' + badIps.join('\n   ') : ''}`);
   assert(badEmails.length === 0, `no real e-mail address in tracked files${badEmails.length ? ':\n   ' + badEmails.join('\n   ') : ''}`);
+  assert(wordsOf('defaultAbcSettings').join(' ') === 'default abc settings', 'the name check splits camelCase words');
+  assert(badNames.length === 0, `no household first name in tracked files (LICENSE exempt)${badNames.length ? ':\n   ' + badNames.join('\n   ') : ''}`);
 }
 
 try {

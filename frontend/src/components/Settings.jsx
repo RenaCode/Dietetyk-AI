@@ -1353,7 +1353,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   className="input-field"
                   value={firstNameInput}
                   onChange={(e) => setFirstNameInput(e.target.value)}
-                  placeholder="np. Marcin"
+                  placeholder="np. Anna"
                   maxLength={50}
                 />
               </div>

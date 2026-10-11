@@ -400,7 +400,7 @@ export default function AdminPanel({ sessionToken, onLogout }) {
               className="input-field"
               value={inviteEmail}
               onChange={(e) => setInviteEmail(e.target.value)}
-              placeholder="np. paulina@example.com"
+              placeholder="np. imie@example.com"
               required
             />
           </div>

@@ -10,6 +10,7 @@ const loginAttempts = require('../services/loginAttempts');
 const logger = require('../services/logger');
 const { isValidUsername, USERNAME_RULE_MESSAGE } = require('../utils/username');
 const { cleanUpAfterCredentialReset } = require('../services/accountCleanup');
+const { isSsoEnabled, readSsoIdentity, findAccountForIdentity, ssoLogoutUrl } = require('../services/ssoIdentity');
 
 // Helper for creating a session (temporary or permanent) - extracted because the same
 // pattern (generate a token, compute expires_at, insert a sessions row) was repeated
@@ -73,7 +74,9 @@ const validatePassword = (password) => {
   return null;
 };
 
-async function createSession(userId, isVerified2fa, ttlDays = PERMANENT_SESSION_TTL_DAYS) {
+// `authMethod` is NULL for every way in that this file implements itself and 'sso' only for
+// POST /api/auth/sso below - see sessions.auth_method in db.js for what the marker decides.
+async function createSession(userId, isVerified2fa, ttlDays = PERMANENT_SESSION_TTL_DAYS, authMethod = null) {
   // A sub-day TTL is only ever produced by TEMP_SESSION_TTL_DAYS, i.e. by a session that
   // exists purely to carry the user through one verification step. Deriving both the flag
   // and the prefix from the same expression keeps them from drifting apart.
@@ -97,9 +100,9 @@ async function createSession(userId, isVerified2fa, ttlDays = PERMANENT_SESSION_
     : new Date(Date.now() + ABSOLUTE_SESSION_TTL_DAYS * 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19);
 
   await db.run(`
-    INSERT INTO sessions (token, user_id, expires_at, absolute_expires_at, is_verified_2fa, is_temp)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `, [token, userId, expiresAt, absoluteExpiresAt, isVerified2fa ? 1 : 0, isTemp ? 1 : 0]);
+    INSERT INTO sessions (token, user_id, expires_at, absolute_expires_at, is_verified_2fa, is_temp, auth_method)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `, [token, userId, expiresAt, absoluteExpiresAt, isVerified2fa ? 1 : 0, isTemp ? 1 : 0, authMethod]);
   return token;
 }
 
@@ -226,6 +229,70 @@ router.post('/api/login', async (req, res) => {
   } catch (err) {
     console.error('Login failed:', err);
     res.status(500).json({ error: 'Błąd logowania serwera.' });
+  }
+});
+
+// Session from Authelia's identity (renacode-infra docs/sso-tozsamosc.md). The frontend calls
+// this on start when it holds no token; the answer either carries a session or tells it to
+// show the ordinary login form.
+//
+// Deliberately NOT routed through completeLogin. Every step there is about the application's
+// own credentials: the TOTP (Authelia has already demanded a second factor - every rule for
+// this host is `two_factor`), forced 2FA enrolment (the same), and an owed password change
+// (the local password is the break-glass credential and is not used on this path; the change
+// is still owed, and still enforced, at the next password login). Applying them here would
+// either ask an SSO user for a second TOTP from a different app or block them on a password
+// they are not using.
+//
+// is_verified_2fa = 1 records that a second factor WAS checked, by Authelia. It keeps the
+// session from tripping requireAuth's "2FA on but not verified" refusal; what keeps it from
+// being worth anything outside Authelia is auth_method = 'sso' (middleware/auth.js).
+router.post('/api/auth/sso', async (req, res) => {
+  if (!isSsoEnabled()) {
+    // 404 rather than 401: there is no such way in on this instance, and the frontend reads
+    // `ssoEnabled: false` as "show the login form, do not retry".
+    return res.status(404).json({ error: 'Logowanie SSO jest wyłączone.', ssoEnabled: false });
+  }
+  const parsed = readSsoIdentity(req);
+  if (!parsed) {
+    // Flag on, no identity: the break-glass path (`kubectl port-forward` past Traefik while
+    // Authelia is down). The ordinary login form is the answer, with password and TOTP.
+    return res.status(401).json({ error: 'Brak tożsamości SSO - zaloguj się hasłem.', ssoEnabled: true });
+  }
+  try {
+    if (parsed.error) {
+      logger.security(`SSO login refused: ${parsed.error.body.error}`, 'AUTH_SSO_DENIED', { reason: parsed.error.body.ssoDenied || 'invalid_headers' }, req.ip);
+      return res.status(parsed.error.status).json({ ...parsed.error.body, ssoEnabled: true });
+    }
+    const { identity } = parsed;
+    const account = await findAccountForIdentity(identity);
+    if (account.error) {
+      logger.security(
+        `SSO login refused for ${identity.user} <${identity.email}>: ${account.error.body.ssoDenied}`,
+        'AUTH_SSO_DENIED',
+        { remoteUser: identity.user, email: identity.email, reason: account.error.body.ssoDenied },
+        req.ip
+      );
+      return res.status(account.error.status).json({ ...account.error.body, ssoEnabled: true });
+    }
+
+    const token = await createSession(account.user.id, true, PERMANENT_SESSION_TTL_DAYS, 'sso');
+    // The audit trail the weekly security report reads: who came in through SSO, under which
+    // Authelia identity, as which account. Groups are recorded because they decided entry. The
+    // address is left out: it is the account's own (the UID leads to it), and every SSO
+    // sign-in - each page load without a token - would otherwise copy personal data into
+    // app_logs and the report. A refusal keeps it: there no account exists to look it up in.
+    logger.security(
+      `SSO login: ${identity.user} as ${account.user.username} (UID: ${account.user.id})`,
+      'AUTH_SSO_LOGIN',
+      { remoteUser: identity.user, groups: identity.groups, userId: account.user.id },
+      req.ip,
+      account.user.id
+    );
+    res.json({ token, authMethod: 'sso', logoutUrl: ssoLogoutUrl(), ssoEnabled: true });
+  } catch (err) {
+    console.error('SSO login failed:', err);
+    res.status(500).json({ error: 'Błąd logowania SSO.', ssoEnabled: true });
   }
 });
 
@@ -373,6 +440,14 @@ router.post('/api/logout', async (req, res) => {
   if (authHeader) {
     const token = authHeader.replace('Bearer ', '');
     await db.run(`DELETE FROM sessions WHERE token = ?`, [token]);
+  }
+  // Behind Authelia, deleting the app session alone logs nobody out: the next page load
+  // passes forwardAuth on the still-valid Authelia cookie and POST /api/auth/sso hands out a
+  // fresh session. So the browser goes to the portal, which ends the Authelia session (for
+  // every renacode.com app at once) and comes back to its login page. A break-glass request
+  // (no identity) gets the plain answer - there is no Authelia session to end.
+  if (isSsoEnabled() && (req.ssoIdentity || req.authMethod === 'sso')) {
+    return res.json({ success: true, logoutUrl: ssoLogoutUrl() });
   }
   res.json({ success: true });
 });

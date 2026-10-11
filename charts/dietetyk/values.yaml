@@ -116,6 +116,17 @@ sso:
   stripHeadersMiddleware:
     name: authelia-naglowki
     namespace: default
+  # The same switch also sets SSO_NAGLOWKI=1 in the backend pod (templates/backend-deployment.yaml):
+  # the app trusts Remote-* headers ONLY then, so stripping and trust are always on or off
+  # together. "Wyloguj" sends the browser to <portalUrl>/logout?rd=https://<ingress.host>/.
+  portalUrl: https://auth.renacode.com
+  # Authelia groups admitted by the app (SSO_GRUPY). Entry only - the admin role comes from the
+  # app's database. Must agree with the host's rule in renacode-infra authelia.yaml.
+  allowedGroups:
+    - wlasciciel
+    - rodzina
+    - admins
+    - dietetyk
 
 persistence:
   size: 2Gi

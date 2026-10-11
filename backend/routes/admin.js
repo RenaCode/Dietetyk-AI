@@ -33,7 +33,8 @@ const logger = require('../services/logger');
 // counted: a user's session cannot burn the attempts of their own account through these routes.
 //
 // tests/test-admin-password.js walks this router's stack and fails for any POST/PUT/PATCH/
-// DELETE route without this middleware - a new admin action cannot quietly skip it.
+// DELETE route without this middleware - a new admin action cannot quietly skip it. It walks
+// the whole app too, so a requireAdmin action added to another routes/*.js is caught as well.
 function requireAdminPassword(action) {
   const middleware = async (req, res, next) => {
     try {

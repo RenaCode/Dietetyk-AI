@@ -223,11 +223,19 @@ app.use((err, req, res, next) => {
   
   const status = err.status || err.statusCode || 500;
   const level = status >= 500 ? 'ERROR' : 'WARN';
-  
+
+  // A body express.json() could not parse is NOT logged: body-parser keeps the raw text in
+  // err.body (printed in full to stdout with the error object) and V8's message quotes a slice
+  // of it - for /api/login, a password prompt or an admin action (routes/admin.js) that slice
+  // is the password, and WARN rows go into the weekly admin report by e-mail.
+  const loggable = err.type === 'entity.parse.failed'
+    ? new Error('Malformed JSON request body')
+    : err;
+
   logger[level.toLowerCase()](
-    `HTTP error ${status}: ${err.message}`,
+    `HTTP error ${status}: ${loggable.message}`,
     'HTTP_SERVER',
-    err,
+    loggable,
     req.ip,
     req.user ? req.user.id : null
   );

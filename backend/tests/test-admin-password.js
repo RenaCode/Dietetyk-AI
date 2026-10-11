@@ -55,7 +55,7 @@ function assert(condition, message) {
 }
 
 let baseUrl;
-function call(method, urlPath, { body, token, headers = {} } = {}) {
+function call(method, urlPath, { body, raw, token, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(baseUrl + urlPath, { method }, (res) => {
       let data = '';
@@ -72,7 +72,8 @@ function call(method, urlPath, { body, token, headers = {} } = {}) {
     for (const [name, value] of Object.entries(headers)) req.setHeader(name, value);
     // An explicit length: without it Node's client sends a DELETE body chunked, and the
     // server's parser answers that with a bare 400 before express ever sees the request.
-    const payload = method === 'GET' ? undefined : JSON.stringify(body || {});
+    // `raw` sends the text as it is - a body the JSON parser has to reject.
+    const payload = method === 'GET' ? undefined : (raw !== undefined ? raw : JSON.stringify(body || {}));
     if (payload !== undefined) req.setHeader('Content-Length', Buffer.byteLength(payload));
     req.end(payload);
   });
@@ -100,17 +101,24 @@ const failureRows = async (userId) => (await db.all(`SELECT details FROM app_log
 // logger writes in the background; give it a tick before reading app_logs.
 const settle = () => new Promise((r) => setTimeout(r, 50));
 
-// The mutating routes of routes/admin.js, read off the router: [{ method, path, layers }].
-function mutatingRoutes(router) {
+// The mutating routes of a router or a whole app, read off its stack - descending into the
+// routers mounted with app.use(), as app.js mounts every routes/*.js: [{ method, path, handles }].
+function mutatingRoutes(routerOrApp) {
   const out = [];
-  for (const layer of router.stack) {
-    if (!layer.route) continue;
-    for (const method of Object.keys(layer.route.methods)) {
-      if (['post', 'put', 'patch', 'delete'].includes(method)) {
-        out.push({ method: method.toUpperCase(), path: layer.route.path, handles: layer.route.stack.map((l) => l.handle) });
+  const walk = (stack) => {
+    for (const layer of stack) {
+      if (!layer.route) {
+        if (layer.handle && Array.isArray(layer.handle.stack)) walk(layer.handle.stack);
+        continue;
+      }
+      for (const method of Object.keys(layer.route.methods)) {
+        if (['post', 'put', 'patch', 'delete'].includes(method)) {
+          out.push({ method: method.toUpperCase(), path: layer.route.path, handles: layer.route.stack.map((l) => l.handle) });
+        }
       }
     }
-  }
+  };
+  walk(routerOrApp.stack || routerOrApp._router.stack);
   return out;
 }
 
@@ -187,6 +195,27 @@ function testEveryRouteIsCovered() {
   const flagged = routesWithoutPassword(bad);
   assert(flagged.includes('POST /api/admin/new-action') && flagged.includes('DELETE /api/admin/other'),
     `a route added without the password is caught (${flagged.join(', ')})`);
+
+  // requireAdmin is not confined to routes/admin.js by anything but habit: an admin-only action
+  // added to routes/account.js or routes/dashboard.js would skip the router walked above. So
+  // the whole app is walked as well, every router app.js mounts, for any mutating route that
+  // carries requireAdmin.
+  const adminAnywhere = (routes) => routes.filter(({ handles }) => handles.includes(requireAdmin));
+  const appWide = adminAnywhere(mutatingRoutes(app));
+  const appUncovered = appWide.map((r) => `${r.method} ${r.path}`).filter((r) => !CASES[r]);
+  assert(appWide.length >= routes.length && appUncovered.length === 0,
+    `every requireAdmin action in the app has a behavioural case here (${appWide.length} found, uncovered: ${appUncovered.join(', ') || 'none'})`);
+  const appMissing = routesWithoutPassword(app).filter((r) => appWide.some((a) => `${a.method} ${a.path}` === r));
+  assert(appMissing.length === 0, `and each requireAdmin action in the app has the password (missing: ${appMissing.join(', ') || 'none'})`);
+
+  const badApp = express();
+  const elsewhere = express.Router();
+  elsewhere.post('/api/user/admin-thing', requireAdmin, (req, res) => res.json({}));
+  badApp.use(express.Router());
+  badApp.use(elsewhere);
+  const elsewhereFlagged = adminAnywhere(mutatingRoutes(badApp)).map((r) => `${r.method} ${r.path}`);
+  assert(elsewhereFlagged.includes('POST /api/user/admin-thing'),
+    `an admin action in another router is found by the app-wide walk (${elsewhereFlagged.join(', ')})`);
 }
 
 async function testEachAction() {
@@ -281,6 +310,31 @@ async function testAccountWithoutPassword() {
   assert(await attemptRows(admin.id) === 0, 'and the attempt is not counted');
 }
 
+async function testMalformedBodyDoesNotLogThePassword() {
+  console.log('\n--- TEST: a body the JSON parser rejects does not put the password in a log ---');
+  const admin = await newAdmin();
+  const target = await createUser();
+  // Unquoted, so V8's message quotes the text around it ("Unexpected token 'Z', ...").
+  const secret = 'Zgadnij-To-Haslo-77';
+  const printed = [];
+  const original = { log: console.log, warn: console.warn, error: console.error };
+  for (const name of Object.keys(original)) {
+    console[name] = (...args) => { printed.push(require('util').format(...args)); };
+  }
+  let res;
+  try {
+    res = await call('POST', `/api/admin/users/${target.id}/force-2fa`, { token: admin.token, raw: `{"currentPassword":${secret}}` });
+    await settle();
+  } finally {
+    Object.assign(console, original);
+  }
+  assert(res.status === 400, `the request is refused (got ${res.status})`);
+  const leakedRows = await db.all(`SELECT category FROM app_logs WHERE message LIKE ? OR details LIKE ?`, ['%Zgadnij%', '%Zgadnij%']);
+  assert(leakedRows.length === 0, `no app_logs row quotes the password (${leakedRows.map((r) => r.category).join(', ') || 'none'})`);
+  assert(!printed.some((line) => line.includes('Zgadnij')), 'and nothing printed to stdout/stderr does');
+  assert(printed.some((line) => line.includes('HTTP_SERVER')), 'while the rejected request is still logged');
+}
+
 async function testSsoSessionNeedsThePassword() {
   console.log('\n--- TEST: an SSO session does not replace the admin password ---');
   process.env.SSO_NAGLOWKI = '1';
@@ -315,6 +369,7 @@ async function run() {
     await testLockoutSharedWithAccountPrompts();
     await testNonAdminNotCounted();
     await testAccountWithoutPassword();
+    await testMalformedBodyDoesNotLogThePassword();
     await testSsoSessionNeedsThePassword();
   } finally {
     server.close();

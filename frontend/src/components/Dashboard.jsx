@@ -1095,6 +1095,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
     return `${Math.round(diffHours / 24)} dni temu`;
   };
   const lastSyncLabel = formatRelativeSync(lastSyncDate);
+  // google_fit stays although the Google Fit sync was removed (2026-10-11): days it wrote
+  // before that still carry it as their source, and the history should say where it came from.
   const activitySourceLabels = { apple: '🍏 Apple Health', oura: '💍 Oura Ring', google_fit: '🟢 Google Fit' };
   const activitySourceLabel = summary.activity_source ? (activitySourceLabels[summary.activity_source] || summary.activity_source) : null;
 

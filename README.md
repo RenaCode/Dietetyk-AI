@@ -1,6 +1,6 @@
 # 🥗 Dietetyk AI (AI Dietician)
 
-A self-hosted web application for keeping a diet journal with **Gemini AI**: you describe or photograph a meal, Gemini estimates its calories and nutrients, and the app puts that next to sleep, recovery, activity and body-composition data from **Oura Ring**, **Withings**, **Apple Health** and **Google Fit**, with dashboard insights, an AI chat and trend charts. The interface is available in Polish (default) and English.
+A self-hosted web application for keeping a diet journal with **Gemini AI**: you describe or photograph a meal, Gemini estimates its calories and nutrients, and the app puts that next to sleep, recovery, activity and body-composition data from **Oura Ring**, **Withings** and **Apple Health**, with dashboard insights, an AI chat and trend charts. The interface is available in Polish (default) and English.
 
 > [!IMPORTANT]
 > Calories, macronutrients, fiber, sugar and sodium for a meal are **estimates produced by Gemini** from your description or photo, not measurements. Insights that correlate them with measured data (e.g. sodium vs. blood pressure, fiber vs. sleep) inherit that uncertainty.
@@ -19,15 +19,14 @@ Production runs on k3s, deployed by Argo CD from the Helm chart in `charts/diete
 2.  **Oura Ring Integration** (OAuth2, per-user credentials): sleep (score, duration, stages, bedtime and wake time), readiness, resting heart rate, HRV, daily activity, SpO2 and daily stress.
 3.  **Withings Integration** (OAuth2, per-user credentials): weight, body fat percentage, muscle mass and blood pressure.
 4.  **Apple Health Synchronization**: a per-user webhook (`POST /api/integrations/apple-health/<sync token>`) fed by the **Health Auto Export** iPhone app. Steps, active/basal energy, exercise minutes, distance, water, wrist temperature, sleep and workouts (with heart-rate zones when workout metrics are included) go into the daily metrics; every other numeric metric is kept as hourly samples, and symptoms, heart-rate notifications, cycle tracking and medications are stored as events.
-5.  **Google Fit Synchronization**: steps and calories fetched hourly via OAuth2, without an intermediate app. Needs the Google client configured in the Admin Panel; without it the option is hidden.
-6.  **Daily AI Advice and AI Chat**: Gemini combines your meals with sleep, recovery, activity, body composition and current weather/time of day (Open-Meteo, location configurable in Settings) to give daily recommendations, and answers questions about your data in a chat (`POST /api/chat`).
-7.  **Dashboard Insights**: 49 insight cards (sleep, recovery, training readiness, calorie balance and target suggestions, weight-goal forecast, blood-pressure and SpO2 trends, heart-rate zones, weekend effect and more), plus a **Wellness Score** and the **Energy Battery** below.
-8.  **Energy Battery**: A single 0–100 number at the top of the dashboard answering "how much fuel do I have today". It charges overnight from sleep quality, duration and readiness, drains through the day from actual training load (relative to your own 30-day median, not a population norm) and from time awake, takes a hit from accumulated **sleep debt** over the last 14 nights, and adjusts for stress vs. recovery minutes. Every card shows its own breakdown, so the number is checkable rather than magic. See `/api/dashboard/energy-battery`.
-9.  **Manual Tracking**: water intake, supplements, energy level and mood, and body circumference measurements.
-10. **Progress Charts (Custom SVG)**: hand-rolled, responsive SVG charts (no charting library) — weight against body fat percentage (dual axis), muscle mass, and 7/30/90-day trends for sleep, recovery, steps, calories and blood pressure.
-11. **Reports and Data Export**: daily, weekly and monthly e-mail summaries (via Mailgun, configured by the administrator), a PDF report for a doctor or dietician containing only computed data with no AI-generated text, time-limited read-only share links for that report, and a full JSON export of your own data.
-12. **Accounts and Security**: password login with optional TOTP two-factor authentication (an administrator can require it), "Sign in with Google" and linking Google to an existing account, invitation-based or optional public registration, session revocation ("log out everywhere"), and account deletion. Integration secrets are encrypted at rest.
-13. **Admin Panel**: user management (invitations, deletion, forcing a password change, requiring or resetting 2FA) and global settings — Mailgun, the public app URL, the Google OAuth client, mandatory 2FA and public registration — changeable without a restart. Oura, Withings and Gemini credentials are **not** set here; each user enters their own in **Settings**.
+5.  **Daily AI Advice and AI Chat**: Gemini combines your meals with sleep, recovery, activity, body composition and current weather/time of day (Open-Meteo, location configurable in Settings) to give daily recommendations, and answers questions about your data in a chat (`POST /api/chat`).
+6.  **Dashboard Insights**: 49 insight cards (sleep, recovery, training readiness, calorie balance and target suggestions, weight-goal forecast, blood-pressure and SpO2 trends, heart-rate zones, weekend effect and more), plus a **Wellness Score** and the **Energy Battery** below.
+7.  **Energy Battery**: A single 0–100 number at the top of the dashboard answering "how much fuel do I have today". It charges overnight from sleep quality, duration and readiness, drains through the day from actual training load (relative to your own 30-day median, not a population norm) and from time awake, takes a hit from accumulated **sleep debt** over the last 14 nights, and adjusts for stress vs. recovery minutes. Every card shows its own breakdown, so the number is checkable rather than magic. See `/api/dashboard/energy-battery`.
+8.  **Manual Tracking**: water intake, supplements, energy level and mood, and body circumference measurements.
+9.  **Progress Charts (Custom SVG)**: hand-rolled, responsive SVG charts (no charting library) — weight against body fat percentage (dual axis), muscle mass, and 7/30/90-day trends for sleep, recovery, steps, calories and blood pressure.
+10. **Reports and Data Export**: daily, weekly and monthly e-mail summaries (via Mailgun, configured by the administrator), a PDF report for a doctor or dietician containing only computed data with no AI-generated text, time-limited read-only share links for that report, and a full JSON export of your own data.
+11. **Accounts and Security**: password login with optional TOTP two-factor authentication (an administrator can require it), invitation-based or optional public registration, session revocation ("log out everywhere"), and account deletion. Integration secrets are encrypted at rest.
+12. **Admin Panel**: user management (invitations, deletion, forcing a password change, requiring or resetting 2FA) and global settings — Mailgun, the public app URL, mandatory 2FA and public registration — changeable without a restart. Oura, Withings and Gemini credentials are **not** set here; each user enters their own in **Settings**.
 
 > [!NOTE]
 > Energy Battery and Wellness Score answer different questions and are deliberately kept separate. Wellness Score rates how *good* the day was (sleep, readiness, resting heart rate recovery, calorie adherence, hydration) — a judgement about behaviour. The battery says how much resource is *left right now*. A day with a perfect diet after three short nights scores well and shows a low battery; that is the intended behaviour.
@@ -54,7 +53,7 @@ Two insights stay overridable after the batch because they refresh independently
 
 ### Activity data source priority
 
-Three sources write activity metrics to `health_metrics`: the Apple Health webhook/HealthKit, Google Fit, and Oura. The hierarchy lives in **one** place, `utils/activitySources.js`:
+Two sources write activity metrics to `health_metrics`: the Apple Health webhook/HealthKit and Oura. Google Fit was the third until it was removed on 2026-10-11; the rows it wrote keep `google_fit` as their source and keep its rank, so the next Oura sync cannot quietly replace that history. The hierarchy lives in **one** place, `utils/activitySources.js`:
 
 ```
 apple (3)  >  google_fit (2)  >  oura (1)
@@ -66,7 +65,7 @@ Previously each upsert only guarded against overwriting `'apple'`, leaving Googl
 
 ### Dates are always Europe/Warsaw
 
-Google Fit's `dataset:aggregate` aligns its daily buckets to the **start of the requested window**, not to UTC or any timezone. The window therefore starts at Warsaw midnight (`getWarsawDayStartMillis`), and because `durationMillis` is a fixed 24 h, buckets are labelled by their **midpoint** so the week containing a DST change still maps to seven distinct, consecutive days. `tests/test-dates.js` covers both DST transitions and the year boundary.
+Every date computation goes through `backend/utils/dates.js`, which forces `Europe/Warsaw`: a bare `new Date().getHours()` returns the server's timezone (UTC in production) and silently files data under the wrong day. Day boundaries are computed in the calendar, not by subtracting 24 h, because a day can be 23 or 25 hours long — `getWarsawDayStartMillis` (written for the since-removed Google Fit sync, now used for the daily backup slot) and `tests/test-dates.js` cover both DST transitions and the year boundary.
 
 ### Translation coverage
 
@@ -219,6 +218,16 @@ User accounts and default credentials are defined locally (saved in the database
 >
 > Being git-ignored was never enough protection: a plaintext file still lands in every directory backup, every `rsync`, every editor/IDE workspace index, and any `tar` of the project. Integration secrets belong in the **Settings** tab, where they are encrypted at rest (see `utils/encryption.js`); server credentials belong in a password manager and nowhere else.
 
+There is no "Sign in with Google" any more (removed on 2026-10-11, together with Google Fit, as the instance moves behind the shared SSO). Accounts log in with a password and optional 2FA.
+
+**An account that has no password of its own.** Google sign-in used to create accounts with a random password nobody knows (`password_set = 0`) and let them set one after re-authenticating with Google. That path is gone, and nothing replaces it inside the app on purpose — a session alone must never be enough to set a password. An administrator issues a one-time password instead, from a shell in the backend container:
+
+```bash
+kubectl exec -it deploy/dietetyk-backend -n default -c backend -- node scripts/reset-password.js <username or e-mail>
+```
+
+It revokes every session of the account and forces a password change at the next login; the forced change (after the 2FA code, if the account has 2FA) sets the user's own password, sets `password_set = 1` and runs the same cleanup as any password change. The reset is recorded in `app_logs` for the weekly security report. The same command works for any account that has lost its password.
+
 Once logged in as an administrator (`admin`), you can navigate to the **Settings** or **Admin Panel** (available in the navigation menu for accounts with the `admin` role) to manage the global configuration of the application. Developer credentials for Oura Ring and Withings (needed for integration) are configured by each user individually in their own **Settings** tab.
 
 ---
@@ -258,24 +267,7 @@ Unlike Oura and Withings, Apple Health does not expose a public cloud API—data
 > [!NOTE]
 > When both Apple Health and Oura are active, Apple Health data is treated as the primary source for steps/calories/activity minutes (since it syncs immediately, while Oura usually finalizes its summary the next morning). Oura only fills in the activity values Apple Health has not reported.
 
-### 4. Google Fit Integration (Steps, Calories)
-Unlike Apple Health (webhook) and Oura/Withings (per-user credentials), Google Fit uses OAuth2 and global Google credentials (Client ID/Secret) configured once by the administrator in the **Admin Panel** (the same keys used for Google Login). This means standard users do not need to register their own developer applications.
-1.  The administrator must configure `google_client_id` and `google_client_secret` in the **Admin Panel** from the [Google Cloud Console](https://console.cloud.google.com/), with the Authorized redirect URI set to `https://dietetyk.renacode.com/api/auth/google-fit/callback` and the Fitness API enabled with scope `https://www.googleapis.com/auth/fitness.activity.read`.
-2.  Each user navigates to the **Settings** tab, **Google Fit** section, and clicks **"Connect Google Fit"**.
-3.  After choosing a Google account and accepting the permissions, data is synchronized automatically (hourly, between 5:00 and 22:00, and immediately upon connection).
-4.  The integration can be disconnected at any time by clicking **"Disconnect Integration"**.
-
-> [!NOTE]
-> Activity sources follow one fixed priority, `apple > google_fit > oura` (see [Activity data source priority](#activity-data-source-priority)): Google Fit never overwrites activity values that came from Apple Health, and Oura never overwrites either of them.
-
-### 5. Linking an Existing Account with Google
-If you already have an account created with a username/password and want to link it to a Google account for single-click login without losing history:
-1.  Log in normally (username/password) and go to the **Settings** tab, **Google Account** section.
-2.  Click **"Connect Google"** and choose the Google account you wish to link.
-3.  From now on, you can log in using either method—both lead to the same account.
-4.  You can unlink Google at any time by clicking **"Disconnect Google"** (login will then require your password).
-
-### 6. Gemini AI Integration (API Key)
+### 4. Gemini AI Integration (API Key)
 1.  Go to [Google AI Studio](https://aistudio.google.com/).
 2.  Log in with your Google account.
 3.  Click **"Get API Key"**.

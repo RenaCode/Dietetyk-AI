@@ -1,7 +1,7 @@
 // Shared helper for fetch() calls with a timeout.
 //
 // NOTE: the native fetch() in Node.js has NO default timeout - if an external API
-// (Oura, Withings, Google Fit, Mailgun) hangs and never responds, await fetch(...) waits
+// (Oura, Withings, Mailgun) hangs and never responds, await fetch(...) waits
 // forever. Because syncing multiple users (sync.js/scheduler.js) processes them
 // SEQUENTIALLY in a for...of loop (one after another, awaiting each iteration), a hung
 // request for ONE user would block the hourly sync for ALL the others indefinitely - and
@@ -9,7 +9,7 @@
 // it either, because `lastSyncedHourKey` is set BEFORE the sync executes while the
 // previous call never finishes. The timeout below guarantees that a single hung request
 // cannot stall the whole process: it is aborted and treated as an error (caught in
-// syncOura/syncWithings/syncGoogleFit/mailgun.js).
+// syncOura/syncWithings/mailgun.js).
 //
 // THE TIMEOUT COVERS THE RESPONSE BODY, NOT JUST THE HEADERS (audit 2026-09-23).
 // The previous version cleared the timer in a `finally` around `await fetch(...)`, and

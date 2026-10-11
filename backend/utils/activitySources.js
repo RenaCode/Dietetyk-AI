@@ -14,6 +14,11 @@
 // conflict the phone data is closer to the truth.
 // An unknown source (NULL, e.g. a row created solely by Withings) has rank 0, meaning any
 // real activity source may fill it in.
+//
+// The Google Fit sync was removed on 2026-10-11, so only apple and oura write today.
+// 'google_fit' keeps its rank for the rows it already wrote: dropping it would make those
+// columns rank 0, and the next Oura sync would quietly replace a day's recorded history with
+// Oura's own numbers.
 const ACTIVITY_SOURCE_RANK = {
   apple: 3,
   google_fit: 2,

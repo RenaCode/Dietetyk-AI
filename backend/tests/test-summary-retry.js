@@ -31,8 +31,7 @@ function stubModule(relativePath, exports) {
 }
 stubModule('services/sync.js', {
   syncAllOura: async () => {},
-  syncAllWithings: async () => {},
-  syncAllGoogleFit: async () => {}
+  syncAllWithings: async () => {}
 });
 stubModule('services/summaries.js', {
   sendDailySummaryForUser: async () => {

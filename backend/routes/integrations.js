@@ -4,7 +4,7 @@ const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { getAppConfig, getUserSetting, startBrowserBoundOAuthState, verifyBrowserBoundOAuthState } = require('../services/oauthHelpers');
 const { consumeTicket } = require('../services/authTickets');
-const { syncOura, syncWithings, syncGoogleFit, OURA_SPO2_SCOPE_MISSING_KEY } = require('../services/sync');
+const { syncOura, syncWithings, OURA_SPO2_SCOPE_MISSING_KEY } = require('../services/sync');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const { encrypt } = require('../utils/encryption');
 
@@ -67,8 +67,8 @@ router.get('/api/auth/oura/callback', async (req, res) => {
 
   // verifyBrowserBoundOAuthState: signed, fresh AND started in this browser. The service is
   // checked too - this callback serves Oura and (via a shared redirect URI) Withings, and a
-  // state minted for any other flow (google_fit, google_link) used to fall through to the
-  // Oura branch and be exchanged as an Oura code.
+  // state minted for any other flow (at the time google_fit, google_link) used to fall
+  // through to the Oura branch and be exchanged as an Oura code.
   const verified = verifyBrowserBoundOAuthState(req, res, state);
   if (!verified || (verified.service !== 'oura' && verified.service !== 'withings')) {
     return res.status(400).send('Nieprawidłowy parametr state (zabezpieczenie CSRF).');
@@ -154,8 +154,8 @@ router.get('/api/auth/oura/callback', async (req, res) => {
     const data = await response.json();
       // NOTE: we do not log access_token/refresh_token here, not even partially masked - the
       // first characters of a secret in container logs are still an unnecessary exposure of
-      // credentials. For consistency with the Withings and Google Fit callbacks (which never
-      // did this) we log only that it succeeded, with no fragment of the token.
+      // credentials. For consistency with the Withings callback (which never did this) we log
+      // only that it succeeded, with no fragment of the token.
     console.log(`[OAUTH OURA CALLBACK SUCCESS] Token wymieniony pomyślnie dla użytkownika ${userId}.`);
     const expiresAt = new Date(Date.now() + data.expires_in * 1000).toISOString();
 
@@ -228,8 +228,8 @@ router.get('/api/auth/withings/callback', async (req, res) => {
   }
 
   const verified = verifyBrowserBoundOAuthState(req, res, state);
-  // `service` is checked here the way the Google Fit callback checks it (see
-  // /api/auth/google-fit/callback below). The userId comes from the signed state either way,
+  // `service` is checked here the way the Oura callback checks it (see
+  // /api/auth/oura/callback above). The userId comes from the signed state either way,
   // so this is not a way between accounts - but without it a state minted for another service
   // stores its token under 'withings' in the caller's own account, and the next sync reads a
   // Withings token that is not one.
@@ -297,124 +297,13 @@ router.post('/api/auth/withings/disconnect', requireAuth, async (req, res) => {
   }
 });
 
-// ===== Google Fit (data source: steps, active calories) =====
-// Unlike Oura and Withings, Google Fit uses the GLOBAL Google configuration, so it does not
-// require the user to supply their own developer credentials.
-router.get('/api/auth/google-fit', async (req, res) => {
-  // A one-time ticket from POST /api/auth/ticket, not the session token - see
-  // services/authTickets.js.
-  const userId = consumeTicket(req.query.ticket, 'google-fit');
-  if (!userId) return res.status(401).send('Link wygasł. Wróć do Ustawień i spróbuj ponownie.');
-
-  try {
-
-    const clientId = await getAppConfig('google_client_id');
-    if (!clientId) {
-      return res.status(400).send('Integracja z Google Fit nie jest skonfigurowana. Administrator musi wpisać Client ID/Secret w Panelu Admina.');
-    }
-
-    const state = startBrowserBoundOAuthState(req, res, userId, 'google_fit');
-    const appUrl = await getAppConfig('app_url');
-    const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
-    const redirectUri = `${base}/api/auth/google-fit/callback`;
-
-  // access_type=offline and prompt=consent are required for Google to return a refresh_token
-  // (without prompt=consent, subsequent sign-ins with the same account receive no new
-  // refresh_token once the user has already granted consent).
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('https://www.googleapis.com/auth/fitness.activity.read')}&state=${state}&access_type=offline&prompt=consent`;
-    res.redirect(authUrl);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send('Błąd serwera.');
-  }
-});
-
-router.get('/api/auth/google-fit/callback', async (req, res) => {
-  const { code, state, error } = req.query;
-  if (!code && !state) {
-    return res.status(200).send('Callback URL verification OK');
-  }
-  if (error) {
-    console.error('[OAUTH GOOGLE FIT CALLBACK ERROR]', error);
-    return res.redirect('/?tab=setup&error=google_fit_auth_failed');
-  }
-
-  const verified = verifyBrowserBoundOAuthState(req, res, state);
-  if (!verified || verified.service !== 'google_fit') {
-    return res.status(400).send('Nieprawidłowy parametr state (zabezpieczenie CSRF).');
-  }
-  const { userId } = verified;
-
-  try {
-    const clientId = await getAppConfig('google_client_id');
-    const clientSecret = await getAppConfig('google_client_secret');
-    const appUrl = await getAppConfig('app_url');
-    const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
-    const redirectUri = `${base}/api/auth/google-fit/callback`;
-
-    const response = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code'
-      })
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Wymiana kodu Google Fit nieudana: ${errText}`);
-    }
-
-    const data = await response.json();
-    if (!data.refresh_token) {
-        // This can happen if the user previously connected this Google account to any OAuth
-        // application and Google does not reissue a refresh_token without forcing the consent
-        // screen - prompt=consent above should prevent it, but we leave a clear message in
-        // case of exceptions.
-      console.warn(`[OAUTH GOOGLE FIT] Brak refresh_token w odpowiedzi dla użytkownika ${userId} - synchronizacja przestanie działać po wygaśnięciu access_token.`);
-    }
-    const expiresAt = new Date(Date.now() + data.expires_in * 1000).toISOString();
-
-    await db.run(`
-      INSERT INTO oauth_tokens (user_id, service, access_token, refresh_token, expires_at)
-      VALUES (?, 'google_fit', ?, ?, ?)
-      ON CONFLICT(user_id, service) DO UPDATE SET
-        access_token = excluded.access_token,
-        refresh_token = COALESCE(excluded.refresh_token, refresh_token),
-        expires_at = excluded.expires_at
-    `, [userId, encrypt(data.access_token), encrypt(data.refresh_token) || null, expiresAt]);
-
-    await syncGoogleFit(userId);
-    res.redirect('/?tab=setup&success=google_fit');
-  } catch (err) {
-    console.error('[OAUTH GOOGLE FIT CALLBACK ERROR]', err.message);
-    res.redirect('/?tab=setup&error=google_fit_exchange_failed');
-  }
-});
-
-router.post('/api/auth/google-fit/disconnect', requireAuth, async (req, res) => {
-  try {
-    await db.run(`DELETE FROM oauth_tokens WHERE user_id = ? AND service = 'google_fit'`, [req.user.id]);
-    res.json({ success: true, message: 'Rozłączono z Google Fit.' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Błąd rozłączania Google Fit.' });
-  }
-});
-
-// Manual sync of Oura, Withings and Google Fit data for the logged-in user
+// Manual sync of Oura and Withings data for the logged-in user
 router.post('/api/sync/manual', requireAuth, async (req, res) => {
   const userId = req.user.id;
   let ouraSuccess = false;
   let withingsSuccess = false;
-  let googleFitSuccess = false;
   let ouraError = null;
   let withingsError = null;
-  let googleFitError = null;
 
   // Sprawdzamy czy ma tokeny Oura
   const hasOura = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'oura'`, [userId]);
@@ -440,23 +329,10 @@ router.post('/api/sync/manual', requireAuth, async (req, res) => {
     }
   }
 
-  // Sprawdzamy czy ma tokeny Google Fit
-  const hasGoogleFit = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'google_fit'`, [userId]);
-  if (hasGoogleFit) {
-    try {
-      const result = await syncGoogleFit(userId);
-      googleFitSuccess = result.success;
-      googleFitError = result.success ? null : result.error;
-    } catch (err) {
-      googleFitError = err.message;
-    }
-  }
-
   res.json({
     success: true,
     oura: hasOura ? { success: ouraSuccess, error: ouraError } : null,
     withings: hasWithings ? { success: withingsSuccess, error: withingsError } : null,
-    google_fit: hasGoogleFit ? { success: googleFitSuccess, error: googleFitError } : null,
     message: 'Zakończono proces manualnej synchronizacji.'
   });
 });

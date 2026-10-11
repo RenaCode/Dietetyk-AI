@@ -5,7 +5,9 @@
 // deployment that never set OAUTH_STATE_SECRET therefore signed OAuth state with a publicly known
 // string, so anyone could mint `<victimId>:google_link:<salt>:<hmac>`, approve Google consent on
 // their own account and have routes/auth.js bind that Google account to the victim's user row -
-// after which "Sign in with Google" logs the attacker into the victim's account.
+// after which "Sign in with Google" logged the attacker into the victim's account. Google
+// sign-in is gone (2026-10-11); the same forgery against the Oura/Withings flows would still
+// store one person's tokens on another person's account, so the guard stays.
 //
 // The first test spawns a CHILD process, because the check runs when the module loads: once
 // oauthHelpers has been required in this process the environment can no longer be varied.
@@ -111,9 +113,9 @@ function testStateVerification() {
     'a state signed with an unrelated secret is rejected'
   );
 
-  // The victim id is the part an attacker controls in the account-takeover path (routes/auth.js
-  // writes google_id onto whatever user id the state names), so a valid state with a swapped id
-  // must not survive.
+  // The victim id is the part an attacker controls in the account-takeover path (the callbacks
+  // store tokens - and routes/auth.js used to write google_id - on whatever user id the state
+  // names), so a valid state with a swapped id must not survive.
   const tampered = genuine.replace(/^7:/, '42:');
   assert(verifyOAuthState(tampered) === null, 'a genuine state with the user id swapped is rejected (HMAC covers the id)');
 
@@ -122,7 +124,7 @@ function testStateVerification() {
 }
 
 // The state used to carry no timestamp, so a signature was valid for ever. GET /api/auth/google
-// is a PUBLIC route: anyone could call it, read the state out of the 302 Location header and
+// (removed since) was a PUBLIC route: anyone could call it, read the state out of the 302 Location header and
 // keep that string as a working login-CSRF ingredient indefinitely, handing it to a victim
 // weeks later. These assertions are what stops that from coming back.
 function testStateExpiry() {
@@ -172,16 +174,17 @@ function testStateExpiry() {
   );
 }
 
-// The regression that made "Sign in with Google" unusable: routes/auth.js binds the sign-in
+// Kept after Google sign-in was removed (2026-10-11) because verifyOAuthState still promises to
+// verify any service string, colons included, and nothing else exercises that promise.
+//
+// The regression that made "Sign in with Google" unusable: routes/auth.js bound the sign-in
 // state to the client with `google_login:<sha256 fingerprint>` as the service, which adds a
 // colon and therefore a fifth field to the state. verifyOAuthState only accepted exactly four
 // fields, so every genuine sign-in callback was rejected as CSRF and redirected to
 // /?google_error=csrf_failed. Nothing failed loudly - the application refused its own state.
 //
-// The binding is reproduced here exactly as routes/auth.js builds it, so this test breaks if
-// that construction ever changes shape again. It is now the sha256 of the single-use nonce
-// held in the browser's HttpOnly cookie (it used to be sha256(req.ip + User-Agent), which
-// bound nothing - see the comment on GOOGLE_LOGIN_NONCE_COOKIE in routes/auth.js).
+// The binding is reproduced here as routes/auth.js built it: the sha256 of a single-use nonce
+// (it had been sha256(req.ip + User-Agent), which bound nothing).
 function testServiceContainingColons() {
   const { generateOAuthState, verifyOAuthState } = require('../services/oauthHelpers');
 

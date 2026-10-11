@@ -34,16 +34,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   });
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordMessage, setPasswordMessage] = useState({ type: '', text: '' });
-  // A grant from the Google re-authentication (backend GET /api/auth/google/reauth) arrives
-  // as `#google_reauth=` - in the fragment, so it never reaches a server log. Read once on
-  // mount and wiped from the address bar at once; it lets an account created through Google
-  // set a password it never had (audit 2026-10-09, B-S4).
-  const [googleReauthGrant] = useState(() => {
-    const grant = new URLSearchParams((window.location.hash || '').replace(/^#/, '')).get('google_reauth');
-    if (grant) window.history.replaceState({}, document.title, '/?tab=setup');
-    return grant || '';
-  });
-  const [isPasswordOpen, setIsPasswordOpen] = useState(!!googleReauthGrant);
+  const [isPasswordOpen, setIsPasswordOpen] = useState(false);
   const [is2faOpen, setIs2faOpen] = useState(false);
   const [isDietGoalsOpen, setIsDietGoalsOpen] = useState(false);
 
@@ -598,55 +589,18 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       });
 
       if (res.ok) {
-        // A password change also rotates the Apple Health sync token and unlinks Google (see
+        // A password change also rotates the Apple Health sync token (see
         // backend/routes/account.js) - the user has to know, or their Health Auto Export
         // silently stops syncing.
         const data = await res.json().catch(() => ({}));
         const notes = [t('Hasło zostało pomyślnie zmienione!')];
         if (data.syncTokenRotated) notes.push(t('Adres webhooka Apple Health został zmieniony - zaktualizuj go w Health Auto Export.'));
-        if (data.unlinkedGoogle) notes.push(t('Konto Google zostało odłączone - możesz je połączyć ponownie.'));
         setPasswordMessage({ type: 'success', text: notes.join(' ') });
         setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
         onProfileUpdate();
         setTimeout(() => setPasswordMessage({ type: '', text: '' }), 12000);
       } else {
         const data = await res.json();
-        setPasswordMessage({ type: 'error', text: data.error || t('Błąd podczas zmiany hasła.') });
-      }
-    } catch (err) {
-      setPasswordMessage({ type: 'error', text: t('Problem z połączeniem z serwerem.') });
-    } finally {
-      setIsChangingPassword(false);
-    }
-  };
-
-  // Setting a password on the strength of the Google re-authentication grant instead of the
-  // current password - see googleReauthGrant above. The same form fields as a change, minus
-  // "current password".
-  const handleSetPasswordWithGoogle = async (e) => {
-    e.preventDefault();
-    setPasswordMessage({ type: '', text: '' });
-    if (passwordData.newPassword !== passwordData.confirmPassword) {
-      setPasswordMessage({ type: 'error', text: t('Nowe hasła nie są identyczne!') });
-      return;
-    }
-    setIsChangingPassword(true);
-    try {
-      const res = await fetch('/api/user/set-password', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${sessionToken}`
-        },
-        body: JSON.stringify({ googleReauth: googleReauthGrant, newPassword: passwordData.newPassword })
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok) {
-        setPasswordMessage({ type: 'success', text: data.message || t('Hasło zostało ustawione.') });
-        setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-        // The grant is single-use; a reload shows the ordinary change form from now on.
-        setTimeout(() => window.location.reload(), 6000);
-      } else {
         setPasswordMessage({ type: 'error', text: data.error || t('Błąd podczas zmiany hasła.') });
       }
     } catch (err) {
@@ -851,13 +805,15 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
-  // An account created through Google has no password it knows (backend password_set, N-S4):
-  // every place that would ask for "your current password" sends it to "set a password via
-  // Google" instead, so no doomed attempt counts towards the lockout.
+  // An account without a password it knows (backend password_set, N-S4 - only the
+  // since-removed Google sign-in created such accounts): every place that would ask for "your
+  // current password" says how to get one instead, so no doomed attempt counts towards the
+  // lockout. The way is a one-time password from an administrator (backend
+  // scripts/reset-password.js); setting one from a session alone is deliberately impossible.
   const hasPassword = userProfile.password_set !== false;
   const requirePasswordOrExplain = (setMsg) => {
     if (hasPassword) return true;
-    setMsg({ type: 'error', text: t('To konto zostało założone przez Google i nie ma hasła. Najpierw ustaw hasło przez Google w sekcji „Zmiana hasła”.') });
+    setMsg({ type: 'error', text: t('To konto nie ma ustawionego hasła. Poproś administratora o jednorazowe hasło - przy logowaniu ustawisz własne.') });
     setIsPasswordOpen(true);
     return false;
   };
@@ -1128,7 +1084,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   // (?token=...) - straight into the nginx access log and browser history. Now an
   // authenticated fetch first mints a one-time, 60-second ticket for this one flow
   // (backend/services/authTickets.js) and only the ticket travels in the URL.
-  const startOAuthFlow = async (service, extra = {}) => {
+  const startOAuthFlow = async (service) => {
     try {
       const res = await fetch('/api/auth/ticket', {
         method: 'POST',
@@ -1136,7 +1092,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${sessionToken}`
         },
-        body: JSON.stringify({ service, ...extra })
+        body: JSON.stringify({ service })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ticket) {
@@ -1144,80 +1100,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
         setMessage({ type: 'error', text: data.error || t('Nie udało się rozpocząć łączenia.') });
         return;
       }
-      const path = service === 'google_link' ? 'google/link' : (service === 'google_reauth' ? 'google/reauth' : service);
-      window.location.href = `${window.location.origin}/api/auth/${path}?ticket=${encodeURIComponent(data.ticket)}`;
+      window.location.href = `${window.location.origin}/api/auth/${service}?ticket=${encodeURIComponent(data.ticket)}`;
     } catch (err) {
       console.error('Failed to start the OAuth flow:', err);
-      setMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
-    }
-  };
-
-  // Linking/unlinking a Google account (sign-in) - separate from Google Fit (a data source).
-  // There are no Client ID/Secret to save (that is global admin configuration); the backend
-  // recognises the "linking" flow by its signed, browser-bound `state` (see
-  // backend/routes/auth.js, GET /api/auth/google/link).
-  //
-  // Linking adds a way to LOG IN, so the backend wants the password (and the current 2FA code
-  // when 2FA is on) - a stolen session alone must not be able to plant a Google login that
-  // outlives a password change. Same prompt() pattern as disabling 2FA.
-  const handleConnectGoogle = async () => {
-    const password = prompt(t('Aby połączyć konto Google, potwierdź swoje aktualne hasło:'));
-    if (!password) return;
-    let code;
-    if (userProfile.totp_enabled) {
-      code = prompt(t('Podaj aktualny kod 2FA z aplikacji uwierzytelniającej:'));
-      if (!code) return;
-    }
-    await startOAuthFlow('google_link', { password, code });
-  };
-
-  // Needs the password (backend N-S3); an account without one is told to set it first -
-  // unlinking its only way in would lock the owner out for good.
-  const handleUnlinkGoogle = async () => {
-    if (!requirePasswordOrExplain(setMessage)) return;
-    if (!confirm(t('Czy na pewno chcesz odłączyć konto Google? Logowanie będzie wtedy możliwe tylko hasłem.'))) return;
-    const password = prompt(t('Aby odłączyć konto Google, potwierdź swoje aktualne hasło:'));
-    if (!password) return;
-    try {
-      const res = await fetch('/api/user/unlink-google', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
-        body: JSON.stringify({ password })
-      });
-      if (res.ok) {
-        onProfileUpdate();
-        setMessage({ type: 'success', text: t('Odłączono konto Google!') });
-        setTimeout(() => setMessage({ type: '', text: '' }), 5000);
-      } else {
-        setMessage({ type: 'error', text: t('Nie udało się odłączyć konta Google.') });
-      }
-    } catch (err) {
-      console.error(err);
-      setMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
-    }
-  };
-
-  // Connecting/disconnecting Google Fit (the source of step and calorie data), analogous to
-  // Oura/Withings but without its own Client ID/Secret - it uses the same,
-  // globalnej konfiguracji Google co logowanie Google.
-  const handleConnectGoogleFit = () => startOAuthFlow('google-fit');
-
-  const handleDisconnectGoogleFit = async () => {
-    if (!confirm(t('Czy na pewno chcesz odłączyć integrację z Google Fit?'))) return;
-    try {
-      const res = await fetch('/api/auth/google-fit/disconnect', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${sessionToken}` }
-      });
-      if (res.ok) {
-        onProfileUpdate();
-        setMessage({ type: 'success', text: t('Odłączono integrację z Google Fit!') });
-        setTimeout(() => setMessage({ type: '', text: '' }), 5000);
-      } else {
-        setMessage({ type: 'error', text: t('Nie udało się odłączyć integracji.') });
-      }
-    } catch (err) {
-      console.error(err);
       setMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
     }
   };
@@ -1505,55 +1390,6 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               </select>
             </div>
 
-            {/* Linking an account with Google - independent of Google sign-in (which links
-                accounts automatically only when the e-mail matches). This lets an account
-                created with a password be linked to Google without changing or matching
-                the e-mail address. Hidden while the instance has no Google client
-                (google_configured) unless the account is already linked, so it can still
-                be unlinked. */}
-            {(userProfile.google_configured || userProfile.has_google) && (
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-              gap: '12px',
-              padding: '16px',
-              background: 'rgba(255, 255, 255, 0.02)',
-              border: '1px solid var(--border-glass)',
-              borderRadius: '12px'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <span style={{ fontSize: '1.6rem' }}>🔗</span>
-                <div>
-                  <strong style={{ display: 'block', color: '#fff' }}>Konto Google</strong>
-                  <span style={{ fontSize: '0.8rem', color: userProfile.has_google ? 'var(--success-light)' : 'var(--text-dim)' }}>
-                    {userProfile.has_google ? t('✅ Połączono z kontem Google') : t('❌ Brak połączenia')}
-                  </span>
-                </div>
-              </div>
-              {userProfile.has_google ? (
-                <button
-                  type="button"
-                  className="btn-danger"
-                  style={{ padding: '8px 16px' }}
-                  onClick={handleUnlinkGoogle}
-                >
-                  Odłącz Google
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="btn-primary"
-                  style={{ padding: '8px 16px' }}
-                  onClick={handleConnectGoogle}
-                >
-                  Połącz z Google
-                </button>
-              )}
-            </div>
-            )}
-
             <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <input
@@ -1832,48 +1668,10 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   </div>
                 )}
 
-                {googleReauthGrant ? (
-                  <form onSubmit={handleSetPasswordWithGoogle} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                    <p style={{ fontSize: '0.85rem', color: 'var(--success-light)', margin: 0 }}>
-                      {t('Tożsamość potwierdzona przez Google. Ustaw nowe hasło (ważne przez 10 minut).')}
-                    </p>
-                    <div className="input-group">
-                      <label className="input-label">{t("Nowe hasło")}</label>
-                      <input
-                        type="password"
-                        className="input-field"
-                        value={passwordData.newPassword}
-                        onChange={(e) => setPasswordData(prev => ({ ...prev, newPassword: e.target.value }))}
-                        required
-                      />
-                    </div>
-                    <div className="input-group">
-                      <label className="input-label">{t("Powtórz nowe hasło")}</label>
-                      <input
-                        type="password"
-                        className="input-field"
-                        value={passwordData.confirmPassword}
-                        onChange={(e) => setPasswordData(prev => ({ ...prev, confirmPassword: e.target.value }))}
-                        required
-                      />
-                    </div>
-                    <button type="submit" className="btn-primary" disabled={isChangingPassword} style={{ marginTop: '8px' }}>
-                      {t('Ustaw hasło')}
-                    </button>
-                  </form>
-                ) : (
-                <>
-                {userProfile.has_google && (
-                  <div style={{ marginBottom: '16px' }}>
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0 0 8px' }}>
-                      {hasPassword
-                        ? t('Nie pamiętasz hasła? Ustaw nowe po potwierdzeniu tożsamości przez Google.')
-                        : t('Konto założone przez Google nie ma znanego hasła. Potwierdź tożsamość przez Google, aby je ustawić - potem możesz też wyłączyć 2FA albo usunąć konto.')}
-                    </p>
-                    <button type="button" className="btn-secondary" onClick={() => startOAuthFlow('google_reauth')}>
-                      {t('Ustaw hasło przez Google')}
-                    </button>
-                  </div>
+                {!hasPassword && (
+                  <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: '0 0 16px' }}>
+                    {t('To konto nie ma ustawionego hasła. Poproś administratora o jednorazowe hasło - przy logowaniu ustawisz własne.')}
+                  </p>
                 )}
                 {hasPassword && (
                 <form onSubmit={handleChangePassword} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -1914,8 +1712,6 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                     {isChangingPassword ? 'Zmienianie...' : t('Zmień hasło')}
                   </button>
                 </form>
-                )}
-                </>
                 )}
               </div>
             )}
@@ -2213,7 +2009,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
               <h4 style={{ fontSize: '1rem', color: 'var(--danger)', marginBottom: '8px' }}>{t("Usunięcie konta")}</h4>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                Trwale usuwa Twoje konto i wszystkie powiązane dane (posiłki, ustawienia, historię zdrowotną, połączenia Oura/Withings/Google). Tej operacji nie można odwrócić.
+                Trwale usuwa Twoje konto i wszystkie powiązane dane (posiłki, ustawienia, historię zdrowotną, połączenia Oura/Withings). Tej operacji nie można odwrócić.
               </p>
 
               {deleteMessage.text && (
@@ -2267,7 +2063,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           </div>
         )}
 
-        {(userProfile.has_oura || userProfile.has_withings || userProfile.has_google_fit) && (
+        {(userProfile.has_oura || userProfile.has_withings) && (
           <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '20px' }}>
             <button
               type="button"
@@ -2381,55 +2177,6 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               </div>
             )}
           </div>
-
-          {/* Google Fit - the source of step, calorie and activity data, analogous to
-              Oura/Withings but without its own Client ID/Secret (it uses the global Google
-              configuration set by the admin - the same one as Google sign-in). Hidden without
-              that configuration unless already connected, as with the Google account above. */}
-          {(userProfile.google_configured || userProfile.has_google_fit) && (
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            padding: '16px',
-            background: 'rgba(255, 255, 255, 0.02)',
-            border: '1px solid var(--border-glass)',
-            borderRadius: '12px',
-            gap: '16px'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <span style={{ fontSize: '2rem' }}>🏃</span>
-                <div>
-                  <strong style={{ display: 'block', color: '#fff' }}>{t("Google Fit (Kroki, Kalorie, Aktywność)")}</strong>
-                  <span style={{ fontSize: '0.8rem', color: userProfile.has_google_fit ? 'var(--success-light)' : 'var(--text-dim)' }}>
-                    {userProfile.has_google_fit ? t('✅ Połączono z Google Fit') : t('❌ Brak połączenia')}
-                  </span>
-                </div>
-              </div>
-              <div>
-                {userProfile.has_google_fit ? (
-                  <button
-                    type="button"
-                    className="btn-danger"
-                    style={{ padding: '8px 16px' }}
-                    onClick={handleDisconnectGoogleFit}
-                  >
-                    Odłącz Google Fit
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn-primary"
-                    style={{ padding: '8px 16px' }}
-                    onClick={handleConnectGoogleFit}
-                  >
-                    Połącz z Google Fit
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-          )}
 
           {/* Oura Ring */}
           <div style={{

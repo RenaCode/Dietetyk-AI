@@ -9,8 +9,8 @@
 //
 // No '@': /api/login matches `username = ? OR email = ?`, so a username that looks like
 // someone else's email address could collide with that person's login identifier.
-// 3-32 characters of [a-zA-Z0-9_.-] is the set Google sign-in already reduces generated
-// usernames to (routes/auth.js), so both ways of creating an account agree.
+// 3-32 characters of [a-zA-Z0-9_.-] is also the set the since-removed Google sign-in reduced
+// generated usernames to, so accounts it created already satisfy the rule.
 const USERNAME_REGEX = /^[a-zA-Z0-9_.-]{3,32}$/;
 
 const USERNAME_RULE_MESSAGE = 'Nazwa użytkownika musi mieć 3-32 znaki i może zawierać tylko litery, cyfry oraz znaki _ . -';

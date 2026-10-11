@@ -32,24 +32,21 @@ async function requireAuth(req, res, next) {
     req.path === '/register-public' ||
     req.path === '/auth/oura/callback' ||
     req.path === '/auth/withings/callback' ||
-    req.path === '/auth/google-fit/callback' ||
-    req.path === '/auth/google' ||
-    req.path === '/auth/google/enabled' ||
-    req.path === '/auth/google/callback' ||
-    req.path === '/auth/google/exchange' ||
-    // Routes that INITIATE a connection to Oura/Withings/Google Fit, plus Google account
-    // linking. The frontend navigates to these via window.location.href, because only a
-    // top-level navigation can redirect the browser to the OAuth provider's consent
-    // screen - a fetch() with an Authorization header cannot produce that redirect.
+    // Routes that INITIATE a connection to Oura/Withings. The frontend navigates to these
+    // via window.location.href, because only a top-level navigation can redirect the browser
+    // to the OAuth provider's consent screen - a fetch() with an Authorization header cannot
+    // produce that redirect.
     // They are authorised by a one-time ?ticket= (services/authTickets.js) minted by an
     // authenticated POST /api/auth/ticket, NOT by the Bearer header and no longer by the
     // session token in the query string, which ended up in the nginx access log. Each of
-    // these four routes consumes the ticket itself and does not use req.user.
+    // these routes consumes the ticket itself and does not use req.user.
+    //
+    // The Google sign-in and Google Fit routes (/auth/google, /auth/google/*, /auth/google-fit,
+    // /auth/google-fit/callback) were listed here until they were removed on 2026-10-11. They
+    // must not come back to this list without their handlers: an anonymous request to a path
+    // on it skips authentication, so the list is exactly the application's public surface.
     req.path === '/auth/oura' ||
-    req.path === '/auth/withings' ||
-    req.path === '/auth/google-fit' ||
-    req.path === '/auth/google/link' ||
-    req.path === '/auth/google/reauth'
+    req.path === '/auth/withings'
   ) {
     return next();
   }

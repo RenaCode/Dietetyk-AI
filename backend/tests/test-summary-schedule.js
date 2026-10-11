@@ -3,7 +3,7 @@
 //
 // The bug these pin down: runHourlySyncIfDue() returned early outside the 05:00-22:00 sync
 // window, and the summary check (checkAndSendAutomatedSummaries) lived inside that early
-// return. The window exists for the external Oura/Withings/Google Fit syncs - there is nothing
+// return. The window exists for the external Oura/Withings syncs - there is nothing
 // to fetch overnight - but the summaries have nothing to do with it.
 //
 // The result was a silent hole rather than a delay. checkAndSendAutomatedSummaries fires on
@@ -37,11 +37,11 @@ function assert(condition, message) {
 }
 
 // Records of what the scheduler asked the outside world to do during one tick.
-const calls = { oura: 0, withings: 0, googleFit: 0, daily: [], weekly: [], monthly: [], adminReport: 0 };
+const calls = { oura: 0, withings: 0, daily: [], weekly: [], monthly: [], adminReport: 0 };
 
 // Replaces a module in the require cache BEFORE scheduler.js is loaded, so the scheduler gets
-// these objects instead of the real ones. The real modules would hit the Oura/Withings/Google
-// APIs and Mailgun; this test is about the scheduler's gating, not about them.
+// these objects instead of the real ones. The real modules would hit the Oura/Withings APIs
+// and Mailgun; this test is about the scheduler's gating, not about them.
 function stubModule(relativePath, exports) {
   const full = require.resolve(path.join(BACKEND_DIR, relativePath));
   require.cache[full] = { id: full, filename: full, loaded: true, exports, children: [], paths: [] };
@@ -49,8 +49,7 @@ function stubModule(relativePath, exports) {
 
 stubModule('services/sync.js', {
   syncAllOura: async () => { calls.oura += 1; },
-  syncAllWithings: async () => { calls.withings += 1; },
-  syncAllGoogleFit: async () => { calls.googleFit += 1; }
+  syncAllWithings: async () => { calls.withings += 1; }
 });
 stubModule('services/summaries.js', {
   sendDailySummaryForUser: async (userId) => { calls.daily.push(userId); },
@@ -137,8 +136,8 @@ async function run() {
     'a daily summary scheduled for 23:30 is sent by the 23:xx tick - the summary check is no longer trapped inside the 05:00-22:00 sync window'
   );
   assert(
-    calls.oura === 0 && calls.withings === 0 && calls.googleFit === 0,
-    'the 23:xx tick still skips the external Oura/Withings/Google Fit syncs - the window that exists for them is unchanged'
+    calls.oura === 0 && calls.withings === 0,
+    'the 23:xx tick still skips the external Oura/Withings syncs - the window that exists for them is unchanged'
   );
 
   // The other half of the contract: inside the window the syncs must still run, so the fix did
@@ -155,8 +154,8 @@ async function run() {
   }
 
   assert(
-    calls.oura === 1 && calls.withings === 1 && calls.googleFit === 1,
-    'a tick inside the 05:00-22:00 window still runs all three external syncs'
+    calls.oura === 1 && calls.withings === 1,
+    'a tick inside the 05:00-22:00 window still runs both external syncs'
   );
   assert(
     calls.daily.includes(1),

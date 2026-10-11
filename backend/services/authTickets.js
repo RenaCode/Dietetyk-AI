@@ -39,11 +39,4 @@ function consumeTicket(ticket, service) {
   return entry.userId;
 }
 
-// The grant a successful Google re-authentication leaves behind (routes/auth.js,
-// GET /api/auth/google/reauth) and POST /api/user/set-password consumes. Ten minutes rather
-// than the 60 seconds of a ticket: a ticket is spent by the very next navigation, while this
-// one waits for a person to type and confirm a new password.
-const GOOGLE_REAUTH_GRANT_SERVICE = 'google_reauth_grant';
-const GOOGLE_REAUTH_GRANT_TTL_MS = 10 * 60 * 1000;
-
-module.exports = { issueTicket, consumeTicket, TICKET_TTL_MS, GOOGLE_REAUTH_GRANT_SERVICE, GOOGLE_REAUTH_GRANT_TTL_MS };
+module.exports = { issueTicket, consumeTicket, TICKET_TTL_MS };

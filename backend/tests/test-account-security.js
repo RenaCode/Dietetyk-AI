@@ -10,14 +10,14 @@
 // B-S1  The password re-check on account operations was limited per IP only: 8 addresses x 5
 //       tries = 40 guesses without one 429.
 // B-S2  Forced 2FA enrolment at login reused a totp_secret planted earlier through setup-2fa.
-// B-S4  An account created through Google sign-in has a random password nobody knows, so it
-//       could not change it, switch 2FA off or delete itself. A Google re-authentication now
-//       lets it set a password.
+// B-S4  (An account created through Google sign-in could set a password after a Google
+//       re-authentication. Removed with Google sign-in on 2026-10-11 - such an account now
+//       recovers through scripts/reset-password.js, see tests/test-account-security-r2.js.)
 // B-N1  /api/login answered an unknown name ~35x faster than a known one, which enumerated
 //       accounts by timing.
 // B-N2  The avatar was stored without checking it was an image at all.
 //
-// Mailgun and Google are stubbed; nothing leaves the machine.
+// Mailgun and every outbound fetch are stubbed; nothing leaves the machine.
 //
 // Run with: node tests/test-account-security.js
 
@@ -40,15 +40,8 @@ const sentEmails = [];
 stubModule('services/mailgun.js', {
   sendMailgunEmail: async (message) => { sentEmails.push(message); }
 });
-let currentGoogleProfile = null;
 stubModule('utils/fetchWithTimeout.js', {
   fetchWithTimeout: async (url) => {
-    if (url.startsWith('https://oauth2.googleapis.com/token')) {
-      return new Response(JSON.stringify({ access_token: 'google-access-token' }), { status: 200 });
-    }
-    if (url.startsWith('https://www.googleapis.com/oauth2/v3/userinfo')) {
-      return new Response(JSON.stringify(currentGoogleProfile), { status: 200 });
-    }
     throw new Error(`unexpected outbound request in test: ${url}`);
   }
 });
@@ -100,8 +93,8 @@ async function call(baseUrl, method, urlPath, body, token, extraHeaders = {}) {
 async function createUser(overrides = {}) {
   const username = 'acctsec_' + Math.random().toString(36).substring(2, 9);
   const result = await db.run(`
-    INSERT INTO users (username, password_hash, sync_token, totp_enabled, totp_secret, role, status, email, force_2fa, google_id)
-    VALUES (?, ?, ?, ?, ?, 'user', 'active', ?, ?, ?)
+    INSERT INTO users (username, password_hash, sync_token, totp_enabled, totp_secret, role, status, email, force_2fa)
+    VALUES (?, ?, ?, ?, ?, 'user', 'active', ?, ?)
   `, [
     username,
     await bcrypt.hash(overrides.password || PASSWORD, 10),
@@ -109,8 +102,7 @@ async function createUser(overrides = {}) {
     overrides.totp_enabled || 0,
     overrides.totp_secret || null,
     overrides.email === undefined ? `${username}@example.invalid` : overrides.email,
-    overrides.force_2fa || 0,
-    overrides.google_id || null
+    overrides.force_2fa || 0
   ]);
   return { id: result.id, username, email: overrides.email === undefined ? `${username}@example.invalid` : overrides.email };
 }
@@ -203,8 +195,8 @@ async function testPasswordCheckLimitedPerAccount(baseUrl) {
   }
   assert(firstLimited !== null && firstLimited <= 31, `wrong passwords spread over 8 addresses hit 429 (at attempt ${firstLimited}, before: never within 40)`);
   // ...and the right password from yet another address is refused while locked.
-  const right = await call(baseUrl, 'POST', '/api/auth/ticket', { service: 'google_link', password: PASSWORD }, token, { 'X-Forwarded-For': '198.51.100.99' });
-  assert(right.status === 429 && !right.body.ticket, `the correct password does not get through the account lock (got ${right.status})`);
+  const right = await call(baseUrl, 'POST', '/api/user/disable-2fa', { password: PASSWORD }, token, { 'X-Forwarded-For': '198.51.100.99' });
+  assert(right.status === 429, `the correct password does not get through the account lock (got ${right.status})`);
 }
 
 async function testForced2faAlwaysFreshSecret(baseUrl) {
@@ -216,79 +208,6 @@ async function testForced2faAlwaysFreshSecret(baseUrl) {
   assert(r.body.secret && r.body.secret !== planted, 'the secret offered is NOT the one planted before');
   const row = await db.get(`SELECT totp_secret FROM users WHERE id = ?`, [user.id]);
   assert(row.totp_secret === r.body.secret, 'the stored secret is the fresh one');
-}
-
-function cookiesFrom(res) {
-  const jar = {};
-  for (const line of res.headers.getSetCookie()) {
-    const [pair] = line.split(';');
-    const eq = pair.indexOf('=');
-    jar[pair.slice(0, eq)] = pair.slice(eq + 1);
-  }
-  return jar;
-}
-const cookieHeader = (jar) => Object.entries(jar).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join('; ');
-
-async function googleReauthRoundTrip(baseUrl, token, profile) {
-  currentGoogleProfile = profile;
-  const ticket = await call(baseUrl, 'POST', '/api/auth/ticket', { service: 'google_reauth' }, token);
-  if (!ticket.body.ticket) return { ticketStatus: ticket.status, location: '' };
-  const start = await fetch(`${baseUrl}/api/auth/google/reauth?ticket=${encodeURIComponent(ticket.body.ticket)}`, { redirect: 'manual' });
-  const jar = cookiesFrom(start);
-  const state = new URL(start.headers.get('location')).searchParams.get('state');
-  const callback = await fetch(`${baseUrl}/api/auth/google/callback?code=test-code&state=${encodeURIComponent(state)}`, {
-    redirect: 'manual',
-    headers: { Cookie: cookieHeader(jar) }
-  });
-  return { ticketStatus: ticket.status, location: callback.headers.get('location') || '' };
-}
-
-const grantFrom = (location) => new URLSearchParams(location.split('#')[1] || '').get('google_reauth');
-
-async function testGoogleAccountCanSetPassword(baseUrl) {
-  console.log('\n--- TEST (B-S4): a Google-created account can set a password and then delete itself ---');
-  for (const [key, value] of [['google_client_id', 'test-client-id'], ['google_client_secret', 'test-client-secret'], ['app_url', 'http://127.0.0.1']]) {
-    await db.run(`INSERT INTO app_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [key, value]);
-  }
-  // A random password nobody knows, as the Google callback creates it.
-  const user = await createUser({ google_id: 'g-sub-owner', password: 'unknown-random-' + Math.random() });
-  const sessionToken = 'sess_googleowner_' + 'k'.repeat(30);
-  await db.run(`
-    INSERT INTO sessions (token, user_id, expires_at, absolute_expires_at, is_verified_2fa, is_temp)
-    VALUES (?, ?, datetime('now', '+1 day'), datetime('now', '+1 day'), 0, 0)
-  `, [sessionToken, user.id]);
-
-  const noGrant = await call(baseUrl, 'POST', '/api/user/set-password', { newPassword: 'chosenpass123' }, sessionToken);
-  assert(noGrant.status === 401, `set-password without a Google re-authentication is refused (got ${noGrant.status})`);
-
-  const wrongAccount = await googleReauthRoundTrip(baseUrl, sessionToken, { sub: 'g-sub-someone-else', email: 'x@example.invalid' });
-  assert(wrongAccount.location.includes('google_reauth_error=mismatch') && !grantFrom(wrongAccount.location), 'a different Google account yields no grant');
-
-  const ok = await googleReauthRoundTrip(baseUrl, sessionToken, { sub: 'g-sub-owner', email: user.email });
-  const grant = grantFrom(ok.location);
-  assert(!!grant && ok.location.startsWith('/?tab=setup#'), 'the linked Google account yields a grant in the fragment');
-
-  // A grant is bound to the account that earned it.
-  const other = await createUser();
-  const otherToken = await login(baseUrl, other.username);
-  const foreign = await call(baseUrl, 'POST', '/api/user/set-password', { googleReauth: grant, newPassword: 'chosenpass123' }, otherToken);
-  assert(foreign.status === 401, `another account cannot use the grant (got ${foreign.status})`);
-
-  // That probe spent the grant (one use, whoever makes it) - go round again.
-  const again = await googleReauthRoundTrip(baseUrl, sessionToken, { sub: 'g-sub-owner', email: user.email });
-  const set = await call(baseUrl, 'POST', '/api/user/set-password', { googleReauth: grantFrom(again.location), newPassword: 'chosenpass123' }, sessionToken);
-  assert(set.status === 200, `the owner sets a password (got ${set.status} ${set.body.error || ''})`);
-  const reuse = await call(baseUrl, 'POST', '/api/user/set-password', { googleReauth: grantFrom(again.location), newPassword: 'otherpass123' }, sessionToken);
-  assert(reuse.status === 401, 'the grant is single-use');
-
-  const del = await call(baseUrl, 'DELETE', '/api/user/account', { password: 'chosenpass123' }, sessionToken);
-  assert(del.status === 200, `with the password set, the account can delete itself (got ${del.status})`);
-  assert(!(await db.get(`SELECT id FROM users WHERE id = ?`, [user.id])), 'the account is gone');
-
-  const noLink = await createUser();
-  const noLinkToken = await login(baseUrl, noLink.username);
-  const refused = await call(baseUrl, 'POST', '/api/auth/ticket', { service: 'google_reauth' }, noLinkToken);
-  assert(refused.status === 400, 'an account without Google gets no re-authentication ticket');
 }
 
 async function testLoginTimingDoesNotEnumerate(baseUrl) {
@@ -338,7 +257,6 @@ async function run() {
     await testEnabling2faNeedsPassword(baseUrl);
     await testPasswordCheckLimitedPerAccount(baseUrl);
     await testForced2faAlwaysFreshSecret(baseUrl);
-    await testGoogleAccountCanSetPassword(baseUrl);
     await testLoginTimingDoesNotEnumerate(baseUrl);
     await testAvatarMustBeAnImage(baseUrl);
   } finally {

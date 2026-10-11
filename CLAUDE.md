@@ -62,7 +62,7 @@ Do not write comments that restate the code (`// increment counter`).
 - **Frontend**: React + Vite, dark glassmorphism theme, hand-rolled SVG charts (no charting library).
 - **AI**: Gemini. Model selection is centralised in `backend/config.js` — never read `process.env.GEMINI_MODEL` directly elsewhere.
 - **Dates**: every date computation must go through `backend/utils/dates.js`, which forces `Europe/Warsaw`. Bare `new Date().getHours()` / `getDay()` returns the *server's* timezone (UTC in production) and silently shifts data by 1–2 hours.
-- **Activity data priority**: three sources write to `health_metrics`. The hierarchy lives in one place, `backend/utils/activitySources.js` (`apple > google_fit > oura`). Never hand-write an `ON CONFLICT` guard for activity columns — use the helpers, or the sources start overwriting each other depending on sync order.
+- **Activity data priority**: two sources write activity to `health_metrics` today, Apple Health and Oura (Google Fit, removed 2026-10-11, still owns the rows it wrote). The hierarchy lives in one place, `backend/utils/activitySources.js` (`apple > google_fit > oura`). Never hand-write an `ON CONFLICT` guard for activity columns — use the helpers, or the sources start overwriting each other depending on sync order.
 - **Dashboard insights**: registered as `/api/dashboard/<id>` routes and indexed automatically into a batch endpoint. Adding an insight requires no second registration step, but it must be registered with a plain `router.get('/api/dashboard/<id>', …)` call or it will silently drop out of the batch.
 
 ## Testing

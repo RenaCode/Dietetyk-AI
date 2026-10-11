@@ -120,10 +120,11 @@ function toWarsawIsoString(date) {
 }
 
 // Returns the timestamp (ms) of Europe/Warsaw midnight for the day `deltaDays` away
-// from the given date. Needed wherever an external API splits data into daily buckets
-// aligned to the START OF THE WINDOW (Google Fit dataset:aggregate + bucketByTime) -
-// passing "now minus N days" would produce days counted from the current hour rather
-// than calendar days, and would attribute activity to the wrong day.
+// from the given date. Written for the Google Fit fetch (removed 2026-10-11), whose
+// dataset:aggregate split data into daily buckets aligned to the START OF THE WINDOW -
+// passing "now minus N days" produced days counted from the current hour rather than
+// calendar days, and attributed activity to the wrong day. Still used by
+// nextWarsawTimeMillis below (the daily backup slot).
 //
 // Handles daylight saving: a day can be 23 or 25 hours long, so this cannot be
 // computed by subtracting a fixed number of milliseconds. Instead we take the

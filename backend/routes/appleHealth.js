@@ -50,8 +50,9 @@ const { syncAppleColumns } = require('../utils/appleHealthColumns');
 //     frozen at the value they happened to have, for good.
 //     So this upsert builds its clauses from the same helpers as every other writer, and
 //     passes activity_source = 'apple' only when the payload actually brought activity.
-//   - syncOura and syncGoogleFit (services/sync.js) build their ON CONFLICT clauses from
-//     that same hierarchy via preserveHigherPriority()/preserveSourceLabel(), so they will
+//   - syncOura (services/sync.js, and syncGoogleFit until Google Fit was removed on
+//     2026-10-11) builds its ON CONFLICT clauses from
+//     that same hierarchy via preserveHigherPriority()/preserveSourceLabel(), so it will
 //     not overwrite a column holding real data from a higher-ranked source. Previously the
 //     only thing guarded against was overwriting 'apple', while Google Fit and Oura
 //     overwrote each other - the result for a given day then depended on sync order.

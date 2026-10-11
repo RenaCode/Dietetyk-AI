@@ -9,16 +9,18 @@ const { getAppConfig } = require('../services/oauthHelpers');
 const { APP_SECRET_CONFIG_KEYS, maskSecretValue, isMaskedSecretWrite } = require('../utils/secretKeys');
 const { encrypt } = require('../utils/encryption');
 
-// Google sign-in keys - global to the whole application (unlike Oura/Withings): Google
-// sign-in authenticates access to the app itself, so it is configured once
-const GOOGLE_CONFIG_KEYS = ['google_client_id', 'google_client_secret'];
+// Which app_config keys this panel reads and writes. Anything else in a request body is
+// ignored, and anything else in the table is not returned. google_client_id and
+// google_client_secret were on this list until Google sign-in and Google Fit were removed
+// (2026-10-11); the db.js migration deletes their rows, and the panel no longer takes them.
+const isAdminConfigKey = (key) => key.startsWith('mailgun_') || key === 'app_url' || key === 'force_2fa' || key === 'allow_public_registration';
 
 router.get('/api/admin/config', requireAdmin, async (req, res) => {
   try {
     const rows = await db.all(`SELECT * FROM app_config`);
     const config = {};
     rows.forEach(r => {
-      if (r.key.startsWith('mailgun_') || r.key === 'app_url' || r.key === 'force_2fa' || r.key === 'allow_public_registration' || GOOGLE_CONFIG_KEYS.includes(r.key)) {
+      if (isAdminConfigKey(r.key)) {
         config[r.key] = maskSecretValue(r.key, r.value, APP_SECRET_CONFIG_KEYS);
       }
     });
@@ -36,10 +38,10 @@ router.post('/api/admin/config', requireAdmin, async (req, res) => {
       if (isMaskedSecretWrite(key, val, APP_SECRET_CONFIG_KEYS)) {
         continue;
       }
-      if (!key.startsWith('mailgun_') && key !== 'app_url' && key !== 'force_2fa' && key !== 'allow_public_registration' && !GOOGLE_CONFIG_KEYS.includes(key)) {
+      if (!isAdminConfigKey(key)) {
         continue;
       }
-      // Sekrety (mailgun_api_key, google_client_secret) trzymamy w bazie zaszyfrowane
+      // Secrets (mailgun_api_key) are stored encrypted
       // (see utils/encryption.js) - encrypt() is a no-op for the remaining keys.
       const storedValue = APP_SECRET_CONFIG_KEYS.includes(key) ? encrypt(String(val)) : String(val);
       await db.run(`

@@ -277,8 +277,8 @@ async function testLogoutAll(baseUrl) {
   assert(await tokenStillWorks(baseUrl, callerToken), 'the caller keeps working - this is not a self-logout');
 
   // No password is required, on purpose: the endpoint only ever REMOVES access, and demanding
-  // one would lock out Google-created accounts, whose password hash is random and unknown to
-  // anybody - exactly the accounts that need this most.
+  // one would lock out accounts without a known password (password_set = 0, created by the
+  // since-removed Google sign-in) - exactly the accounts that need this most.
   const secondRun = await post(baseUrl, '/api/user/logout-all', {}, callerToken);
   assert(secondRun.status === 200 && secondRun.body.revokedSessions === 0, 'running it again is harmless and reports nothing left to revoke');
 }

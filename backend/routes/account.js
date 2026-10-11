@@ -9,11 +9,11 @@ const QRCode = require('qrcode');
 const { sendWeeklySummaryForUser, sendDailySummaryForUser, sendMonthlySummaryForUser } = require('../services/summaries');
 const { buildHealthReportPdf } = require('../services/pdfReport');
 const { createShareLink, listSharesForUser, revokeShare, VALIDITY_OPTIONS_HOURS } = require('../services/sharedReports');
-const { getAppConfig, isGoogleConfigured } = require('../services/oauthHelpers');
+const { getAppConfig } = require('../services/oauthHelpers');
 const { summaryEmailLimiter, pdfRateLimiter } = require('../middleware/rateLimit');
 const { revokeUserSessions } = require('../middleware/auth');
 const loginAttempts = require('../services/loginAttempts');
-const { issueTicket, consumeTicket, GOOGLE_REAUTH_GRANT_SERVICE } = require('../services/authTickets');
+const { issueTicket } = require('../services/authTickets');
 const logger = require('../services/logger');
 const { USER_SECRET_SETTING_KEYS, maskSecretValue, isMaskedSecretWrite } = require('../utils/secretKeys');
 const { encrypt } = require('../utils/encryption');
@@ -79,9 +79,10 @@ const passwordCheckAttemptKey = (userId) => `pwcheck_user:${userId}`;
 //
 // Per IP AND account-wide (audit 2026-10-09, B-S1), the same pair /api/login uses. The per-IP
 // key alone gave 5 guesses per address: a session token replayed from 8 addresses got 40
-// wrong answers without one 429, and the 41st - the right password - came back with a
-// google_link ticket. The account-wide counter (services/loginAttempts.js, ACCOUNT_SCOPE)
-// does not care where the guesses come from.
+// wrong answers without one 429, and the 41st - the right password - went through (at the
+// time it handed out a ticket for linking a Google identity, removed since). The account-wide
+// counter (services/loginAttempts.js, ACCOUNT_SCOPE) does not care where the guesses come
+// from.
 async function passwordCheckLockout(req) {
   const key = passwordCheckAttemptKey(req.user.id);
   const lockedMs = await loginAttempts.reserveAttempt(req.ip, key)
@@ -112,15 +113,23 @@ async function recordPasswordCheckFailure(req, action) {
 // may go ahead. `requirePassword: true` in the 400 lets the frontend tell "ask for the
 // password" apart from any other validation error on the same endpoint.
 //
-// An account that never had a password it knows (created through Google, password_set = 0)
-// is told to set one through Google first - 409 `requirePasswordSetup` - BEFORE anything is
-// compared or counted (audit round 2, N-S4): asking it for "your current password" could only
-// fail, and every failure moved it closer to a 15-minute lockout.
+// An account that never had a password it knows (password_set = 0) is refused with 409
+// `requirePasswordSetup` BEFORE anything is compared or counted (audit round 2, N-S4): asking
+// it for "your current password" could only fail, and every failure moved it closer to a
+// 15-minute lockout.
+//
+// Only the since-removed "Sign in with Google" ever created such accounts (with a random hash
+// nobody knows), and it used to offer a way out: set a password after re-authenticating with
+// Google. That way is gone with Google itself, and nothing replaces it inside the app on
+// purpose - a session alone must not be enough to set a password. Such an account gets one
+// from an administrator instead: `node scripts/reset-password.js <username>` in the backend
+// container issues a one-time password and forces a change at the next login, which then runs
+// the full cleanup of /api/change-password-forced (routes/auth.js) and sets password_set = 1.
 async function respondIfNoPassword(req, res) {
   const flags = await db.get(`SELECT password_set FROM users WHERE id = ?`, [req.user.id]);
   if (flags && flags.password_set === 0) {
     res.status(409).json({
-      error: 'To konto zostało założone przez Google i nie ma hasła. Najpierw ustaw hasło przez Google (Ustawienia → Zmiana hasła).',
+      error: 'To konto nie ma ustawionego hasła. Poproś administratora o jednorazowe hasło - przy logowaniu ustawisz własne.',
       requirePasswordSetup: true
     });
     return true;
@@ -321,7 +330,7 @@ router.get('/api/settings/geocode-location', async (req, res) => {
 // 6a. Fetch the user profile (name, email, avatar, role and 2FA status)
 router.get('/api/user/profile', async (req, res) => {
   try {
-    const user = await db.get(`SELECT username, email, avatar_base64, role, totp_enabled, first_name, last_name, google_id, birth_year, body_goal_text, body_goal_photo_base64, password_set FROM users WHERE id = ?`, [req.user.id]);
+    const user = await db.get(`SELECT username, email, avatar_base64, role, totp_enabled, first_name, last_name, birth_year, body_goal_text, body_goal_photo_base64, password_set FROM users WHERE id = ?`, [req.user.id]);
     if (!user) {
       return res.status(404).json({ error: 'Użytkownik nie istnieje.' });
     }
@@ -337,7 +346,6 @@ router.get('/api/user/profile', async (req, res) => {
 
     const hasOuraRow = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'oura'`, [req.user.id]);
     const hasWithingsRow = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'withings'`, [req.user.id]);
-    const hasGoogleFitRow = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'google_fit'`, [req.user.id]);
     const ouraSpo2ScopeMissingRow = await db.get(`SELECT 1 FROM settings WHERE user_id = ? AND key = 'oura_spo2_scope_missing' AND value = '1'`, [req.user.id]);
 
     res.json({
@@ -368,14 +376,10 @@ router.get('/api/user/profile', async (req, res) => {
       // services/sync.js. Settings asks the user to reconnect Oura.
       oura_needs_reconnect: !!hasOuraRow && !!ouraSpo2ScopeMissingRow,
       has_withings: !!hasWithingsRow,
-      has_google: !!user.google_id,
-      // false only for an account created through Google that has not set a password yet -
-      // the UI then offers "set a password via Google" instead of asking for one (N-S4).
-      password_set: user.password_set !== 0,
-      has_google_fit: !!hasGoogleFitRow,
-      // Whether the instance has a Google OAuth client at all - Settings hides "Connect with
-      // Google" and "Connect Google Fit" without one (they would end on a 400 page).
-      google_configured: await isGoogleConfigured()
+      // false only for an account that has never had a password it knows (see
+      // respondIfNoPassword) - the UI then says to ask an administrator instead of asking for
+      // a current password (N-S4).
+      password_set: user.password_set !== 0
     });
   } catch (err) {
     console.error(err);
@@ -799,85 +803,23 @@ router.post('/api/user/disable-2fa', async (req, res) => {
 // One-time ticket that starts an OAuth flow by top-level navigation - see
 // services/authTickets.js for why the session token no longer goes in that URL.
 //
-// 'google_link' additionally requires the password, plus a current TOTP code when 2FA is on.
-// Linking Google adds a way to log in, and a way to log in that a stolen session can add on
-// its own survives everything the owner does about it afterwards. The data-source flows
-// (Oura, Withings, Google Fit) only bring data INTO the account and need just the session.
-//
-// 'google_reauth' (B-S4, see GET /api/auth/google/reauth) needs only the session: the Google
-// round-trip it starts is itself the proof of ownership, and a stolen session cannot complete
-// it without the owner's Google account.
-const TICKET_SERVICES = new Set(['oura', 'withings', 'google-fit', 'google_link', 'google_reauth']);
+// The data-source flows (Oura, Withings) only bring data INTO the account and need just the
+// session. The ticket kinds that added or proved a way to log in - 'google_link' (password
+// plus TOTP) and 'google_reauth' - went with Google sign-in on 2026-10-11, and so did
+// 'google-fit'; an unknown service is answered with 400.
+const TICKET_SERVICES = new Set(['oura', 'withings']);
 
 router.post('/api/auth/ticket', async (req, res) => {
-  const { service, password, code } = req.body || {};
+  const { service } = req.body || {};
   if (!TICKET_SERVICES.has(service)) {
     return res.status(400).json({ error: 'Nieznana integracja.' });
   }
 
   try {
-    if (service === 'google_link') {
-      if (!password) {
-        return res.status(400).json({ error: 'Podaj aktualne hasło, aby połączyć konto Google.' });
-      }
-      if (await respondIfNoPassword(req, res)) return;
-      const locked = await passwordCheckLockout(req);
-      if (locked) return res.status(429).json(locked);
-
-      const user = await db.get(`SELECT password_hash, totp_enabled, totp_secret FROM users WHERE id = ?`, [req.user.id]);
-      if (!user) {
-        return res.status(404).json({ error: 'Użytkownik nie istnieje.' });
-      }
-      const isMatch = await bcrypt.compare(password, user.password_hash);
-      if (!isMatch) {
-        await recordPasswordCheckFailure(req, 'google-link');
-        return res.status(400).json({ error: 'Niepoprawne hasło.' });
-      }
-      if (user.totp_enabled === 1) {
-        if (!code) {
-          return res.status(400).json({ error: 'Podaj kod 2FA, aby połączyć konto Google.', require2fa: true });
-        }
-        if (!(await verifyTotpOnce(req.user.id, user.totp_secret, code))) {
-          await recordPasswordCheckFailure(req, 'google-link-2fa');
-          return res.status(400).json({ error: 'Niepoprawny kod 2FA.', require2fa: true });
-        }
-      }
-      await recordPasswordCheckSuccess(req);
-    }
-
-    if (service === 'google_reauth') {
-      const linked = await db.get(`SELECT google_id FROM users WHERE id = ?`, [req.user.id]);
-      if (!linked || !linked.google_id) {
-        return res.status(400).json({ error: 'To konto nie jest połączone z Google.' });
-      }
-    }
-
     res.json({ ticket: issueTicket(req.user.id, service) });
   } catch (err) {
     console.error('[AUTH TICKET ERROR]', err);
     res.status(500).json({ error: 'Błąd serwera.' });
-  }
-});
-
-// Unlinking the Google account - password login (or Google Fit, if it was connected only
-// alongside Google sign-in) remains available, because the account always has a
-// password_hash: random if the account was created through Google, and resettable.
-//
-// Requires the password (audit round 2, N-S3). It used to need nothing, and for an account
-// created through Google, Google IS the only way in: a stolen session - or one wrong click -
-// unlinked it and the owner could never log in again (there is no password reset, and
-// re-authentication needs a linked Google identity). confirmCurrentPassword refuses
-// outright, without counting, for an account that has no password yet.
-router.post('/api/user/unlink-google', async (req, res) => {
-  try {
-    if (!(await confirmCurrentPassword(req, res, req.body && req.body.password, 'unlink-google'))) {
-      return;
-    }
-    await db.run(`UPDATE users SET google_id = NULL WHERE id = ?`, [req.user.id]);
-    res.json({ success: true, message: 'Odłączono konto Google.' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Błąd odłączania konta Google.' });
   }
 });
 
@@ -922,31 +864,25 @@ router.post('/api/user/change-password', async (req, res) => {
     // services/sharedReports.js for the two halves of that access and the reasoning behind
     // revoking the share links as well.
     //
-    // The two ways back in that do not go through a session. A Google identity linked from a
-    // stolen session kept logging the attacker in after the victim changed the password, and
-    // the sync token kept the Apple Health webhook writing (see rotateSyncToken). Linking now
-    // requires the password (POST /api/auth/ticket below), so the owner can re-link in a
-    // minute; an attacker cannot. Unlinking is safe HERE because the caller has just proved
-    // they have a working password - unlike logout-all, which Google-only accounts must be able
-    // to use and which therefore leaves the link alone.
-    // All of it lives in services/accountCleanup.js, shared with set-password, logout-all and
-    // the admin-forced change.
-    const { revokedSessions, revokedShares, emailRevert, unlinkedGoogle } = await cleanUpAfterCredentialReset(req.user.id, {
-      keepSessionToken: req.sessionToken,
-      unlinkGoogle: true
+    // The way back in that does not go through a session: the sync token kept the Apple
+    // Health webhook writing (see rotateSyncToken). A Google identity linked from a stolen
+    // session used to be the other one, until Google sign-in was removed.
+    // All of it lives in services/accountCleanup.js, shared with logout-all and the
+    // admin-forced change.
+    const { revokedSessions, revokedShares, emailRevert } = await cleanUpAfterCredentialReset(req.user.id, {
+      keepSessionToken: req.sessionToken
     });
 
     logger.security(
-      `Password changed: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s), rotated sync token${unlinkedGoogle ? ', unlinked Google' : ''} (UID: ${req.user.id})`,
+      `Password changed: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s), rotated sync token (UID: ${req.user.id})`,
       'AUTH_PASSWORD_CHANGE',
-      { userId: req.user.id, revokedSessions, revokedShares, unlinkedGoogle },
+      { userId: req.user.id, revokedSessions, revokedShares },
       req.ip,
       req.user.id
     );
 
     const parts = ['Hasło zostało pomyślnie zmienione. Pozostałe urządzenia zostały wylogowane'];
     if (revokedShares > 0) parts.push('aktywne linki do raportów unieważnione');
-    if (unlinkedGoogle) parts.push('konto Google odłączone (możesz je połączyć ponownie w Ustawieniach)');
     parts.push('adres webhooka Apple Health zmieniony - zaktualizuj go w Health Auto Export');
     if (emailRevert) parts.push(emailRevertMessage(emailRevert));
 
@@ -955,61 +891,12 @@ router.post('/api/user/change-password', async (req, res) => {
       message: parts.join(', ') + '.',
       revokedSessions,
       revokedShares,
-      unlinkedGoogle,
       syncTokenRotated: true,
       emailReverted: !!emailRevert
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Błąd zmiany hasła serwera.' });
-  }
-});
-
-// Setting a new password WITHOUT the current one, on the strength of a fresh Google
-// re-authentication (audit 2026-10-09, B-S4 - see GET /api/auth/google/reauth in
-// routes/auth.js for why an account created through Google needs this at all). The grant is
-// one-time, ten minutes long, and only valid for the account that earned it.
-//
-// Ends the same access a password change does - other sessions, share links, the sync token,
-// and an e-mail change made from a revoked session - because the Google account proving
-// ownership here is also exactly what an owner who suspects a compromise would use. Google
-// stays linked: it is the identity that just proved ownership, unlike in change-password,
-// where the link may have been planted by the session being thrown out.
-router.post('/api/user/set-password', async (req, res) => {
-  const { googleReauth, newPassword } = req.body || {};
-  const passError = typeof newPassword !== 'string' || newPassword.length < 8
-    ? 'Hasło musi mieć co najmniej 8 znaków.'
-    : (!/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword) ? 'Hasło musi zawierać co najmniej jedną literę i jedną cyfrę.' : null);
-  if (passError) {
-    return res.status(400).json({ error: passError });
-  }
-  // Consumed before anything else, so a grant is spent by its first use whatever happens.
-  const grantUserId = consumeTicket(googleReauth, GOOGLE_REAUTH_GRANT_SERVICE);
-  if (!grantUserId || grantUserId !== req.user.id) {
-    logger.security(`Set-password refused: missing, expired or foreign Google re-authentication (UID: ${req.user.id})`, 'AUTH_PASSWORD_FAILURE', { userId: req.user.id, action: 'set-password' }, req.ip, req.user.id);
-    return res.status(401).json({ error: 'Potwierdzenie przez Google wygasło. Spróbuj ponownie.' });
-  }
-
-  try {
-    const newHash = await bcrypt.hash(newPassword, 10);
-    await db.run(`UPDATE users SET password_hash = ? WHERE id = ?`, [newHash, req.user.id]);
-    await db.run(`UPDATE users SET password_set = 1 WHERE id = ?`, [req.user.id]);
-    const { revokedSessions, revokedShares, emailRevert } = await cleanUpAfterCredentialReset(req.user.id, { keepSessionToken: req.sessionToken });
-    logger.security(
-      `Password set after Google re-authentication: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s), rotated sync token (UID: ${req.user.id})`,
-      'AUTH_PASSWORD_CHANGE',
-      { userId: req.user.id, revokedSessions, revokedShares, via: 'google_reauth' },
-      req.ip,
-      req.user.id
-    );
-    const parts = ['Hasło zostało ustawione. Pozostałe urządzenia zostały wylogowane'];
-    if (revokedShares > 0) parts.push('aktywne linki do raportów unieważnione');
-    parts.push('adres webhooka Apple Health zmieniony - zaktualizuj go w Health Auto Export');
-    if (emailRevert) parts.push(emailRevertMessage(emailRevert));
-    res.json({ success: true, message: parts.join(', ') + '.', revokedSessions, revokedShares, syncTokenRotated: true, emailReverted: !!emailRevert });
-  } catch (err) {
-    console.error('[SET PASSWORD ERROR]', err);
-    res.status(500).json({ error: 'Błąd ustawiania hasła.' });
   }
 });
 
@@ -1024,13 +911,12 @@ router.post('/api/user/set-password', async (req, res) => {
 //
 // Deliberately NOT password-protected. This endpoint only ever REMOVES access, so the worst
 // an attacker holding a session can do with it is log themselves out along with everyone
-// else; requiring a password would instead lock out accounts created through Google sign-in,
-// which have a random hash nobody knows (see routes/auth.js), exactly when they need this
-// most.
+// else; requiring a password would instead lock out an account without a known password
+// (password_set = 0, see respondIfNoPassword) exactly when it needs this most.
 router.post('/api/user/logout-all', async (req, res) => {
   try {
     // A session that is being shut out keeps neither the webhook nor the summary e-mails it may
-    // have redirected - services/accountCleanup.js. Share links stay; Google stays linked.
+    // have redirected - services/accountCleanup.js. Share links stay.
     const { revokedSessions: revoked, emailRevert } = await cleanUpAfterCredentialReset(req.user.id, {
       keepSessionToken: req.sessionToken,
       revokeShares: false
@@ -1264,9 +1150,8 @@ router.delete('/api/user/shared-reports/:id', async (req, res) => {
 // Deleting one's own account (GDPR art. 17 - the right to erasure).
 // Requires the current password, so that someone holding ONLY a session token - a browser
 // left open, for instance - cannot permanently delete the account without knowing the
-// password. An account created through Google sign-in has a random hash nobody knows; its
-// owner sets a real password first through a Google re-authentication
-// (POST /api/user/set-password) and confirms the deletion with that.
+// password. An account without a known password (password_set = 0) gets a one-time one from
+// an administrator first - see respondIfNoPassword.
 router.delete('/api/user/account', async (req, res) => {
   const { password } = req.body;
   if (!password) {

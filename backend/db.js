@@ -32,7 +32,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
 // .db file, with no separate -wal file to merge, so copying the .db alone in
 // backupDatabase() below is consistent with it - unlike WAL, where a copy without the
 // -wal file could miss the most recent writes. busy_timeout makes short write collisions
-// (the hourly Oura/Withings/Google Fit sync overlapping a user's own write, say) wait
+// (the hourly Oura/Withings sync overlapping a user's own write, say) wait
 // briefly and retry instead of failing immediately with "SQLITE_BUSY: database is
 // locked".
 db.run('PRAGMA journal_mode = TRUNCATE;', (err) => {
@@ -225,15 +225,22 @@ const initDb = async () => {
   await addColumn("ALTER TABLE users ADD COLUMN email_changed_by_session TEXT");
 
   // Whether the user KNOWS their password (audit round 2, N-S4). An account created through
-  // "Sign in with Google" gets a random hash nobody knows (routes/auth.js), and the UI asked
-  // it for "your current password" anyway - every attempt failed and counted towards the
-  // lockout. 0 only for those accounts until they set one (set-password, change-password,
-  // forced change set it to 1). Existing rows default to 1: an older Google-created account
-  // cannot be told apart from one that linked Google later, and on production Google sign-in
-  // has been disabled, so treating it as "has a password" is the conservative default.
+  // "Sign in with Google" got a random hash nobody knows, and the UI asked it for "your
+  // current password" anyway - every attempt failed and counted towards the lockout. 0 only
+  // for those accounts until they set one (change-password and the forced change set it to
+  // 1). Existing rows default to 1: an older Google-created account cannot be told apart from
+  // one that linked Google later, and on production Google sign-in had been disabled, so
+  // treating it as "has a password" is the conservative default.
+  //
+  // Google sign-in was removed on 2026-10-11, so nothing creates a 0 any more. The column
+  // stays because a 0 that already exists still means the same thing; such an account gets a
+  // one-time password from an administrator (scripts/reset-password.js) - see
+  // respondIfNoPassword in routes/account.js.
   await addColumn("ALTER TABLE users ADD COLUMN password_set INTEGER NOT NULL DEFAULT 1");
 
-  // Migration: Google sign-in (a step towards eventually dropping password login)
+  // Migration: Google sign-in. The feature was removed on 2026-10-11 and nothing reads
+  // google_id any more; the column and its index stay, because dropping a column is the one
+  // migration here that cannot be undone, and an inert NULL-or-value costs nothing.
   await addColumn("ALTER TABLE users ADD COLUMN google_id TEXT");
   await createUniqueIndexWhenDataAllows({
     label: 'idx_users_google_id',
@@ -243,7 +250,7 @@ const initDb = async () => {
       FROM users WHERE google_id IS NOT NULL
       GROUP BY google_id HAVING COUNT(*) > 1
     `,
-    remedy: 'Until one Google account maps to one row, login by Google picks the first matching row.'
+    remedy: 'Google sign-in has been removed, so duplicates are harmless; the index exists only for continuity.'
   });
 
   // UNIQUE on users.email (audit 2026-09-23). The column was created as a plain `email
@@ -1083,6 +1090,22 @@ const initDb = async () => {
   // not part of the primary key or a uniqueness constraint.
   await run(`CREATE INDEX IF NOT EXISTS idx_meals_user_date ON meals(user_id, date)`);
   await run(`CREATE INDEX IF NOT EXISTS idx_workouts_user_date ON apple_health_workouts(user_id, date)`);
+
+  // Google sign-in and Google Fit removed (2026-10-11). What they left behind is split by
+  // whether it is a secret or a record:
+  //   - Google Fit OAuth tokens (oauth_tokens, service 'google_fit') and the global Google
+  //     client (app_config google_client_id / google_client_secret) are credentials for an
+  //     integration that no longer exists. Nothing reads them, nothing refreshes or revokes
+  //     them, so keeping them only keeps a live grant to someone's Google account sitting in
+  //     the database and in every backup. Deleted - a token is not data the user owns, and
+  //     reconnecting would mint a fresh one anyway.
+  //   - Steps/calories/distance Google Fit already wrote to health_metrics (activity_source
+  //     and <column>_source = 'google_fit') are the user's history and stay exactly as they
+  //     are; utils/activitySources.js still ranks 'google_fit' so those rows keep their place
+  //     in the priority order. users.google_id stays as well (see the google_id migration).
+  // Idempotent: a second run deletes nothing.
+  await run(`DELETE FROM oauth_tokens WHERE service = 'google_fit'`);
+  await run(`DELETE FROM app_config WHERE key IN ('google_client_id', 'google_client_secret')`);
 
   // Round 3 (audit): clean up expired sessions when the database starts
   await cleanupExpiredSessions();

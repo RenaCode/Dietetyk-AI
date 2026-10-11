@@ -1,7 +1,7 @@
 // Tests that one user's broken integration cannot stop the hourly sync for everybody else
 // (audit 2026-10-02).
 //
-// syncAllOura / syncAllWithings / syncAllGoogleFit loop over every connected user and await
+// syncAllOura / syncAllWithings loop over every connected user and await
 // syncOura(userId) etc. inside ONE try/catch around the whole loop. The per-user functions
 // catch their own HTTP errors, but getOrRefreshToken() runs before their try - and it calls
 // decrypt() on the stored tokens, which throws on a ciphertext that no longer authenticates
@@ -46,7 +46,7 @@ stubModule('utils/fetchWithTimeout.js', {
 });
 
 const db = require('../db');
-const { syncAllOura, syncAllWithings, syncAllGoogleFit } = require('../services/sync');
+const { syncAllOura, syncAllWithings } = require('../services/sync');
 
 async function main() {
   console.log('=== SYNC-ALL ISOLATION TESTS ===');
@@ -61,8 +61,7 @@ async function main() {
     const farFuture = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
     const runs = [
       ['oura', syncAllOura],
-      ['withings', syncAllWithings],
-      ['google_fit', syncAllGoogleFit]
+      ['withings', syncAllWithings]
     ];
     for (const [service, syncAll] of runs) {
       console.log(`\n--- ${service}: a user whose token cannot be decrypted does not stop the next one ---`);

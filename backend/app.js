@@ -84,9 +84,8 @@ app.use(cors(allowedOrigin ? { origin: allowedOrigin } : {}));
 // Morgan's default 'dev' format logs the full request URL INCLUDING the query string.
 // That is a problem because some endpoints (/api/invitation-status?token=..., for
 // instance) accept sensitive values there - such a token would land in the container logs
-// in plain text. Session tokens (Google OAuth) no longer travel in the query string (see
-// routes/auth.js - they are passed in the URL fragment, which the server never sees), but
-// this is an extra layer of defence in depth for other or future parameters of that kind.
+// in plain text. Session tokens never travel in the query string (the OAuth connect flows
+// use one-time tickets - see services/authTickets.js), but this is an extra layer of defence in depth for other or future parameters of that kind.
 morgan.token('safe-url', (req) => {
   const url = req.originalUrl || req.url || '';
   return url
@@ -202,9 +201,14 @@ app.use(require('./routes/chat'));
 // docker/frontend.Dockerfile), so sendFile failed with ENOENT and every stray non-API request
 // - a scanner, a probe of `/` - became a "WARN HTTP error 404 ... /app/public/index.html" row
 // in app_logs and the admin report. Without the build there is nothing to serve: a plain 404.
+//
+// An unknown /api/ path is always a JSON 404, build or no build. With the build present (E2E,
+// local `npm run build`) a GET to a removed endpoint - /api/auth/google after Google sign-in
+// was taken out, say - used to come back as 200 with the SPA's HTML, which a caller or a test
+// reads as "the route still exists".
 const SPA_INDEX = path.join(__dirname, 'public', 'index.html');
 app.get('*', (req, res) => {
-  if (!fs.existsSync(SPA_INDEX)) {
+  if (req.path.startsWith('/api/') || !fs.existsSync(SPA_INDEX)) {
     return res.status(404).json({ error: 'Nie znaleziono.' });
   }
   res.sendFile(SPA_INDEX);

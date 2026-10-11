@@ -11,10 +11,11 @@
 // - USER_SECRET_SETTING_KEYS: PER-USER integration secrets, in the `settings` table
 //   (each user configures their own Oura/Withings/Gemini keys).
 // - APP_SECRET_CONFIG_KEYS: sekrety konfiguracji GLOBALNEJ aplikacji, w tabeli
-//   `app_config` (Mailgun/Google OAuth, configured once by an admin for the whole app).
+//   `app_config` (Mailgun, configured once by an admin for the whole app). It held
+//   google_client_secret too until Google sign-in and Google Fit were removed (2026-10-11).
 
 const USER_SECRET_SETTING_KEYS = ['gemini_api_key', 'oura_client_secret', 'withings_client_secret'];
-const APP_SECRET_CONFIG_KEYS = ['mailgun_api_key', 'google_client_secret'];
+const APP_SECRET_CONFIG_KEYS = ['mailgun_api_key'];
 
 // Returns a masked value ('********') when `key` is a secret from the given list and has
 // a non-empty value - otherwise returns the value unchanged.

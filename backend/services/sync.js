@@ -11,7 +11,7 @@ const {
   activitySourceValues
 } = require('../utils/activitySources');
 
-const { getOrRefreshToken, getUserSetting } = require('./oauthHelpers');
+const { getOrRefreshToken, getUserSetting, isGoogleFitEnabled } = require('./oauthHelpers');
 const logger = require('./logger');
 
 // Per-user flag (settings table): the stored Oura token was granted without the `spo2` scope.
@@ -720,9 +720,16 @@ async function syncAllWithings() {
 }
 
 // Google Fit sync for every user (invoked by the shared hourly scheduler, 05:00-22:00)
+//
+// Does nothing while Google Fit is switched off (app_config.google_fit_enabled, see
+// services/oauthHelpers.js): stored tokens are neither used nor refreshed, so switching it back
+// on resumes with them - or with a reconnect, if Google has expired them meanwhile.
 async function syncAllGoogleFit() {
-  console.log('[CRON GOOGLE FIT] Syncing data...');
   try {
+    // Silently: an hourly "switched off" line would be the only thing in the log about an
+    // integration nobody uses.
+    if (!(await isGoogleFitEnabled())) return;
+    console.log('[CRON GOOGLE FIT] Syncing data...');
     const tokens = await db.all(`SELECT DISTINCT user_id FROM oauth_tokens WHERE service = 'google_fit'`);
     const { ok, failed } = await syncEachUser('Google Fit', tokens, syncGoogleFit);
     console.log(`[CRON GOOGLE FIT] Synced ${ok}/${tokens.length} user(s)${failed ? `, ${failed} failed (see app_logs, category SYNC)` : ''}.`);

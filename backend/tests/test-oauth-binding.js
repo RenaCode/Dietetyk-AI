@@ -9,9 +9,13 @@
 //     pinned to it). The Oura callback also accepted a state minted for any other service.
 // M4. The flows were started with the SESSION TOKEN in the query string
 //     (/api/auth/oura?token=sess_...), which nginx wrote to its access log.
-// M3. Linking Google needed nothing but a session, and neither a password change nor
-//     "log out everywhere" touched the linked Google identity or the Apple Health sync token -
-//     so a stolen session could plant a way back in that outlived the owner's response.
+// M3. Neither a password change nor "log out everywhere" touched the Apple Health sync token
+//     (nor a linked Google identity, while Google sign-in existed) - so a stolen session could
+//     plant a way back in that outlived the owner's response.
+//
+// These tests drove the Google Fit flow until Google Fit was switched off by default on
+// 2026-10-11; they now drive Oura, which goes through the same binding helpers.
+// tests/test-google-fit-switch.js covers Google Fit with the switch on and off.
 //
 // Run with: node tests/test-oauth-binding.js
 
@@ -34,8 +38,8 @@ function stubModule(relativePath, exports) {
 stubModule('utils/fetchWithTimeout.js', {
   fetchWithTimeout: async (url) => {
     outbound.push(url);
-    if (url.startsWith('https://oauth2.googleapis.com/token')) {
-      return new Response(JSON.stringify({ access_token: 'fit-access', refresh_token: 'fit-refresh', expires_in: 3600 }), { status: 200 });
+    if (url.startsWith('https://api.ouraring.com/oauth/token')) {
+      return new Response(JSON.stringify({ access_token: 'oura-access', refresh_token: 'oura-refresh', expires_in: 3600 }), { status: 200 });
     }
     return new Response(JSON.stringify({}), { status: 200 });
   }
@@ -101,14 +105,18 @@ async function createUserWithSession() {
     INSERT INTO sessions (token, user_id, expires_at, absolute_expires_at, is_verified_2fa, is_temp)
     VALUES (?, ?, datetime('now', '+1 day'), datetime('now', '+1 day'), 0, 0)
   `, [token, result.id]);
+  // The Oura flow uses the user's own developer credentials (Settings), not a global client.
+  for (const [key, value] of [['oura_client_id', 'oura-cid'], ['oura_client_secret', 'oura-csecret']]) {
+    await db.run(`INSERT INTO settings (user_id, key, value) VALUES (?, ?, ?)`, [result.id, key, value]);
+  }
   return { id: result.id, username, token };
 }
 
-// Starts a Google Fit connection the way the frontend does and returns the state the browser
-// would carry to Google plus the cookies it would hold.
-async function startGoogleFit(baseUrl, sessionToken) {
-  const ticket = await post(baseUrl, '/api/auth/ticket', { service: 'google-fit' }, sessionToken);
-  const start = await fetch(`${baseUrl}/api/auth/google-fit?ticket=${ticket.body.ticket}`, { redirect: 'manual' });
+// Starts an Oura connection the way the frontend does and returns the state the browser
+// would carry to Oura plus the cookies it would hold.
+async function startOura(baseUrl, sessionToken) {
+  const ticket = await post(baseUrl, '/api/auth/ticket', { service: 'oura' }, sessionToken);
+  const start = await fetch(`${baseUrl}/api/auth/oura?ticket=${ticket.body.ticket}`, { redirect: 'manual' });
   const state = new URL(start.headers.get('location')).searchParams.get('state');
   return { ticket: ticket.body.ticket, start, state, jar: cookiesFrom(start) };
 }
@@ -129,22 +137,28 @@ async function testTicketsReplaceSessionTokens(baseUrl) {
   console.log('\n--- TEST: connect flows start from a one-time ticket, not the session token ---');
   const user = await createUserWithSession();
 
-  const legacy = await fetch(`${baseUrl}/api/auth/google-fit?token=${user.token}`, { redirect: 'manual' });
+  const legacy = await fetch(`${baseUrl}/api/auth/oura?token=${user.token}`, { redirect: 'manual' });
   assert(legacy.status === 401, 'the session token in ?token= no longer starts a flow');
 
-  const { ticket, start } = await startGoogleFit(baseUrl, user.token);
+  const { ticket, start } = await startOura(baseUrl, user.token);
   assert(typeof ticket === 'string' && ticket.startsWith('tkt_'), 'POST /api/auth/ticket returns a ticket');
-  assert(start.status === 302, 'the ticket starts the Google Fit flow');
+  assert(start.status === 302, 'the ticket starts the Oura flow');
 
-  const reuse = await fetch(`${baseUrl}/api/auth/google-fit?ticket=${ticket}`, { redirect: 'manual' });
+  const reuse = await fetch(`${baseUrl}/api/auth/oura?ticket=${ticket}`, { redirect: 'manual' });
   assert(reuse.status === 401, 'the same ticket does not start a second flow');
 
-  const wrongService = await post(baseUrl, '/api/auth/ticket', { service: 'oura' }, user.token);
-  const crossed = await fetch(`${baseUrl}/api/auth/google-fit?ticket=${wrongService.body.ticket}`, { redirect: 'manual' });
-  assert(crossed.status === 401, 'a ticket issued for Oura does not start Google Fit');
+  const wrongService = await post(baseUrl, '/api/auth/ticket', { service: 'withings' }, user.token);
+  const crossed = await fetch(`${baseUrl}/api/auth/oura?ticket=${wrongService.body.ticket}`, { redirect: 'manual' });
+  assert(crossed.status === 401, 'a ticket issued for Withings does not start Oura');
 
   const anonymous = await post(baseUrl, '/api/auth/ticket', { service: 'oura' });
   assert(anonymous.status === 401, 'tickets are only issued to an authenticated session');
+
+  // The ticket kinds of the removed Google sign-in flows are not issued any more.
+  for (const service of ['google_link', 'google_reauth']) {
+    const r = await post(baseUrl, '/api/auth/ticket', { service, password: PASSWORD }, user.token);
+    assert(r.status === 400 && !r.body.ticket, `no '${service}' ticket (got ${r.status})`);
+  }
 }
 
 async function testCallbackBoundToBrowser(baseUrl) {
@@ -153,51 +167,35 @@ async function testCallbackBoundToBrowser(baseUrl) {
 
   // The attacker starts the flow for THEIR account and hands the consent URL to a victim. The
   // victim's browser comes back to the callback without the attacker's binding cookie.
-  const { state } = await startGoogleFit(baseUrl, attacker.token);
-  const victim = await callback(baseUrl, '/api/auth/google-fit/callback', state, null);
+  const { state } = await startOura(baseUrl, attacker.token);
+  const victim = await callback(baseUrl, '/api/auth/oura/callback', state, null);
   assert(victim.status === 400, `the callback without the binding cookie is refused (got ${victim.status})`);
-  assert(!(await tokenRow(attacker.id, 'google_fit')), 'no Google Fit tokens were stored on the attacker\'s account');
+  assert(!(await tokenRow(attacker.id, 'oura')), 'no Oura tokens were stored on the attacker\'s account');
 
   // The browser that started a flow completes it.
-  const own = await startGoogleFit(baseUrl, attacker.token);
-  const ok = await callback(baseUrl, '/api/auth/google-fit/callback', own.state, own.jar);
-  assert(ok.status === 302 && !!(await tokenRow(attacker.id, 'google_fit')), 'the starting browser completes the flow and the tokens are stored');
+  const own = await startOura(baseUrl, attacker.token);
+  const ok = await callback(baseUrl, '/api/auth/oura/callback', own.state, own.jar);
+  assert(ok.status === 302 && !!(await tokenRow(attacker.id, 'oura')), 'the starting browser completes the flow and the tokens are stored');
 
   // ...and only once, even if both state and cookie were kept.
   await db.run(`DELETE FROM oauth_tokens WHERE user_id = ?`, [attacker.id]);
-  const replay = await callback(baseUrl, '/api/auth/google-fit/callback', own.state, own.jar);
-  assert(replay.status === 400 && !(await tokenRow(attacker.id, 'google_fit')), 'the same state is refused the second time');
+  const replay = await callback(baseUrl, '/api/auth/oura/callback', own.state, own.jar);
+  assert(replay.status === 400 && !(await tokenRow(attacker.id, 'oura')), 'the same state is refused the second time');
 
-  // A state minted for another service is not accepted by the Oura callback.
-  const fit = await startGoogleFit(baseUrl, attacker.token);
-  const viaOura = await callback(baseUrl, '/api/auth/oura/callback', fit.state, fit.jar);
-  assert(viaOura.status === 400 && !(await tokenRow(attacker.id, 'oura')), 'a google_fit state is refused by the Oura callback');
-}
-
-async function testGoogleLinkNeedsPassword(baseUrl) {
-  console.log('\n--- TEST: linking Google requires the password ---');
-  const user = await createUserWithSession();
-
-  const noPassword = await post(baseUrl, '/api/auth/ticket', { service: 'google_link' }, user.token);
-  assert(noPassword.status === 400 && !noPassword.body.ticket, 'no password -> no google_link ticket');
-
-  const wrong = await post(baseUrl, '/api/auth/ticket', { service: 'google_link', password: 'not-it-123' }, user.token);
-  assert(wrong.status === 400 && !wrong.body.ticket, 'a wrong password -> no google_link ticket');
-
-  const right = await post(baseUrl, '/api/auth/ticket', { service: 'google_link', password: PASSWORD }, user.token);
-  assert(right.status === 200 && typeof right.body.ticket === 'string', 'the right password -> a google_link ticket');
+  // A state minted for another service is not accepted by the Withings callback.
+  const oura = await startOura(baseUrl, attacker.token);
+  const viaWithings = await callback(baseUrl, '/api/auth/withings/callback', oura.state, oura.jar);
+  assert(viaWithings.status === 400 && !(await tokenRow(attacker.id, 'withings')), 'an Oura state is refused by the Withings callback');
 }
 
 async function testPasswordChangeCutsSideDoors(baseUrl) {
-  console.log('\n--- TEST: change-password and logout-all cut the Google link and the sync token ---');
+  console.log('\n--- TEST: change-password and logout-all rotate the sync token ---');
   const user = await createUserWithSession();
-  await db.run(`UPDATE users SET google_id = 'attacker-google-sub' WHERE id = ?`, [user.id]);
   const before = await db.get(`SELECT sync_token FROM users WHERE id = ?`, [user.id]);
 
   const change = await post(baseUrl, '/api/user/change-password', { currentPassword: PASSWORD, newPassword: 'NewPass9876' }, user.token);
   assert(change.status === 200, 'the password change succeeds');
-  const after = await db.get(`SELECT google_id, sync_token FROM users WHERE id = ?`, [user.id]);
-  assert(after.google_id === null, 'the linked Google identity is removed');
+  const after = await db.get(`SELECT sync_token FROM users WHERE id = ?`, [user.id]);
   assert(after.sync_token && after.sync_token !== before.sync_token, 'the Apple Health sync token is rotated');
 
   const logoutAll = await post(baseUrl, '/api/user/logout-all', {}, user.token);
@@ -208,13 +206,10 @@ async function testPasswordChangeCutsSideDoors(baseUrl) {
 
 async function run() {
   await db.initDb();
-  await db.run(`INSERT INTO app_config (key, value) VALUES ('google_client_id', 'cid') ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
-  await db.run(`INSERT INTO app_config (key, value) VALUES ('google_client_secret', 'csecret') ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
   const { server, baseUrl } = await startServer();
   try {
     await testTicketsReplaceSessionTokens(baseUrl);
     await testCallbackBoundToBrowser(baseUrl);
-    await testGoogleLinkNeedsPassword(baseUrl);
     await testPasswordChangeCutsSideDoors(baseUrl);
   } finally {
     server.close();

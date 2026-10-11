@@ -54,20 +54,17 @@ test.describe('Autoryzacja (Login i Logout)', () => {
     await expect(page.locator('.alert-error')).toContainText('Niepoprawny użytkownik lub hasło');
   });
 
-  // Audit D1: without a Google client the button led to a bare 400 page. The E2E database has
-  // no Google configuration, so the button must not be rendered at all; with the flag mocked
-  // to true it appears - which proves the hiding comes from the flag, not a broken render.
-  test('Nie powinno pokazywać logowania przez Google, gdy klient Google nie jest skonfigurowany', async ({ page }) => {
-    const flag = page.waitForResponse('**/api/auth/google/enabled');
-    await page.goto('/');
-    expect(await (await flag).json()).toEqual({ enabled: false });
+  // Google sign-in was removed on 2026-10-11. The login screen must not offer it, must not ask
+  // the backend about it, and a stale Google return URL must not produce an error or a login.
+  test('Nie powinno pokazywać logowania przez Google ani pytać o nie backendu', async ({ page }) => {
+    const googleRequests = [];
+    page.on('request', (req) => {
+      if (req.url().includes('/api/auth/google')) googleRequests.push(req.url());
+    });
+    await page.goto('/?google_error=auth_failed#google_code=gx_stale');
     await expect(page.locator('button:has-text("Dalej")')).toBeVisible();
-    await expect(page.locator('button:has-text("Zaloguj się przez Google")')).toHaveCount(0);
-  });
-
-  test('Powinno pokazać logowanie przez Google, gdy backend zgłasza konfigurację', async ({ page }) => {
-    await page.route('**/api/auth/google/enabled', route => route.fulfill({ json: { enabled: true } }));
-    await page.goto('/');
-    await expect(page.locator('button:has-text("Zaloguj się przez Google")')).toBeVisible();
+    await expect(page.locator('button:has-text("Google")')).toHaveCount(0);
+    await expect(page.locator('.alert-error')).toHaveCount(0);
+    expect(googleRequests).toEqual([]);
   });
 });

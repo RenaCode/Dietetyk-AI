@@ -135,8 +135,9 @@ that does not undo anything: if the production Secret ever carried the committed
 - `OAUTH_STATE_SECRET` fell back to `APP_PASSWORD`, so the HMAC on the OAuth `state` parameter
   was forgeable. A forged `<victimId>:google_link:<salt>:<hmac>` plus consent on the attacker's
   own Google account made `routes/auth.js` write the attacker's `google_id` onto the victim's
-  user row — after which the ordinary "Sign in with Google" button hands out a session for the
-  victim's account.
+  user row — after which the ordinary "Sign in with Google" button handed out a session for the
+  victim's account. Google sign-in is gone (2026-10-11), but a forged state for the
+  Oura/Withings/Google Fit flows still stores one user's tokens on another user's account.
 
 ## Order of operations for `APP_PASSWORD`
 
@@ -206,7 +207,7 @@ the deploy from crash-looping.
    kubectl rollout status deploy/dietetyk-backend -n default
    ```
 
-5. Verify one OAuth link end to end (Settings → connect Oura, or "Sign in with Google").
+5. Verify one OAuth link end to end (Settings → connect Oura or Withings).
 
 6. Remove the plaintext copies from the machine you worked on:
 
@@ -482,7 +483,7 @@ at runtime, and no wiping of user data.
 - **One-off invalidation** (clear the encrypted columns and let everyone re-enter their keys) is
   worse than re-encryption on every axis: it disconnects every user's Oura/Withings/Google Fit,
   forces each of them to fetch their API keys again, and requires the admin to re-enter the
-  Mailgun and Google OAuth secrets — all for no security gain, since re-encryption produces the
+  Mailgun and Google OAuth (Google Fit) secrets — all for no security gain, since re-encryption produces the
   same end state under the new key. Use it **only** if the old `APP_PASSWORD` has genuinely been
   lost, in which case there is no alternative.
 

@@ -8,16 +8,13 @@ const QRCode = require('qrcode');
 const crypto = require('crypto');
 const loginAttempts = require('../services/loginAttempts');
 const logger = require('../services/logger');
-const { getAppConfig, isGoogleConfigured, generateOAuthState, verifyOAuthState, readCookie, isSecureRequest, startBrowserBoundOAuthState, verifyBrowserBoundOAuthState } = require('../services/oauthHelpers');
-const { consumeTicket, issueTicket, GOOGLE_REAUTH_GRANT_SERVICE, GOOGLE_REAUTH_GRANT_TTL_MS } = require('../services/authTickets');
 const { isValidUsername, USERNAME_RULE_MESSAGE } = require('../utils/username');
 const { cleanUpAfterCredentialReset } = require('../services/accountCleanup');
-const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 
 // Helper for creating a session (temporary or permanent) - extracted because the same
 // pattern (generate a token, compute expires_at, insert a sessions row) was repeated
 // separately in a dozen places in this file (force_password_change, require_2fa, setup_2fa,
-// login without 2FA, Google login, 2FA verification, registration and so on) with identical
+// login without 2FA, 2FA verification, registration and so on) with identical
 // logic apart from the validity period and the is_verified_2fa flag.
 // `ttlDays` also accepts fractional values (5-minute temporary sessions, see
 // TEMP_SESSION_TTL_DAYS below) - it is computed in milliseconds anyway.
@@ -66,103 +63,6 @@ const loginAttemptKeyForUser = (userId) => `login_user:${userId}`;
 // from random bytes, so no input can ever match it.
 const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(16).toString('hex'), 10);
 
-// ===== Binding the Google sign-in flow to the browser that started it =====
-// The `state` of the sign-in flow has to be tied to ONE browser, otherwise the flow is
-// login-CSRF-able: the attacker starts it themselves, approves Google consent on their OWN
-// Google account, and then hands the victim the callback URL carrying the attacker's `code`
-// and a state the backend accepts. The victim's browser is handed a session for the
-// attacker's account and the victim goes on logging meals, weight and Oura/Withings data
-// into an account the attacker can read at will.
-//
-// The previous binding was `sha256(req.ip + User-Agent)` and it bound nothing. req.ip is
-// 10.42.0.1 for every request from the internet (measured on production - see the long note
-// above `app.set('trust proxy', ...)` in app.js), and the User-Agent is a header the
-// attacker chooses when GENERATING the state, so reproducing the victim's fingerprint means
-// sending one common header value. No change inside this file could have fixed it: the
-// address never enters the cluster.
-//
-// A short-lived HttpOnly cookie is the one thing here the attacker cannot reproduce in the
-// victim's browser: it is set on the response to GET /api/auth/google and only the browser
-// that made THAT request ever stores it. SameSite=Lax still sends it on the top-level GET
-// navigation Google performs back to the callback (Lax excludes cross-site POSTs and
-// subresources, not top-level GETs), which is exactly the one case we need it in.
-const GOOGLE_LOGIN_NONCE_COOKIE = 'dai_google_login';
-// Scoped to the sign-in routes rather than '/', so the cookie is not attached to every
-// request to the application for the ten minutes it lives.
-const GOOGLE_LOGIN_COOKIE_PATH = '/api/auth/google';
-const GOOGLE_LOGIN_NONCE_TTL_MS = 10 * 60 * 1000;
-
-// Only the HASH of the nonce travels in `state`; the nonce itself never leaves the cookie.
-// The state is visible to Google, to the address bar and to anything that logs the callback
-// URL, so a state that carried the raw nonce would hand back the very secret that proves
-// "this browser started the flow".
-function googleLoginService(nonce) {
-  return `google_login:${crypto.createHash('sha256').update(nonce).digest('hex')}`;
-}
-
-// ===== Handing the result of Google sign-in to the browser =====
-// The callback used to put a live session token straight into the URL fragment
-// (`/#google_token=sess_...`) and the frontend stored whatever token such a URL carried. That
-// made the nonce cookie above protect only half of the flow: the backend made sure the
-// browser finishing the Google round-trip was the one that started it, and then the frontend
-// accepted the same token from ANY link. An attacker could log in to their own account, copy
-// the redirect URL and send it to a victim; one click and the victim was silently working in
-// the attacker's account - meals, weight, and after copying the sync URL from Settings even
-// their Apple Health export, all landing where the attacker could read it.
-//
-// Now the callback issues only a one-time code with a 60-second life, and binds it to the
-// browser with a second HttpOnly cookie. The frontend trades code + cookie for the login
-// result at POST /api/auth/google/exchange. A code pasted into another browser arrives
-// without the cookie and is refused. As a side effect no session token is ever part of a
-// URL, and the exchange can answer with the same shapes as /api/login (require_2fa,
-// setup_2fa with its QR code, force_password_change), which a fragment could not carry.
-//
-// In process memory: the backend runs as a single replica (Recreate strategy, SQLite on an
-// RWO volume), and losing an unexchanged code on restart costs one more click.
-const GOOGLE_EXCHANGE_COOKIE = 'dai_google_exchange';
-const GOOGLE_EXCHANGE_COOKIE_PATH = '/api/auth/google/exchange';
-const GOOGLE_EXCHANGE_TTL_MS = 60 * 1000;
-const pendingGoogleExchanges = new Map(); // code -> { userId, nonceHash, expiresAt }
-
-function issueGoogleExchange(req, res, userId) {
-  const now = Date.now();
-  for (const [code, entry] of pendingGoogleExchanges) {
-    if (entry.expiresAt <= now) pendingGoogleExchanges.delete(code);
-  }
-  const code = 'gx_' + crypto.randomBytes(24).toString('hex');
-  const nonce = crypto.randomBytes(32).toString('hex');
-  pendingGoogleExchanges.set(code, {
-    userId,
-    nonceHash: crypto.createHash('sha256').update(nonce).digest('hex'),
-    expiresAt: now + GOOGLE_EXCHANGE_TTL_MS
-  });
-  // SameSite=Strict is enough here: the cookie is only ever SENT by the frontend's own
-  // same-origin fetch to the exchange endpoint. Setting it on the response to Google's
-  // cross-site redirect is allowed regardless of SameSite.
-  res.cookie(GOOGLE_EXCHANGE_COOKIE, nonce, {
-    httpOnly: true,
-    sameSite: 'strict',
-    secure: isSecureRequest(req),
-    maxAge: GOOGLE_EXCHANGE_TTL_MS,
-    path: GOOGLE_EXCHANGE_COOKIE_PATH
-  });
-  return code;
-}
-
-// One-time: the entry is deleted on the first lookup, matching or not, so a code cannot be
-// probed with several cookies.
-function consumeGoogleExchange(code, nonce) {
-  if (typeof code !== 'string') return null;
-  const entry = pendingGoogleExchanges.get(code);
-  if (!entry) return null;
-  pendingGoogleExchanges.delete(code);
-  if (entry.expiresAt <= Date.now() || !nonce) return null;
-  const expected = Buffer.from(entry.nonceHash, 'utf8');
-  const actual = Buffer.from(crypto.createHash('sha256').update(nonce).digest('hex'), 'utf8');
-  if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) return null;
-  return entry.userId;
-}
-
 const validatePassword = (password) => {
   if (!password || password.length < 8) {
     return 'Hasło musi mieć co najmniej 8 znaków.';
@@ -203,15 +103,16 @@ async function createSession(userId, isVerified2fa, ttlDays = PERMANENT_SESSION_
   return token;
 }
 
-// Everything that happens once a user has proved WHO they are (password, or Google), up to
-// the response the frontend acts on: an owed password change, the second factor, a forced
-// 2FA enrolment, or a full session. Returns the JSON body.
+// Everything that happens once a user has proved WHO they are, up to the response the
+// frontend acts on: an owed password change, the second factor, a forced 2FA enrolment, or a
+// full session. Returns the JSON body.
 //
-// Extracted from /api/login because Google sign-in had its own, shorter copy that checked
-// only totp_enabled: global force_2fa, per-user force_2fa and force_password_change were
-// all skipped, so a user an administrator had forced into 2FA - or into a password change
-// after a suspected compromise - got a full session simply by clicking "Sign in with
-// Google". One function means one policy for every way in.
+// Extracted from /api/login because the (since removed) Google sign-in had its own, shorter
+// copy that checked only totp_enabled: global force_2fa, per-user force_2fa and
+// force_password_change were all skipped, so a user an administrator had forced into 2FA - or
+// into a password change after a suspected compromise - got a full session simply by clicking
+// "Sign in with Google". Any future way in must go through this function too: one function
+// means one policy for every way in.
 async function completeLogin(user) {
   // The second factor comes BEFORE an owed password change (audit 2026-10-09, B-W1). The
   // order used to be the reverse: an account with 2FA and force_password_change got a
@@ -267,330 +168,6 @@ async function completeLogin(user) {
   const permanentToken = await createSession(user.id, false);
   return { token: permanentToken };
 }
-
-// ===== Google sign-in =====
-// configured globally by an administrator (Admin Panel), because sign-in applies to the
-// whole application rather than being a per-user integration like Oura or Withings.
-// Public (see middleware/auth.js): the login screen asks this before showing "Sign in with
-// Google", so an instance without a configured Google client does not offer a button that
-// ends on a bare 400 page. Returns only a boolean - never the Client ID itself.
-router.get('/api/auth/google/enabled', async (req, res) => {
-  try {
-    res.json({ enabled: await isGoogleConfigured() });
-  } catch (err) {
-    console.error('[GOOGLE LOGIN] Failed to read the Google configuration:', err);
-    res.json({ enabled: false });
-  }
-});
-
-router.get('/api/auth/google', async (req, res) => {
-  try {
-    const clientId = await getAppConfig('google_client_id');
-    if (!clientId) {
-      return res.status(400).send('Logowanie przez Google nie jest skonfigurowane. Administrator musi wpisać Client ID/Secret w Panelu Admina.');
-    }
-
-    const appUrl = await getAppConfig('app_url');
-    const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
-    const redirectUri = `${base}/api/auth/google/callback`;
-
-    // See the comment on GOOGLE_LOGIN_NONCE_COOKIE: the cookie is what ties this flow to
-    // this browser. The state only carries its hash.
-    const loginNonce = crypto.randomBytes(32).toString('hex');
-    const state = generateOAuthState(0, googleLoginService(loginNonce));
-
-    res.cookie(GOOGLE_LOGIN_NONCE_COOKIE, loginNonce, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: req.secure || req.headers['x-forwarded-proto'] === 'https',
-      maxAge: GOOGLE_LOGIN_NONCE_TTL_MS,
-      path: GOOGLE_LOGIN_COOKIE_PATH
-    });
-
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('openid email profile')}&state=${state}&prompt=select_account`;
-    res.redirect(authUrl);
-  } catch (err) {
-    console.error('[GOOGLE LOGIN ERROR]', err);
-    res.status(500).send('Błąd serwera.');
-  }
-});
-
-// Step 1b: as above, but for a user who is ALREADY LOGGED IN and explicitly wants to link
-// their existing account to Google (Settings -> 'Connect with Google') rather than sign in
-// afresh. Google sign-in above already links accounts by email as a side effect, but only
-// when the email matches - this flow works regardless of the email address, because the user
-// is already verified by their session.
-//
-// Entered with a one-time `?ticket=` from POST /api/auth/ticket, never with the session token
-// itself: this is a top-level navigation, so whatever is in the query string lands in the
-// nginx access log and in browser history, and a session token there was a 7-30 day key to
-// the account for anyone who could read logs. The ticket for 'google_link' is only issued
-// after the password (and TOTP, if enabled) has been re-entered - linking a sign-in method is
-// a way back INTO the account, so a stolen session alone must not be able to plant one that
-// outlives a password change (see routes/account.js, change-password).
-//
-// The state is bound to this browser by startBrowserBoundOAuthState (services/oauthHelpers.js)
-// - without that, the attacker could hand their own link URL to a victim and pin the
-// victim's Google identity to the attacker's account.
-router.get('/api/auth/google/link', async (req, res) => {
-  const userId = consumeTicket(req.query.ticket, 'google_link');
-  if (!userId) return res.status(401).send('Link wygasł. Wróć do Ustawień i spróbuj ponownie.');
-
-  try {
-    const clientId = await getAppConfig('google_client_id');
-    if (!clientId) {
-      return res.status(400).send('Logowanie przez Google nie jest skonfigurowane. Administrator musi wpisać Client ID/Secret w Panelu Admina.');
-    }
-
-    const appUrl = await getAppConfig('app_url');
-    const base = appUrl ? appUrl.replace(/\/$/, '') : `${isSecureRequest(req) ? 'https' : 'http'}://${req.get('host')}`;
-    const redirectUri = `${base}/api/auth/google/callback`;
-
-    const state = startBrowserBoundOAuthState(req, res, userId, 'google_link');
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('openid email profile')}&state=${state}&prompt=select_account`;
-    res.redirect(authUrl);
-  } catch (err) {
-    console.error('[GOOGLE LINK ERROR]', err);
-    res.status(500).send('Błąd serwera.');
-  }
-});
-
-// Step 1c: re-authenticating with Google for an account that is ALREADY linked to it, so
-// that an account created through "Sign in with Google" can prove it is its owner without a
-// password (audit 2026-10-09, B-S4). Such an account gets a random password_hash nobody
-// knows (see the callback below), and changing the password, switching 2FA off and deleting
-// the account all require the current password - so the owner of a Google-created account
-// could do none of them, deletion (GDPR art. 17) included. Returning from Google with the
-// same identity yields a short-lived grant (fragment `#google_reauth=`) that
-// POST /api/user/set-password accepts instead of the current password; with a password set,
-// everything else works as for any account.
-//
-// Entered with a one-time ticket like the link flow above, and bound to this browser the
-// same way. The ticket needs only the session: the Google round-trip IS the proof, and a
-// stolen session cannot complete it without the owner's Google account.
-router.get('/api/auth/google/reauth', async (req, res) => {
-  const userId = consumeTicket(req.query.ticket, 'google_reauth');
-  if (!userId) return res.status(401).send('Link wygasł. Wróć do Ustawień i spróbuj ponownie.');
-
-  try {
-    const clientId = await getAppConfig('google_client_id');
-    if (!clientId) {
-      return res.status(400).send('Logowanie przez Google nie jest skonfigurowane. Administrator musi wpisać Client ID/Secret w Panelu Admina.');
-    }
-    const appUrl = await getAppConfig('app_url');
-    const base = appUrl ? appUrl.replace(/\/$/, '') : `${isSecureRequest(req) ? 'https' : 'http'}://${req.get('host')}`;
-    const redirectUri = `${base}/api/auth/google/callback`;
-
-    const state = startBrowserBoundOAuthState(req, res, userId, 'google_reauth');
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id=${encodeURIComponent(clientId)}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent('openid email profile')}&state=${state}&prompt=select_account`;
-    res.redirect(authUrl);
-  } catch (err) {
-    console.error('[GOOGLE REAUTH ERROR]', err);
-    res.status(500).send('Błąd serwera.');
-  }
-});
-
-// Krok 2: callback - wymiana kodu na token, pobranie profilu, znalezienie/utworzenie konta
-// (or, when `state` indicates the account-linking flow above, simply assigning google_id to
-// the already logged-in user).
-router.get('/api/auth/google/callback', async (req, res) => {
-  const { code, error, state } = req.query;
-  const verified = verifyOAuthState(state);
-
-  // The sign-in flow is accepted only when the browser presents the nonce cookie whose hash
-  // is inside the signed state. An attacker can mint a state (the route is public) but cannot
-  // put their cookie into the victim's browser, so the victim's callback request simply does
-  // not match and ends as csrf_failed - before any code is exchanged for a session.
-  const loginNonce = readCookie(req, GOOGLE_LOGIN_NONCE_COOKIE);
-  const isLoginFlow = !!(verified && verified.userId === 0 && loginNonce && verified.service === googleLoginService(loginNonce));
-  // The link flow carries its own browser binding (see GET /api/auth/google/link); the helper
-  // also clears that cookie, so it runs for every callback, not only for link states.
-  const linkVerified = verifyBrowserBoundOAuthState(req, res, state);
-  const isLinkFlow = !!(linkVerified && linkVerified.userId > 0 && linkVerified.service === 'google_link');
-  // Re-authentication of an already linked account (GET /api/auth/google/reauth below). It
-  // goes back to Settings like linking does, so the error redirects treat both alike.
-  const isReauthFlow = !!(linkVerified && linkVerified.userId > 0 && linkVerified.service === 'google_reauth');
-  const settingsErrorParam = isReauthFlow ? 'google_reauth_error' : 'google_link_error';
-
-  // One cookie, one flow: whatever happens below, this nonce must not stay usable for a
-  // second callback. Cleared for every state that claims to be a sign-in - including a
-  // rejected one - so a failed attempt cannot leave a live binding behind.
-  if (loginNonce) {
-    res.clearCookie(GOOGLE_LOGIN_NONCE_COOKIE, { path: GOOGLE_LOGIN_COOKIE_PATH });
-  }
-
-  if (error) {
-    console.error('[GOOGLE LOGIN CALLBACK ERROR]', error);
-    return res.redirect(isLinkFlow || isReauthFlow ? `/?tab=setup&${settingsErrorParam}=auth_failed` : '/?google_error=auth_failed');
-  }
-  if (!code || !verified || (!isLoginFlow && !isLinkFlow && !isReauthFlow)) {
-    // A signed google_link state without the matching cookie is still answered on the
-    // settings screen, where the user started it.
-    const claimsLink = !!(verified && verified.userId > 0 && verified.service === 'google_link');
-    const claimsReauth = !!(verified && verified.userId > 0 && verified.service === 'google_reauth');
-    if (claimsReauth) return res.redirect('/?tab=setup&google_reauth_error=csrf_failed');
-    return res.redirect(claimsLink ? '/?tab=setup&google_link_error=csrf_failed' : '/?google_error=csrf_failed');
-  }
-
-  try {
-    const clientId = await getAppConfig('google_client_id');
-    const clientSecret = await getAppConfig('google_client_secret');
-    const appUrl = await getAppConfig('app_url');
-    const base = appUrl ? appUrl.replace(/\/$/, '') : `${req.secure || req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.get('host')}`;
-    const redirectUri = `${base}/api/auth/google/callback`;
-
-    const tokenRes = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri,
-        grant_type: 'authorization_code'
-      })
-    });
-
-    if (!tokenRes.ok) {
-      const errText = await tokenRes.text();
-      throw new Error(`Wymiana kodu Google nieudana: ${errText}`);
-    }
-    const tokenData = await tokenRes.json();
-
-    const userInfoRes = await fetchWithTimeout('https://www.googleapis.com/oauth2/v3/userinfo', {
-      headers: { 'Authorization': `Bearer ${tokenData.access_token}` }
-    });
-    if (!userInfoRes.ok) {
-      throw new Error('Nie udało się pobrać profilu użytkownika Google.');
-    }
-    const profile = await userInfoRes.json(); // { sub, email, name, picture, email_verified, ... }
-
-    if (!profile.sub) {
-      throw new Error('Odpowiedź Google nie zawiera identyfikatora użytkownika (sub).');
-    }
-
-      // Account-linking flow (Settings -> 'Connect with Google'): the user is already logged
-      // in, verified by the signed `state`, so we only assign google_id to THEIR account - no
-      // sign-in, no new account, no new session. We block account takeover if the same
-      // google_id is already assigned to a different user.
-    if (isReauthFlow) {
-      // Proof of the Google identity ALREADY linked to this account - a different Google
-      // account proves nothing about this one. The grant is what POST /api/user/set-password
-      // (routes/account.js) accepts in place of the current password.
-      const owner = await db.get(`SELECT google_id FROM users WHERE id = ?`, [linkVerified.userId]);
-      if (!owner || !owner.google_id || owner.google_id !== profile.sub) {
-        logger.security('Google re-authentication refused: a different Google account', 'AUTH_GOOGLE_REAUTH', { userId: linkVerified.userId }, req.ip, linkVerified.userId);
-        return res.redirect('/?tab=setup&google_reauth_error=mismatch');
-      }
-      const grant = issueTicket(linkVerified.userId, GOOGLE_REAUTH_GRANT_SERVICE, GOOGLE_REAUTH_GRANT_TTL_MS);
-      return res.redirect(`/?tab=setup#google_reauth=${grant}`);
-    }
-
-    if (isLinkFlow) {
-      const conflictingUser = await db.get(`SELECT id FROM users WHERE google_id = ? AND id != ?`, [profile.sub, verified.userId]);
-      if (conflictingUser) {
-        return res.redirect('/?tab=setup&google_link_error=already_linked');
-      }
-      await db.run(`UPDATE users SET google_id = ? WHERE id = ?`, [profile.sub, verified.userId]);
-      return res.redirect('/?tab=setup&google_link=success');
-    }
-
-      // 1. Look for a user already linked to this Google account
-    let user = await db.get(`SELECT * FROM users WHERE google_id = ?`, [profile.sub]);
-
-    if (!user && profile.email) {
-      // 2. If none was found but the email matches an existing account (password login),
-      // we do NOT link automatically, for security reasons - that would allow account takeover
-      // via a forged email address. We direct the user to sign in with their password and link
-      const existingByEmail = await db.get(`SELECT * FROM users WHERE email = ?`, [profile.email]);
-      if (existingByEmail) {
-        return res.redirect('/?google_error=email_exists');
-      }
-    }
-
-    if (!user) {
-      // 3a. Creating an account here is a registration, and registration is closed unless an
-      // administrator opened it. Only /api/register-public used to check the flag, so with
-      // a Google Client ID configured ANY Google account could create an account in a closed
-      // application - and every such account could send "test summary" emails through the
-      // app's Mailgun domain to arbitrary addresses (rate-limited per account, accounts not
-      // limited at all).
-      const allowPublicRegRow = await db.get(`SELECT value FROM app_config WHERE key = 'allow_public_registration'`);
-      if (!allowPublicRegRow || allowPublicRegRow.value !== '1') {
-        logger.security('Google sign-in refused: no account and public registration is closed', 'AUTH_REGISTRATION_CLOSED', { email: profile.email || null }, req.ip);
-        return res.redirect('/?google_error=registration_closed');
-      }
-
-        // 3. No account - create one. A Google account has no known password, so we generate
-        // a random, unused hash (the schema requires NOT NULL) to make password login for
-        // this account genuinely impossible until the user sets a password themselves in
-        // Settings.
-      const randomPassword = crypto.randomBytes(24).toString('hex');
-      const passwordHash = await bcrypt.hash(randomPassword, 10);
-      const syncToken = 'sync_' + crypto.randomBytes(24).toString('hex');
-
-      let baseUsername = (profile.email ? profile.email.split('@')[0] : profile.name || 'user').replace(/[^a-zA-Z0-9_.-]/g, '') || 'user';
-      let username = baseUsername;
-      let suffix = 0;
-      while (await db.get(`SELECT id FROM users WHERE username = ?`, [username])) {
-        suffix += 1;
-        username = `${baseUsername}${suffix}`;
-      }
-
-      const result = await db.run(`
-        INSERT INTO users (username, password_hash, sync_token, totp_enabled, email, role, status, google_id, password_set)
-        VALUES (?, ?, ?, 0, ?, 'user', 'active', ?, 0)
-      `, [username, passwordHash, syncToken, profile.email || null, profile.sub]);
-
-      // No targets are seeded (audit 2026-10-09, S2). Every account used to get the same
-      // 2500 kcal / 150/250/80 g / BMR 1800, indistinguishable from values the user chose, and
-      // e-mails, the PDF and the chat quoted them as "your goal". An account created from an
-      // invitation never had them; the dashboard and Settings show "not set" until the user
-      // enters their own.
-
-      user = await db.get(`SELECT * FROM users WHERE id = ?`, [result.id]);
-    }
-
-    if (user.status !== 'active') {
-      return res.redirect('/?google_error=account_inactive');
-    }
-
-    // No session is created here - see issueGoogleExchange. The 2FA / forced-enrolment /
-    // forced-password-change decisions happen at the exchange, in completeLogin, exactly as
-    // for a password login. The code goes in the fragment (#), which the browser never sends
-    // to a server, so it does not reach access logs or a Referer header either.
-    const exchangeCode = issueGoogleExchange(req, res, user.id);
-    res.redirect(`/#google_code=${exchangeCode}`);
-  } catch (err) {
-    console.error('[GOOGLE LOGIN CALLBACK ERROR]', err.message);
-    res.redirect(isLinkFlow || isReauthFlow ? `/?tab=setup&${settingsErrorParam}=exchange_failed` : '/?google_error=exchange_failed');
-  }
-});
-
-// Step 3: the frontend trades the one-time code from the callback for the login result.
-// Requires the HttpOnly cookie set next to the code - see issueGoogleExchange.
-router.post('/api/auth/google/exchange', async (req, res) => {
-  const nonce = readCookie(req, GOOGLE_EXCHANGE_COOKIE);
-  if (nonce) {
-    res.clearCookie(GOOGLE_EXCHANGE_COOKIE, { path: GOOGLE_EXCHANGE_COOKIE_PATH });
-  }
-  const userId = consumeGoogleExchange(req.body && req.body.code, nonce);
-  if (!userId) {
-    logger.security('Google sign-in exchange refused (unknown/expired code or missing browser binding)', 'AUTH_GOOGLE_EXCHANGE', {}, req.ip);
-    return res.status(401).json({ error: 'Logowanie przez Google wygasło lub zostało rozpoczęte w innej przeglądarce. Spróbuj ponownie.' });
-  }
-
-  try {
-    const user = await db.get(`SELECT * FROM users WHERE id = ?`, [userId]);
-    if (!user || user.status !== 'active') {
-      return res.status(403).json({ error: 'To konto jest nieaktywne. Skontaktuj się z administratorem.' });
-    }
-    res.json(await completeLogin(user));
-  } catch (err) {
-    console.error('[GOOGLE EXCHANGE ERROR]', err);
-    res.status(500).json({ error: 'Błąd logowania serwera.' });
-  }
-});
 
 router.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
@@ -857,17 +434,15 @@ router.post('/api/change-password-forced', async (req, res) => {
     //
     // And the same cleanup as a voluntary change (audit round 2, N-W2): this path used to stop
     // at sessions and share links, so after the reset the summaries still went to the address
-    // the attacker had set, a Google identity they had linked still logged them in, and the
-    // Apple Health webhook still took their data. The tempToken never changed anything, so an
+    // the attacker had set and the Apple Health webhook still took their data. The tempToken never changed anything, so an
     // e-mail change made from ANY real session of this account is undone.
-    const { revokedSessions, revokedShares, emailRevert, unlinkedGoogle } = await cleanUpAfterCredentialReset(session.user_id, {
-      keepSessionToken: tempToken,
-      unlinkGoogle: true
+    const { revokedSessions, revokedShares, emailRevert } = await cleanUpAfterCredentialReset(session.user_id, {
+      keepSessionToken: tempToken
     });
     logger.security(
-      `Forced password change: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s), rotated sync token${unlinkedGoogle ? ', unlinked Google' : ''}${emailRevert ? ', reverted e-mail change' : ''} (UID: ${session.user_id})`,
+      `Forced password change: revoked ${revokedSessions} session(s) and ${revokedShares} share link(s), rotated sync token${emailRevert ? ', reverted e-mail change' : ''} (UID: ${session.user_id})`,
       'AUTH_PASSWORD_CHANGE',
-      { userId: session.user_id, revokedSessions, revokedShares, unlinkedGoogle, emailReverted: !!emailRevert },
+      { userId: session.user_id, revokedSessions, revokedShares, emailReverted: !!emailRevert },
       req.ip,
       session.user_id
     );

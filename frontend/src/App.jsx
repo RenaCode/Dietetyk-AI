@@ -8,7 +8,7 @@ import Trends from './components/Trends';
 import SummaryUnavailable from './components/SummaryUnavailable';
 import { t, setLanguage, getLanguage } from './utils/i18n';
 import { getWarsawDateString } from './utils/dates';
-import { parseGoogleReturn, resolveTabParam } from './utils/googleReturn';
+import { resolveTabParam } from './utils/tabParam';
 import { newMealSubmission, retryMealSubmission } from './utils/mealSubmission';
 import TotpSecretKey from './components/TotpSecretKey';
 import { NavIcon, LogoMark } from './components/NavIcons';
@@ -57,10 +57,6 @@ export default function App() {
 
   // Public registration states
   const [isPublicRegister, setIsPublicRegister] = useState(false);
-  // Whether to offer "Sign in with Google" - false until the backend confirms a Google client
-  // is configured (GET /api/auth/google/enabled), so an unconfigured instance never shows a
-  // button that ends on a bare 400 page.
-  const [googleLoginEnabled, setGoogleLoginEnabled] = useState(false);
   const [registerUsernameInput, setRegisterUsernameInput] = useState('');
   const [registerPasswordInput, setRegisterPasswordInput] = useState('');
   const [registerConfirmPasswordInput, setRegisterConfirmPasswordInput] = useState('');
@@ -185,18 +181,6 @@ export default function App() {
   // nothing to retry. State, not a ref, because MealLogger shows the button from it.
   const [retryableMeal, setRetryableMeal] = useState(null);
 
-// The login screen's Google button - asked only while signed out, which is the only time the
-// button is rendered.
-  useEffect(() => {
-    if (sessionToken) return;
-    let cancelled = false;
-    fetch('/api/auth/google/enabled')
-      .then(res => (res.ok ? res.json() : { enabled: false }))
-      .then(data => { if (!cancelled) setGoogleLoginEnabled(data.enabled === true); })
-      .catch(() => { if (!cancelled) setGoogleLoginEnabled(false); });
-    return () => { cancelled = true; };
-  }, [sessionToken]);
-
 // Fetch the data on load and whenever the date or the session changes
   useEffect(() => {
 // Race-condition guard: if the user changes the date quickly, the response to the previous
@@ -236,97 +220,17 @@ export default function App() {
     return () => clearInterval(intervalId);
   }, [sessionToken, selectedDate]);
 
-// Returning from Google sign-in. This works independently of sessionToken, because for a new
-// or signed-out user this is what establishes the session.
-//
-// The callback no longer puts a session token in the URL - see utils/googleReturn.js for the
-// login-CSRF hole that closed. It leaves a one-time code in the FRAGMENT (never sent to a
-// server, so not in any access log or Referer), and the code is only worth something together
-// with the HttpOnly cookie the callback set in this browser; the exchange answers exactly like
-// /api/login (2FA, forced enrolment, forced password change or a session). google_error is not
-// a secret, so it still arrives through an ordinary query string.
-  useEffect(() => {
-    const googleReturn = parseGoogleReturn(window.location.hash, window.location.search);
-    if (!googleReturn) return;
-    window.history.replaceState({}, document.title, '/');
-
-    if (googleReturn.code) {
-      (async () => {
-        try {
-          const res = await fetch('/api/auth/google/exchange', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ code: googleReturn.code })
-          });
-          const data = await res.json().catch(() => ({}));
-          if (res.ok) {
-            applyLoginResult(data);
-          } else {
-            setLoginError(data.error || t('Nie udało się zalogować przez Google.'));
-          }
-        } catch (err) {
-          console.error(err);
-          setLoginError(t('Błąd połączenia z serwerem.'));
-        }
-      })();
-      return;
-    }
-
-    let msg = t('Nie udało się zalogować przez Google.');
-    if (googleReturn.error === 'account_inactive') {
-      msg = t('To konto jest nieaktywne. Skontaktuj się z administratorem.');
-    } else if (googleReturn.error === 'email_exists') {
-      msg = t('Konto z tym adresem e-mail już istnieje. Zaloguj się hasłem i połącz konto Google w Ustawieniach.');
-    } else if (googleReturn.error === 'csrf_failed') {
-      msg = t('Błąd weryfikacji żądania (CSRF). Spróbuj ponownie.');
-    } else if (googleReturn.error === 'registration_closed') {
-      msg = t('Rejestracja jest zamknięta. Aby założyć konto, poproś administratora o zaproszenie.');
-    }
-    setLoginError(msg);
-  }, []);
-
   useEffect(() => {
     if (sessionToken) {
       const params = new URLSearchParams(window.location.search);
       const tabParam = params.get('tab');
       const successParam = params.get('success');
       const errorParam = params.get('error');
-      const googleLinkParam = params.get('google_link');
-      const googleLinkErrorParam = params.get('google_link_error');
-      const googleReauthErrorParam = params.get('google_reauth_error');
 
       // Through resolveTabParam: an unknown name used to become an empty page (N-S2).
       const tabToOpen = resolveTabParam(tabParam);
       if (tabToOpen) {
         setCurrentTab(tabToOpen);
-      }
-
-// Return from the flow that links an account with Google (Settings -> "Connect with Google").
-// These are separate parameters from `success`/`error` above, because this is not an
-// integration with a data source (Oura/Withings) but a link to a sign-in method.
-      if (googleLinkParam === 'success') {
-        setSuccessMessage(t('Pomyślnie połączono konto z Google!'));
-        setTimeout(() => setSuccessMessage(''), 6000);
-        window.history.replaceState({}, document.title, '/?tab=setup');
-        fetchUserProfile();
-      } else if (googleReauthErrorParam) {
-        // Return from the Google re-authentication that lets a Google-created account set a
-        // password (Settings -> "Ustaw hasło przez Google"). Success arrives as a fragment
-        // that Settings itself picks up; only failures come through here.
-        setErrorMessage(googleReauthErrorParam === 'mismatch'
-          ? t('Zalogowano innym kontem Google niż to połączone z tym kontem.')
-          : t('Nie udało się potwierdzić tożsamości przez Google.'));
-        setTimeout(() => setErrorMessage(''), 6000);
-        window.history.replaceState({}, document.title, '/?tab=setup');
-      } else if (googleLinkErrorParam) {
-        let msg = t('Nie udało się połączyć konta z Google.');
-        if (googleLinkErrorParam === 'already_linked') {
-          msg = t('To konto Google jest już połączone z innym użytkownikiem.');
-        }
-        setErrorMessage(msg);
-        setTimeout(() => setErrorMessage(''), 6000);
-        window.history.replaceState({}, document.title, '/?tab=setup');
       }
 
       if (successParam === 'oura') {
@@ -740,9 +644,8 @@ export default function App() {
     }
   };
 
-  // The next step after a successful identity check - shared by the password login and the
-  // Google exchange, which answer with the same shapes (see completeLogin in
-  // backend/routes/auth.js).
+  // The next step after a successful password check - the shapes completeLogin in
+  // backend/routes/auth.js answers with.
   const applyLoginResult = (data) => {
     if (data.status === 'require_2fa') {
       setTempToken(data.tempToken);
@@ -1167,30 +1070,6 @@ export default function App() {
                   <button type="submit" className="btn-primary" style={{ width: '100%', padding: '12px' }}>
                     Dalej
                   </button>
-
-                  {googleLoginEnabled && (
-                    <>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '4px 0' }}>
-                        <div style={{ flex: 1, height: '1px', background: 'var(--border-glass)' }} />
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>lub</span>
-                        <div style={{ flex: 1, height: '1px', background: 'var(--border-glass)' }} />
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => { window.location.href = '/api/auth/google'; }}
-                        style={{ width: '100%', padding: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', background: '#fff', color: '#1f1f1f', border: '1px solid var(--border-glass)', borderRadius: '8px', fontWeight: 500, fontSize: '0.9rem', cursor: 'pointer' }}
-                      >
-                        <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
-                          <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844a4.14 4.14 0 0 1-1.796 2.716v2.259h2.908c1.702-1.567 2.684-3.875 2.684-6.615z"/>
-                          <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/>
-                          <path fill="#FBBC05" d="M3.964 10.706A5.41 5.41 0 0 1 3.682 9c0-.592.102-1.17.282-1.706V4.962H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z"/>
-                          <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 7.294C4.672 5.167 6.656 3.58 9 3.58z"/>
-                        </svg>
-                        Zaloguj się przez Google
-                      </button>
-                    </>
-                  )}
 
                   <button
                     type="button"

@@ -225,15 +225,22 @@ const initDb = async () => {
   await addColumn("ALTER TABLE users ADD COLUMN email_changed_by_session TEXT");
 
   // Whether the user KNOWS their password (audit round 2, N-S4). An account created through
-  // "Sign in with Google" gets a random hash nobody knows (routes/auth.js), and the UI asked
-  // it for "your current password" anyway - every attempt failed and counted towards the
-  // lockout. 0 only for those accounts until they set one (set-password, change-password,
-  // forced change set it to 1). Existing rows default to 1: an older Google-created account
-  // cannot be told apart from one that linked Google later, and on production Google sign-in
-  // has been disabled, so treating it as "has a password" is the conservative default.
+  // "Sign in with Google" got a random hash nobody knows, and the UI asked it for "your
+  // current password" anyway - every attempt failed and counted towards the lockout. 0 only
+  // for those accounts until they set one (change-password and the forced change set it to
+  // 1). Existing rows default to 1: an older Google-created account cannot be told apart from
+  // one that linked Google later, and on production Google sign-in had been disabled, so
+  // treating it as "has a password" is the conservative default.
+  //
+  // Google sign-in was removed on 2026-10-11, so nothing creates a 0 any more. The column
+  // stays because a 0 that already exists still means the same thing; such an account gets a
+  // one-time password from an administrator (scripts/reset-password.js) - see
+  // respondIfNoPassword in routes/account.js.
   await addColumn("ALTER TABLE users ADD COLUMN password_set INTEGER NOT NULL DEFAULT 1");
 
-  // Migration: Google sign-in (a step towards eventually dropping password login)
+  // Migration: Google sign-in. The feature was removed on 2026-10-11 and nothing reads
+  // google_id any more; the column and its index stay, because dropping a column is the one
+  // migration here that cannot be undone, and an inert NULL-or-value costs nothing.
   await addColumn("ALTER TABLE users ADD COLUMN google_id TEXT");
   await createUniqueIndexWhenDataAllows({
     label: 'idx_users_google_id',
@@ -243,7 +250,7 @@ const initDb = async () => {
       FROM users WHERE google_id IS NOT NULL
       GROUP BY google_id HAVING COUNT(*) > 1
     `,
-    remedy: 'Until one Google account maps to one row, login by Google picks the first matching row.'
+    remedy: 'Google sign-in has been removed, so duplicates are harmless; the index exists only for continuity.'
   });
 
   // UNIQUE on users.email (audit 2026-09-23). The column was created as a plain `email

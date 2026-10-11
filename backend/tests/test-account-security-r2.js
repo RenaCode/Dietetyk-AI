@@ -5,17 +5,21 @@
 //       twice: previous_email held only the address being replaced, so owner -> evil1 -> evil2
 //       followed by the owner's "log out other devices" left evil1 in place.
 // N-W2  The admin-forced password change revoked sessions and share links but left the
-//       redirected e-mail, a Google identity linked by the attacker and the sync token.
+//       redirected e-mail and the sync token.
 // N-S1  send-*-summary mailed health summaries to ANY address in the request, no password.
-// N-S3  unlink-google needed nothing - for a Google-created account, a permanent lock-out.
 // N-S4  A Google-created account was asked for a password it never had, and every attempt
 //       counted towards the lockout.
+//
+// N-S3 (unlink-google needed no password) went with Google sign-in itself on 2026-10-11;
+// tests/test-google-removed.js checks that the route is gone. What remains of N-S4 is the
+// account with password_set = 0, which now recovers through scripts/reset-password.js.
 //
 // Run with: node tests/test-account-security-r2.js
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const tmpDbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dietetyk-account-security-r2-'));
 process.env.DATABASE_DIR = tmpDbDir;
@@ -79,9 +83,9 @@ async function createUser(overrides = {}) {
   const username = 'r2_' + Math.random().toString(36).substring(2, 9);
   const email = `${username}@owner.invalid`;
   const result = await db.run(`
-    INSERT INTO users (username, password_hash, sync_token, totp_enabled, role, status, email, google_id, password_set)
-    VALUES (?, ?, ?, 0, 'user', 'active', ?, ?, ?)
-  `, [username, await bcrypt.hash(PASSWORD, 10), 'sync_' + username + 'x'.repeat(16), email, overrides.google_id || null, overrides.password_set === 0 ? 0 : 1]);
+    INSERT INTO users (username, password_hash, sync_token, totp_enabled, role, status, email, password_set)
+    VALUES (?, ?, ?, 0, 'user', 'active', ?, ?)
+  `, [username, await bcrypt.hash(PASSWORD, 10), 'sync_' + username + 'x'.repeat(16), email, overrides.password_set === 0 ? 0 : 1]);
   return { id: result.id, username, email };
 }
 
@@ -106,7 +110,6 @@ async function testForcedChangeCleansUp(baseUrl) {
   const user = await createUser();
   const attacker = await login(baseUrl, user.username);
   await call(baseUrl, 'POST', '/api/user/profile', { email: 'evil@attacker.invalid', currentPassword: PASSWORD }, attacker);
-  await db.run(`UPDATE users SET google_id = 'g-attacker-sub' WHERE id = ?`, [user.id]);
   const syncBefore = (await db.get(`SELECT sync_token FROM users WHERE id = ?`, [user.id])).sync_token;
 
   // What POST /api/admin/users/:id/force-password-change does.
@@ -117,9 +120,8 @@ async function testForcedChangeCleansUp(baseUrl) {
   assert(step.body.status === 'force_password_change', 'the owner is asked for a new password');
   const change = await call(baseUrl, 'POST', '/api/change-password-forced', { tempToken: step.body.tempToken, newPassword: 'ownernew456' });
   assert(change.status === 200, `the forced change succeeds (got ${change.status})`);
-  const row = await db.get(`SELECT email, google_id, sync_token FROM users WHERE id = ?`, [user.id]);
+  const row = await db.get(`SELECT email, sync_token FROM users WHERE id = ?`, [user.id]);
   assert(row.email === user.email, `the redirected e-mail is undone (got ${row.email})`);
-  assert(row.google_id === null, 'the Google identity linked by the attacker is gone');
   assert(row.sync_token !== syncBefore, 'the Apple Health sync token is rotated');
 }
 
@@ -143,21 +145,10 @@ async function testSummaryOnlyToAccountAddress(baseUrl) {
   assert(withPw.status === 200 && summarySends[2].to === 'doctor@clinic.invalid', 'with the password another address is allowed');
 }
 
-async function testUnlinkGoogleNeedsPassword(baseUrl) {
-  console.log('\n--- TEST (N-S3): unlinking Google needs the password ---');
-  const user = await createUser({ google_id: 'g-owner' });
-  const token = await login(baseUrl, user.username);
-  const bare = await call(baseUrl, 'POST', '/api/user/unlink-google', {}, token);
-  assert(bare.status === 400, `a session alone cannot unlink (got ${bare.status})`);
-  assert((await db.get(`SELECT google_id FROM users WHERE id = ?`, [user.id])).google_id === 'g-owner', 'Google stays linked');
-  const ok = await call(baseUrl, 'POST', '/api/user/unlink-google', { password: PASSWORD }, token);
-  assert(ok.status === 200 && (await db.get(`SELECT google_id FROM users WHERE id = ?`, [user.id])).google_id === null, 'with the password it unlinks');
-}
-
-async function testGoogleOnlyAccountIsNotAskedForAPassword(baseUrl) {
-  console.log('\n--- TEST (N-S4): an account without a password is sent to "set one via Google" ---');
-  const user = await createUser({ google_id: 'g-only', password_set: 0 });
-  const token = 'sess_r2_googleonly_' + 'q'.repeat(30);
+async function testAccountWithoutPasswordIsNotAskedForOne(baseUrl) {
+  console.log('\n--- TEST (N-S4): an account without a password is not asked for one ---');
+  const user = await createUser({ password_set: 0 });
+  const token = 'sess_r2_nopassword_' + 'q'.repeat(30);
   await db.run(`
     INSERT INTO sessions (token, user_id, expires_at, absolute_expires_at, is_verified_2fa, is_temp)
     VALUES (?, ?, datetime('now', '+1 day'), datetime('now', '+1 day'), 0, 0)
@@ -168,15 +159,54 @@ async function testGoogleOnlyAccountIsNotAskedForAPassword(baseUrl) {
     ['enable 2FA', 'POST', '/api/user/setup-2fa', { password: 'guess1234' }],
     ['disable 2FA', 'POST', '/api/user/disable-2fa', { password: 'guess1234' }],
     ['change the e-mail', 'POST', '/api/user/profile', { email: 'new@owner.invalid', currentPassword: 'guess1234' }],
-    ['unlink Google', 'POST', '/api/user/unlink-google', { password: 'guess1234' }],
     ['delete the account', 'DELETE', '/api/user/account', { password: 'guess1234' }],
     ['change the password', 'POST', '/api/user/change-password', { currentPassword: 'guess1234', newPassword: 'newpass1234' }]
   ]) {
     const r = await call(baseUrl, method, urlPath, body, token);
-    assert(r.status === 409 && r.body.requirePasswordSetup === true, `${label}: 409 "set a password first" (got ${r.status})`);
+    assert(r.status === 409 && r.body.requirePasswordSetup === true, `${label}: 409 "no password set" (got ${r.status})`);
+    assert(!/google/i.test(r.body.error || ''), `${label}: the message no longer sends the user to Google`);
   }
   assert(await pwcheckRows(user.id) === 0, 'and none of it counted towards the lockout');
-  assert((await db.get(`SELECT google_id FROM users WHERE id = ?`, [user.id])).google_id === 'g-only', 'the only way in is still linked');
+  // The set-a-password-via-Google endpoint is gone; nothing else accepts a password without
+  // the current one.
+  const setPassword = await call(baseUrl, 'POST', '/api/user/set-password', { newPassword: 'chosenpass123', googleReauth: 'tkt_x' }, token);
+  assert(setPassword.status === 404, `POST /api/user/set-password no longer exists (got ${setPassword.status})`);
+  return { user, token };
+}
+
+// The way out for such an account after Google sign-in was removed: an administrator runs
+// scripts/reset-password.js in the backend container, and the ordinary forced-change path
+// does the rest. Run as a real child process against the same database file, the way it is
+// run in production.
+async function testAccountWithoutPasswordRecoversThroughAdminReset(baseUrl, { user, token }) {
+  console.log('\n--- TEST: scripts/reset-password.js gives such an account a way back in ---');
+  const syncBefore = (await db.get(`SELECT sync_token FROM users WHERE id = ?`, [user.id])).sync_token;
+  const result = spawnSync(process.execPath, [path.join(BACKEND_DIR, 'scripts', 'reset-password.js'), user.username], {
+    env: process.env,
+    encoding: 'utf8'
+  });
+  assert(result.status === 0, `the script succeeds (exit ${result.status}: ${result.stderr})`);
+  const match = /One-time password: (\S+)/.exec(result.stdout);
+  assert(match, 'the script prints the one-time password');
+  const oneTimePassword = match[1];
+
+  const old = await call(baseUrl, 'GET', '/api/user/profile', null, token);
+  assert(old.status === 401, `the session from before the reset is revoked at once (got ${old.status})`);
+
+  const step = await call(baseUrl, 'POST', '/api/login', { username: user.username, password: oneTimePassword });
+  assert(step.body.status === 'force_password_change', 'the one-time password leads only to the forced change, not to a session');
+  const change = await call(baseUrl, 'POST', '/api/change-password-forced', { tempToken: step.body.tempToken, newPassword: 'ownchosen789' });
+  assert(change.status === 200 && change.body.token, `the forced change succeeds (got ${change.status})`);
+  const row = await db.get(`SELECT password_set, force_password_change, sync_token FROM users WHERE id = ?`, [user.id]);
+  assert(row.password_set === 1, 'the account now knows its password (password_set = 1)');
+  assert(row.force_password_change === 0, 'nothing is owed any more');
+  assert(row.sync_token !== syncBefore, 'the forced change ran the full cleanup (sync token rotated)');
+  const reused = await call(baseUrl, 'POST', '/api/login', { username: user.username, password: oneTimePassword });
+  assert(!reused.body.token && !reused.body.tempToken, 'the one-time password stops working');
+  const profile = await call(baseUrl, 'GET', '/api/user/profile', null, change.body.token);
+  assert(profile.body.password_set === true, 'and the profile agrees');
+  const log = await db.get(`SELECT COUNT(*) AS n FROM app_logs WHERE category = 'AUTH_PASSWORD_RESET' AND user_id = ?`, [user.id]);
+  assert(log.n === 1, 'the reset is recorded in app_logs for the security report');
 }
 
 async function run() {
@@ -186,8 +216,8 @@ async function run() {
     await testTwoChangesFromOneSession(baseUrl);
     await testForcedChangeCleansUp(baseUrl);
     await testSummaryOnlyToAccountAddress(baseUrl);
-    await testUnlinkGoogleNeedsPassword(baseUrl);
-    await testGoogleOnlyAccountIsNotAskedForAPassword(baseUrl);
+    const withoutPassword = await testAccountWithoutPasswordIsNotAskedForOne(baseUrl);
+    await testAccountWithoutPasswordRecoversThroughAdminReset(baseUrl, withoutPassword);
   } finally {
     server.close();
   }

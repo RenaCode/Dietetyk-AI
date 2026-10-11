@@ -17,33 +17,26 @@ async function rotateSyncToken(userId) {
 
 // "Clean up after a takeover" - ONE function for every action that means "the old
 // credentials or sessions are no longer trusted" (audit round 2, 2026-10-10, N-W2). Each of
-// change-password, set-password, logout-all and change-password-forced used to carry its own
-// copy of this list, and the copies drifted: the admin-forced password change - the reset an
+// change-password, logout-all and change-password-forced used to carry its own copy of this
+// list, and the copies drifted: the admin-forced password change - the reset an
 // administrator performs precisely when the password is believed to have leaked - revoked
-// sessions and share links but left a redirected e-mail address, a Google identity linked by
-// the attacker and the Apple Health sync token exactly where the attacker had put them.
+// sessions and share links but left a redirected e-mail address and the Apple Health sync
+// token exactly where the attacker had put them.
+//
+// There used to be a fourth way back in, a Google identity linked from a stolen session, and
+// an `unlinkGoogle` option here for it. Google sign-in has been removed altogether
+// (2026-10-11): users.google_id is still in the schema but nothing reads it, so there is no
+// link left to cut. If a new way to log in is ever added, its "unlink" belongs in this list.
 //
 // `keepSessionToken` - the caller's own session, which survives; null revokes all of them.
 // `revokeShares`     - share links go on a credential change, not on "log out other devices"
 //                      (a report sent to a doctor is not proof of a leak).
-// `unlinkGoogle`     - only where the caller has just proved a working password (or set one):
-//                      unlinking Google from an account whose only way in is Google would lock
-//                      the owner out, so logout-all and set-password leave the link alone.
-async function cleanUpAfterCredentialReset(userId, { keepSessionToken = null, revokeShares = true, unlinkGoogle = false } = {}) {
+async function cleanUpAfterCredentialReset(userId, { keepSessionToken = null, revokeShares = true } = {}) {
   const revokedSessions = await revokeUserSessions(userId, keepSessionToken);
   const revokedShares = revokeShares ? await revokeAllSharesForUser(userId) : 0;
   const emailRevert = await revertEmailChangedByRevokedSession(userId, keepSessionToken);
-
-  let unlinkedGoogle = false;
-  if (unlinkGoogle) {
-    const row = await db.get(`SELECT google_id FROM users WHERE id = ?`, [userId]);
-    if (row && row.google_id) {
-      await db.run(`UPDATE users SET google_id = NULL WHERE id = ?`, [userId]);
-      unlinkedGoogle = true;
-    }
-  }
   await rotateSyncToken(userId);
-  return { revokedSessions, revokedShares, emailRevert, unlinkedGoogle, syncTokenRotated: true };
+  return { revokedSessions, revokedShares, emailRevert, syncTokenRotated: true };
 }
 
 module.exports = { cleanUpAfterCredentialReset, rotateSyncToken };

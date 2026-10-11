@@ -58,6 +58,9 @@ async function main() {
         [id, `sync_isolation_${id}`, `sync_isolation_token_${id}`]
       );
     }
+    // Google Fit is off by default (services/oauthHelpers.js, isGoogleFitEnabled) and its
+    // syncAll then returns before the loop under test; switch it on as an administrator would.
+    await db.run(`INSERT INTO app_config (key, value) VALUES ('google_fit_enabled', '1')`);
     const farFuture = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
     const runs = [
       ['oura', syncAllOura],

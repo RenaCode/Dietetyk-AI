@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
-const { getAppConfig, getUserSetting, startBrowserBoundOAuthState, verifyBrowserBoundOAuthState } = require('../services/oauthHelpers');
+const { getAppConfig, getUserSetting, isGoogleFitEnabled, startBrowserBoundOAuthState, verifyBrowserBoundOAuthState } = require('../services/oauthHelpers');
 const { consumeTicket } = require('../services/authTickets');
 const { syncOura, syncWithings, syncGoogleFit, OURA_SPO2_SCOPE_MISSING_KEY } = require('../services/sync');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
@@ -300,7 +300,22 @@ router.post('/api/auth/withings/disconnect', requireAuth, async (req, res) => {
 // ===== Google Fit (data source: steps, active calories) =====
 // Unlike Oura and Withings, Google Fit uses the GLOBAL Google configuration, so it does not
 // require the user to supply their own developer credentials.
-router.get('/api/auth/google-fit', async (req, res) => {
+//
+// Switched off by default (app_config.google_fit_enabled, see isGoogleFitEnabled). While it is
+// off every Google Fit route answers 404, exactly as if it did not exist: a consent screen
+// opened before the switch cannot complete into a stored token, and nothing advertises an
+// integration the administrator has not turned on. Disconnect is gated too - the stored tokens
+// are deliberately left alone while the integration is dormant.
+async function requireGoogleFitEnabled(req, res, next) {
+  try {
+    if (await isGoogleFitEnabled()) return next();
+    res.status(404).json({ error: 'Nie znaleziono.' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+router.get('/api/auth/google-fit', requireGoogleFitEnabled, async (req, res) => {
   // A one-time ticket from POST /api/auth/ticket, not the session token - see
   // services/authTickets.js.
   const userId = consumeTicket(req.query.ticket, 'google-fit');
@@ -329,7 +344,7 @@ router.get('/api/auth/google-fit', async (req, res) => {
   }
 });
 
-router.get('/api/auth/google-fit/callback', async (req, res) => {
+router.get('/api/auth/google-fit/callback', requireGoogleFitEnabled, async (req, res) => {
   const { code, state, error } = req.query;
   if (!code && !state) {
     return res.status(200).send('Callback URL verification OK');
@@ -396,7 +411,7 @@ router.get('/api/auth/google-fit/callback', async (req, res) => {
   }
 });
 
-router.post('/api/auth/google-fit/disconnect', requireAuth, async (req, res) => {
+router.post('/api/auth/google-fit/disconnect', requireGoogleFitEnabled, requireAuth, async (req, res) => {
   try {
     await db.run(`DELETE FROM oauth_tokens WHERE user_id = ? AND service = 'google_fit'`, [req.user.id]);
     res.json({ success: true, message: 'Rozłączono z Google Fit.' });
@@ -440,8 +455,9 @@ router.post('/api/sync/manual', requireAuth, async (req, res) => {
     }
   }
 
-  // Sprawdzamy czy ma tokeny Google Fit
-  const hasGoogleFit = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'google_fit'`, [userId]);
+  // Google Fit only while the integration is switched on - see requireGoogleFitEnabled.
+  const hasGoogleFit = (await isGoogleFitEnabled())
+    && await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'google_fit'`, [userId]);
   if (hasGoogleFit) {
     try {
       const result = await syncGoogleFit(userId);

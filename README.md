@@ -19,15 +19,15 @@ Production runs on k3s, deployed by Argo CD from the Helm chart in `charts/diete
 2.  **Oura Ring Integration** (OAuth2, per-user credentials): sleep (score, duration, stages, bedtime and wake time), readiness, resting heart rate, HRV, daily activity, SpO2 and daily stress.
 3.  **Withings Integration** (OAuth2, per-user credentials): weight, body fat percentage, muscle mass and blood pressure.
 4.  **Apple Health Synchronization**: a per-user webhook (`POST /api/integrations/apple-health/<sync token>`) fed by the **Health Auto Export** iPhone app. Steps, active/basal energy, exercise minutes, distance, water, wrist temperature, sleep and workouts (with heart-rate zones when workout metrics are included) go into the daily metrics; every other numeric metric is kept as hourly samples, and symptoms, heart-rate notifications, cycle tracking and medications are stored as events.
-5.  **Google Fit Synchronization**: steps and calories fetched hourly via OAuth2, without an intermediate app. Needs the Google client configured in the Admin Panel; without it the option is hidden.
+5.  **Google Fit Synchronization** (off by default): steps and calories fetched hourly via OAuth2, without an intermediate app. An administrator switches it on and sets the Google client in the Admin Panel; until then the option is hidden and its routes answer 404.
 6.  **Daily AI Advice and AI Chat**: Gemini combines your meals with sleep, recovery, activity, body composition and current weather/time of day (Open-Meteo, location configurable in Settings) to give daily recommendations, and answers questions about your data in a chat (`POST /api/chat`).
 7.  **Dashboard Insights**: 49 insight cards (sleep, recovery, training readiness, calorie balance and target suggestions, weight-goal forecast, blood-pressure and SpO2 trends, heart-rate zones, weekend effect and more), plus a **Wellness Score** and the **Energy Battery** below.
 8.  **Energy Battery**: A single 0–100 number at the top of the dashboard answering "how much fuel do I have today". It charges overnight from sleep quality, duration and readiness, drains through the day from actual training load (relative to your own 30-day median, not a population norm) and from time awake, takes a hit from accumulated **sleep debt** over the last 14 nights, and adjusts for stress vs. recovery minutes. Every card shows its own breakdown, so the number is checkable rather than magic. See `/api/dashboard/energy-battery`.
 9.  **Manual Tracking**: water intake, supplements, energy level and mood, and body circumference measurements.
 10. **Progress Charts (Custom SVG)**: hand-rolled, responsive SVG charts (no charting library) — weight against body fat percentage (dual axis), muscle mass, and 7/30/90-day trends for sleep, recovery, steps, calories and blood pressure.
 11. **Reports and Data Export**: daily, weekly and monthly e-mail summaries (via Mailgun, configured by the administrator), a PDF report for a doctor or dietician containing only computed data with no AI-generated text, time-limited read-only share links for that report, and a full JSON export of your own data.
-12. **Accounts and Security**: password login with optional TOTP two-factor authentication (an administrator can require it), "Sign in with Google" and linking Google to an existing account, invitation-based or optional public registration, session revocation ("log out everywhere"), and account deletion. Integration secrets are encrypted at rest.
-13. **Admin Panel**: user management (invitations, deletion, forcing a password change, requiring or resetting 2FA) and global settings — Mailgun, the public app URL, the Google OAuth client, mandatory 2FA and public registration — changeable without a restart. Oura, Withings and Gemini credentials are **not** set here; each user enters their own in **Settings**.
+12. **Accounts and Security**: password login with optional TOTP two-factor authentication (an administrator can require it), invitation-based or optional public registration, session revocation ("log out everywhere"), and account deletion. Integration secrets are encrypted at rest.
+13. **Admin Panel**: user management (invitations, deletion, forcing a password change, requiring or resetting 2FA) and global settings — Mailgun, the public app URL, the Google Fit switch and its Google OAuth client, mandatory 2FA and public registration — changeable without a restart. Oura, Withings and Gemini credentials are **not** set here; each user enters their own in **Settings**.
 
 > [!NOTE]
 > Energy Battery and Wellness Score answer different questions and are deliberately kept separate. Wellness Score rates how *good* the day was (sleep, readiness, resting heart rate recovery, calorie adherence, hydration) — a judgement about behaviour. The battery says how much resource is *left right now*. A day with a perfect diet after three short nights scores well and shows a low battery; that is the intended behaviour.
@@ -219,6 +219,16 @@ User accounts and default credentials are defined locally (saved in the database
 >
 > Being git-ignored was never enough protection: a plaintext file still lands in every directory backup, every `rsync`, every editor/IDE workspace index, and any `tar` of the project. Integration secrets belong in the **Settings** tab, where they are encrypted at rest (see `utils/encryption.js`); server credentials belong in a password manager and nowhere else.
 
+There is no "Sign in with Google" any more (removed on 2026-10-11, as the instance moves behind the shared SSO). Accounts log in with a password and optional 2FA.
+
+**An account that has no password of its own.** Google sign-in used to create accounts with a random password nobody knows (`password_set = 0`) and let them set one after re-authenticating with Google. That path is gone, and nothing replaces it inside the app on purpose — a session alone must never be enough to set a password. An administrator issues a one-time password instead, from a shell in the backend container:
+
+```bash
+kubectl exec -it deploy/dietetyk-backend -n default -c backend -- node scripts/reset-password.js <username or e-mail>
+```
+
+It revokes every session of the account and forces a password change at the next login; the forced change (after the 2FA code, if the account has 2FA) sets the user's own password, sets `password_set = 1` and runs the same cleanup as any password change. The reset is recorded in `app_logs` for the weekly security report. The same command works for any account that has lost its password.
+
 Once logged in as an administrator (`admin`), you can navigate to the **Settings** or **Admin Panel** (available in the navigation menu for accounts with the `admin` role) to manage the global configuration of the application. Developer credentials for Oura Ring and Withings (needed for integration) are configured by each user individually in their own **Settings** tab.
 
 ---
@@ -259,8 +269,10 @@ Unlike Oura and Withings, Apple Health does not expose a public cloud API—data
 > When both Apple Health and Oura are active, Apple Health data is treated as the primary source for steps/calories/activity minutes (since it syncs immediately, while Oura usually finalizes its summary the next morning). Oura only fills in the activity values Apple Health has not reported.
 
 ### 4. Google Fit Integration (Steps, Calories)
-Unlike Apple Health (webhook) and Oura/Withings (per-user credentials), Google Fit uses OAuth2 and global Google credentials (Client ID/Secret) configured once by the administrator in the **Admin Panel** (the same keys used for Google Login). This means standard users do not need to register their own developer applications.
-1.  The administrator must configure `google_client_id` and `google_client_secret` in the **Admin Panel** from the [Google Cloud Console](https://console.cloud.google.com/), with the Authorized redirect URI set to `https://dietetyk.renacode.com/api/auth/google-fit/callback` and the Fitness API enabled with scope `https://www.googleapis.com/auth/fitness.activity.read`.
+Unlike Apple Health (webhook) and Oura/Withings (per-user credentials), Google Fit uses OAuth2 and global Google credentials (Client ID/Secret) configured once by the administrator in the **Admin Panel**. This means standard users do not need to register their own developer applications.
+
+**Google Fit is switched off by default** (`app_config.google_fit_enabled`, the same kind of switch as mandatory 2FA). While it is off, every `/api/auth/google-fit*` route answers 404, the hourly sync skips it and Settings hides the card; stored connections and the history they synced are kept untouched, so switching it on again resumes where it stopped.
+1.  The administrator ticks **"Włącz integrację Google Fit"** in the **Admin Panel**, Google Fit section, and configures `google_client_id` and `google_client_secret` there (the Admin Panel form saves only once its required Mailgun fields are filled in) from the [Google Cloud Console](https://console.cloud.google.com/), with the Authorized redirect URI set to `https://dietetyk.renacode.com/api/auth/google-fit/callback` and the Fitness API enabled with scope `https://www.googleapis.com/auth/fitness.activity.read`.
 2.  Each user navigates to the **Settings** tab, **Google Fit** section, and clicks **"Connect Google Fit"**.
 3.  After choosing a Google account and accepting the permissions, data is synchronized automatically (hourly, between 5:00 and 22:00, and immediately upon connection).
 4.  The integration can be disconnected at any time by clicking **"Disconnect Integration"**.
@@ -268,14 +280,7 @@ Unlike Apple Health (webhook) and Oura/Withings (per-user credentials), Google F
 > [!NOTE]
 > Activity sources follow one fixed priority, `apple > google_fit > oura` (see [Activity data source priority](#activity-data-source-priority)): Google Fit never overwrites activity values that came from Apple Health, and Oura never overwrites either of them.
 
-### 5. Linking an Existing Account with Google
-If you already have an account created with a username/password and want to link it to a Google account for single-click login without losing history:
-1.  Log in normally (username/password) and go to the **Settings** tab, **Google Account** section.
-2.  Click **"Connect Google"** and choose the Google account you wish to link.
-3.  From now on, you can log in using either method—both lead to the same account.
-4.  You can unlink Google at any time by clicking **"Disconnect Google"** (login will then require your password).
-
-### 6. Gemini AI Integration (API Key)
+### 5. Gemini AI Integration (API Key)
 1.  Go to [Google AI Studio](https://aistudio.google.com/).
 2.  Log in with your Google account.
 3.  Click **"Get API Key"**.

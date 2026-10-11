@@ -9,9 +9,12 @@ const { getAppConfig } = require('../services/oauthHelpers');
 const { APP_SECRET_CONFIG_KEYS, maskSecretValue, isMaskedSecretWrite } = require('../utils/secretKeys');
 const { encrypt } = require('../utils/encryption');
 
-// Google sign-in keys - global to the whole application (unlike Oura/Withings): Google
-// sign-in authenticates access to the app itself, so it is configured once
-const GOOGLE_CONFIG_KEYS = ['google_client_id', 'google_client_secret'];
+// Google Fit keys - global to the whole application (unlike Oura/Withings, where each user
+// brings their own developer app), so they are configured once here. The OAuth client used to
+// be shared with Google sign-in, which was removed on 2026-10-11; it now serves Google Fit
+// alone. google_fit_enabled is the switch for the whole integration ('1' on, anything else or
+// missing = off - see isGoogleFitEnabled in services/oauthHelpers.js).
+const GOOGLE_CONFIG_KEYS = ['google_client_id', 'google_client_secret', 'google_fit_enabled'];
 
 router.get('/api/admin/config', requireAdmin, async (req, res) => {
   try {

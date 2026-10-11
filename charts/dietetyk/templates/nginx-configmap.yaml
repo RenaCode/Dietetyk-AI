@@ -31,7 +31,7 @@ data:
 
     # TLS ends at Traefik, which tells us the original scheme in X-Forwarded-Proto. Passing
     # `$scheme` on (as this file used to) overwrote that with this hop's plain `http`, so the
-    # backend believed every request was insecure: the Google sign-in nonce cookie was set
+    # backend believed every request was insecure: the OAuth binding cookies were set
     # without `Secure`, and URLs built without APP_URL started with http://. Fall back to
     # $scheme only when no proxy in front set the header (local docker runs).
     map $http_x_forwarded_proto $dietetyk_forwarded_proto {

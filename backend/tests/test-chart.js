@@ -9,7 +9,8 @@
 //   M4  nginx logs neither query strings nor the token-bearing paths, and the registration
 //       page (whose URL carries the invitation token) sends no Referer.
 //   NetworkPolicy (2026-10-03) on by default: backend :3000 only from the frontend, frontend
-//       :80 only from Traefik in kube-system; egress everywhere except the home network.
+//       :8080 only from Traefik in kube-system; egress everywhere except the home network.
+//   S-K1 (2026-10-10) the frontend nginx runs as non-root on 8080, read-only, no capabilities.
 //
 // Needs the `helm` binary. Where it is missing (a CI image without it) the test says so and
 // passes, rather than failing the whole backend suite for a tool it does not otherwise use.
@@ -68,7 +69,24 @@ function run() {
   // D-14 (2026-10-04).
   console.log('\n--- TEST: pod hardening ---');
   assert(/automountServiceAccountToken: false/.test(backend) && /automountServiceAccountToken: false/.test(frontend), 'neither pod mounts a ServiceAccount token');
-  assert(/readinessProbe:\s*\n\s*httpGet:\s*\n\s*path: \/\s*\n\s*port: 80/.test(frontend), 'the frontend has a readinessProbe on / :80');
+  assert(/readinessProbe:\s*\n\s*httpGet:\s*\n\s*path: \/\s*\n\s*port: 8080\n/.test(frontend), 'the frontend has a readinessProbe on / :8080');
+
+  // S-K1 (audit 2026-10-10): the internet-facing nginx ran as root with default capabilities
+  // and a writable root filesystem. Every port below has to agree, or the site answers 502
+  // (Traefik -> Service targetPort -> containerPort/listen -> NetworkPolicy).
+  console.log('\n--- TEST: frontend runs as non-root on 8080 ---');
+  assert(/runAsNonRoot: true/.test(frontend) && /runAsUser: 101\n/.test(frontend), 'the frontend pod runs as non-root uid 101 (also on the previous nginx:alpine image)');
+  assert(/allowPrivilegeEscalation: false/.test(frontend) && /readOnlyRootFilesystem: true/.test(frontend) && /capabilities:\s*\n\s*drop: \[ALL\]/.test(frontend), 'the frontend container: no escalation, read-only root, no capabilities');
+  for (const dir of ['/tmp', '/var/cache/nginx', '/run']) {
+    assert(new RegExp(`mountPath: ${dir.replace(/\//g, '\\/')}\n`).test(frontend), `${dir} is a writable emptyDir`);
+  }
+  const listen = (nginx.match(/^\s*listen (\d+);/m) || [])[1];
+  assert(listen === '8080', 'nginx listens on 8080');
+  assert(new RegExp(`containerPort: ${listen}\\n`).test(frontend), 'containerPort matches the nginx listen port');
+  const frontendService = find('Service', 'dietetyk-frontend');
+  assert(/- port: 80\n\s*targetPort: 8080\n/.test(frontendService), 'the Service keeps port 80 for the Ingress and targets 8080');
+  const dockerfile = require('fs').readFileSync(path.join(__dirname, '..', '..', 'docker', 'frontend.Dockerfile'), 'utf8');
+  assert(/^FROM nginxinc\/nginx-unprivileged:[^\s]+@sha256:[0-9a-f]{64}$/m.test(dockerfile) && /^EXPOSE 8080$/m.test(dockerfile), 'the image is nginx-unprivileged (pinned by digest) and exposes 8080');
   assert(/livenessProbe:[^]*?failureThreshold: 6/.test(frontend), 'the frontend has a tolerant livenessProbe');
 
   // D-13 (2026-10-04): port 80 answered a bare 404.
@@ -87,7 +105,7 @@ function run() {
   assert(/from:\s*\n\s*- podSelector:\s*\n\s*matchLabels:[^]*?app\.kubernetes\.io\/component: frontend\s*\n\s*ports:/.test(backendPolicy) && !/namespaceSelector/.test(backendPolicy), 'the backend admits only the frontend pod from its own namespace');
   assert((backendPolicy.match(/- port: \d+/g) || []).join() === '- port: 3000', 'the backend admits port 3000 only - not the sqlite-web sidecar on 8080');
   assert(/namespaceSelector:\s*\n\s*matchLabels:\s*\n\s*kubernetes\.io\/metadata\.name: kube-system\s*\n\s*podSelector:\s*\n\s*matchLabels:\s*\n\s*app\.kubernetes\.io\/name: traefik/.test(frontendPolicy), 'the frontend admits Traefik from kube-system (one peer: namespace AND pod)');
-  assert((frontendPolicy.match(/- port: \d+/g) || []).join() === '- port: 80', 'the frontend admits port 80 only');
+  assert((frontendPolicy.match(/- port: \d+/g) || []).join() === '- port: 8080', 'the frontend admits the pod port 8080 only');
   assert(![backendPolicy, frontendPolicy].some(p => /Egress|egress:/.test(p)), 'the policies restrict ingress only');
   const egressPolicy = find('NetworkPolicy', 'dietetyk-egress');
   assert(/podSelector:\s*\n\s*matchLabels:\s*\n\s*app\.kubernetes\.io\/name: dietetyk\s*\n\s*app\.kubernetes\.io\/instance: dietetyk\s*\n\s*policyTypes:\s*\n\s*- Egress\s*\n/.test(egressPolicy), 'one egress policy covers both pods (no component label in the selector)');

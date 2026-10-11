@@ -30,6 +30,7 @@ process.env.APP_PASSWORD = process.env.APP_PASSWORD || 'test-app-password-for-ss
 process.env.OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || 'test-oauth-state-secret-for-sso';
 delete process.env.SSO_NAGLOWKI;
 delete process.env.SSO_LOGOUT_URL;
+delete process.env.SSO_GRUPY;
 
 const BACKEND_DIR = path.join(__dirname, '..');
 function stubModule(relativePath, exports) {
@@ -53,7 +54,7 @@ function assert(condition, message) {
 }
 
 const flagOn = () => { process.env.SSO_NAGLOWKI = '1'; process.env.SSO_LOGOUT_URL = LOGOUT_URL; };
-const flagOff = () => { delete process.env.SSO_NAGLOWKI; delete process.env.SSO_LOGOUT_URL; };
+const flagOff = () => { delete process.env.SSO_NAGLOWKI; delete process.env.SSO_LOGOUT_URL; delete process.env.SSO_GRUPY; };
 
 let baseUrl;
 function call(method, urlPath, { body, token, headers = {} } = {}) {
@@ -109,20 +110,20 @@ async function testFlagOffIgnoresHeaders() {
   const victim = await createUser({ role: 'admin' });
   const attacker = await createUser();
 
-  const sso = await ssoLogin(identity('marcin', victim.email, 'admins'));
+  const sso = await ssoLogin(identity('owner', victim.email, 'admins'));
   assert(sso.status === 404 && sso.body.ssoEnabled === false, `POST /api/auth/sso is a 404 without the flag (got ${sso.status})`);
   assert(await sessionCount(victim.id) === 0, 'no session was created for the account the forged header names');
 
-  const anon = await call('GET', '/api/user/profile', { headers: identity('marcin', victim.email, 'admins') });
+  const anon = await call('GET', '/api/user/profile', { headers: identity('owner', victim.email, 'admins') });
   assert(anon.status === 401, `a forged header without a token is still 401 (got ${anon.status})`);
 
   const token = (await passwordLogin(attacker.username)).token;
-  const mixed = await call('GET', '/api/user/profile', { token, headers: identity('marcin', victim.email, 'admins') });
+  const mixed = await call('GET', '/api/user/profile', { token, headers: identity('owner', victim.email, 'admins') });
   assert(mixed.status === 200 && mixed.body.username === attacker.username, 'a password session with a forged header stays its own account');
   assert(mixed.body.email_managed_by_sso === false, 'and the profile does not claim SSO');
   const dup = await call('GET', '/api/user/profile', { token, headers: { 'Remote-User': ['a', 'b'] } });
   assert(dup.status === 200, `even a malformed header is not read at all (got ${dup.status})`);
-  const admin = await call('GET', '/api/admin/users', { token, headers: identity('marcin', victim.email, 'admins') });
+  const admin = await call('GET', '/api/admin/users', { token, headers: identity('owner', victim.email, 'admins') });
   assert(admin.status === 403, `Remote-Groups: admins does not open the admin panel (got ${admin.status})`);
 }
 
@@ -169,15 +170,15 @@ async function testRefusals() {
   assert(await logCount('AUTH_SSO_DENIED') >= 1, 'the refusal is in app_logs');
 
   const user = await createUser();
-  const noGroup = await ssoLogin(identity('ania', user.email, 'rodzina'));
-  assert(noGroup.status === 403 && noGroup.body.ssoDenied === 'group', `a user outside wlasciciel/admins/dietetyk is 403 (got ${noGroup.status})`);
-  const wrongGroups = await ssoLogin(identity('ania', user.email, 'rodzina, wlasciciele,dietetyka'));
+  const noGroup = await ssoLogin(identity('ania', user.email, 'goscie'));
+  assert(noGroup.status === 403 && noGroup.body.ssoDenied === 'group', `a user outside wlasciciel/rodzina/admins/dietetyk is 403 (got ${noGroup.status})`);
+  const wrongGroups = await ssoLogin(identity('ania', user.email, 'goscie, wlasciciele,dietetyka'));
   assert(wrongGroups.status === 403, `group names must match exactly, not by prefix (got ${wrongGroups.status})`);
   const emptyGroups = await ssoLogin({ 'Remote-User': 'ania', 'Remote-Email': user.email });
   assert(emptyGroups.status === 403, `no Remote-Groups at all is 403 (got ${emptyGroups.status})`);
   assert(await sessionCount(user.id) === 0, 'neither refusal created a session');
 
-  const dupUser = await ssoLogin({ ...identity('ania', user.email), 'Remote-User': ['ania', 'marcin'] });
+  const dupUser = await ssoLogin({ ...identity('ania', user.email), 'Remote-User': ['ania', 'owner'] });
   assert(dupUser.status === 400, `a repeated Remote-User is 400 (got ${dupUser.status})`);
   for (const bad of ['Ania', 'an ia', 'ania;rm', '']) {
     const r = await ssoLogin(identity(bad, user.email));
@@ -192,16 +193,38 @@ async function testRefusals() {
   const pend = await ssoLogin(identity('nowy', pending.email));
   assert(pend.status === 403 && pend.body.ssoDenied === 'inactive', `a pending invitation is not an account yet (got ${pend.status})`);
 
-  // The owner's two Authelia users (decision 2026-10-11): `marcin` in `wlasciciel` maps to the
-  // private everyday account, `admin` in `admins` to the account that is admin IN THE DATABASE.
+  // The owner's two Authelia users (decision 2026-10-11): the everyday one in `wlasciciel` maps
+  // to the private account, `admin` in `admins` to the account that is admin IN THE DATABASE.
   const ownerPrivate = await createUser();
-  const ownerSso = await ssoLogin(identity('marcin', ownerPrivate.email, 'wlasciciel'));
+  const ownerSso = await ssoLogin(identity('owner', ownerPrivate.email, 'wlasciciel'));
   assert(ownerSso.status === 200, `the owner group admits to the host (got ${ownerSso.status})`);
-  const ownerHeaders = identity('marcin', ownerPrivate.email, 'wlasciciel');
+  const ownerHeaders = identity('owner', ownerPrivate.email, 'wlasciciel');
   const ownerProfile = await call('GET', '/api/user/profile', { token: ownerSso.body.token, headers: ownerHeaders });
   assert(ownerProfile.status === 200 && ownerProfile.body.username === ownerPrivate.username && ownerProfile.body.role === 'user', 'as the private account, with its own role');
   const ownerAdmin = await call('GET', '/api/admin/users', { token: ownerSso.body.token, headers: ownerHeaders });
   assert(ownerAdmin.status === 403, `the owner group grants no admin rights in the app (got ${ownerAdmin.status})`);
+
+  // A family member in `rodzina` maps onto her own existing account, as an ordinary user.
+  const family = await createUser();
+  const familyHeaders = identity('family1', family.email, 'rodzina');
+  const familySso = await ssoLogin(familyHeaders);
+  assert(familySso.status === 200, `the family group admits to the host (got ${familySso.status})`);
+  const familyProfile = await call('GET', '/api/user/profile', { token: familySso.body.token, headers: familyHeaders });
+  assert(familyProfile.status === 200 && familyProfile.body.username === family.username && familyProfile.body.role === 'user', 'as her own account, not an admin');
+
+  // The list is configurable (SSO_GRUPY, from sso.allowedGroups in the chart).
+  process.env.SSO_GRUPY = 'dietetyk, goscie';
+  try {
+    const now = await ssoLogin(identity('ania', user.email, 'goscie'));
+    assert(now.status === 200, `a group added through SSO_GRUPY is admitted (got ${now.status})`);
+    const dropped = await ssoLogin(familyHeaders);
+    assert(dropped.status === 403, `a group left out of SSO_GRUPY is refused (got ${dropped.status})`);
+    process.env.SSO_GRUPY = ' , "x y" ';
+    const fallback = await ssoLogin(familyHeaders);
+    assert(fallback.status === 200, `a list with no valid name falls back to the default (got ${fallback.status})`);
+  } finally {
+    delete process.env.SSO_GRUPY;
+  }
 
   const plain = await createUser();
   const asAdminsGroup = await ssoLogin(identity('ania', plain.email, 'admins'));
@@ -209,8 +232,8 @@ async function testRefusals() {
   const adminPanel = await call('GET', '/api/admin/users', { token: asAdminsGroup.body.token, headers: identity('ania', plain.email, 'admins') });
   assert(adminPanel.status === 403, `but the admin role still comes from the database (got ${adminPanel.status})`);
   const realAdmin = await createUser({ role: 'admin' });
-  const adminSso = await ssoLogin(identity('marcin', realAdmin.email, 'admins'));
-  const adminOk = await call('GET', '/api/admin/users', { token: adminSso.body.token, headers: identity('marcin', realAdmin.email, 'admins') });
+  const adminSso = await ssoLogin(identity('owner', realAdmin.email, 'admins'));
+  const adminOk = await call('GET', '/api/admin/users', { token: adminSso.body.token, headers: identity('owner', realAdmin.email, 'admins') });
   assert(adminOk.status === 200, `an account that IS admin in the database keeps its role over SSO (got ${adminOk.status})`);
 }
 

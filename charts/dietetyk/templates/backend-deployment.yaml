@@ -72,6 +72,8 @@ spec:
             # would stay on after sso.enabled was switched off, with nothing stripping the headers.
             - name: SSO_NAGLOWKI
               value: "1"
+            - name: SSO_GRUPY
+              value: {{ join "," .Values.sso.allowedGroups | quote }}
             - name: SSO_LOGOUT_URL
               value: {{ printf "%s/logout?rd=%s" (trimSuffix "/" .Values.sso.portalUrl) (urlquery (printf "https://%s/" .Values.ingress.host)) | quote }}
             {{- end }}

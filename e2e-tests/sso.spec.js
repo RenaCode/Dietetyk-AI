@@ -5,11 +5,11 @@ const { test, expect } = require('@playwright/test');
 // Traefik would add after Authelia's login. The account is the seeded admin, found by e-mail.
 const SSO_URL = 'http://localhost:3001';
 const owner = {
-  'Remote-User': 'marcin',
+  'Remote-User': 'owner',
   // A different case than the stored address: the mapping ignores it.
   'Remote-Email': 'Owner@SSO-e2e.invalid',
   'Remote-Groups': 'admins',
-  'Remote-Name': 'Marcin'
+  'Remote-Name': 'Owner'
 };
 
 test.describe('SSO on', () => {

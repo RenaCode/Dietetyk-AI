@@ -20,13 +20,29 @@ const isSsoEnabled = () => process.env.SSO_NAGLOWKI === '1';
 
 // Authelia admits a user to dietetyk.renacode.com only in one of these groups (renacode-infra
 // k3s/platforma/authelia.yaml, rule for the host): `wlasciciel` - the owner's private,
-// everyday account; `admins` - the separate account that administers the app; `dietetyk` -
-// anyone else given access later. Checked here as well, so that a rule
+// everyday account; `rodzina` - family members with their own accounts; `admins` - the
+// separate account that administers the app; `dietetyk` - anyone else given access later.
+// Configurable through SSO_GRUPY (comma-separated; the chart renders it from
+// sso.allowedGroups) so that adding a group is a values change, not a release. Checked here as
+// well, so that a rule
 // widened by mistake on the Authelia side - or a host attached to the middleware before its
 // rule was written - does not silently become access to health data. This decides ENTRY
 // only: the application role (admin or not) still comes from users.role, never from the
 // header, so membership of `admins` in Authelia does not make anyone an admin here.
-const ALLOWED_GROUPS = ['wlasciciel', 'admins', 'dietetyk'];
+const DEFAULT_ALLOWED_GROUPS = ['wlasciciel', 'rodzina', 'admins', 'dietetyk'];
+const GROUP_NAME_RE = /^[a-z0-9._-]{1,64}$/;
+
+// Read on every call, like the flag. Unset or empty means the default list - an empty list
+// would admit nobody, and a typo in values.yaml locking every user out is not a state worth
+// supporting. Names outside the charset are dropped rather than matched, so a stray space or
+// quote in the variable cannot turn into a group nobody intended.
+function allowedGroups() {
+  const configured = (process.env.SSO_GRUPY || '')
+    .split(',')
+    .map(g => g.trim())
+    .filter(g => GROUP_NAME_RE.test(g));
+  return configured.length ? configured : DEFAULT_ALLOWED_GROUPS;
+}
 
 // The contract's charset for Remote-User. Authelia's user names fit it; anything else means
 // the header did not come from Authelia, and guessing what was meant is how a lenient parser
@@ -84,7 +100,8 @@ function readSsoIdentity(req) {
   const groupHeaders = headerOccurrences(req, 'remote-groups');
   if (groupHeaders.length > 1) return fail(400, 'Nieprawidłowa tożsamość SSO (powtórzony nagłówek grup).');
   const groups = (groupHeaders[0] || '').split(',').map(g => g.trim()).filter(Boolean);
-  if (!groups.some(g => ALLOWED_GROUPS.includes(g))) {
+  const allowed = allowedGroups();
+  if (!groups.some(g => allowed.includes(g))) {
     return fail(403, `Użytkownik ${user} nie należy do grupy z dostępem do Dietetyka. Poproś administratora o dodanie do grupy „dietetyk”.`, { ssoDenied: 'group' });
   }
 
@@ -136,5 +153,6 @@ module.exports = {
   findAccountForIdentity,
   identityMatchesEmail,
   ssoLogoutUrl,
-  ALLOWED_GROUPS
+  allowedGroups,
+  DEFAULT_ALLOWED_GROUPS
 };

@@ -1,16 +1,13 @@
-// Google sign-in and Google Fit were removed on 2026-10-11 (the application moved behind a
-// shared SSO, and the Google client had never been configured). These tests pin down that they
-// are gone for good, over the real application object (app.js):
+// "Sign in with Google" was removed on 2026-10-11 (the application moved behind a shared SSO,
+// and the Google client had never been configured). These tests pin down that it is gone for
+// good, over the real application object (app.js):
 //
-// - every former Google route answers 404 to a logged-in caller, and 401 - not a redirect to
+// - every former sign-in route answers 404 to a logged-in caller, and 401 - not a redirect to
 //   accounts.google.com - to an anonymous one: the routes were on requireAuth's public list,
 //   and a path left on that list without its handler would be public surface for nothing;
-// - the profile no longer reports Google flags, and the Admin Panel neither stores nor returns
-//   the Google client keys;
-// - the start-up migration deletes the Google secrets (Google Fit tokens, the client secret)
-//   and keeps the activity history Google Fit wrote;
-// - no backend source talks to Google's OAuth or Fitness endpoints any more (Gemini's API is a
-//   different host and stays).
+// - the profile no longer reports the Google identity;
+// - no backend source fetches a Google user profile any more (Google Fit, which stays behind a
+//   switch, uses the token and Fitness endpoints only - see tests/test-google-fit-switch.js).
 //
 // Run with: node tests/test-google-removed.js
 
@@ -81,15 +78,12 @@ const REMOVED_ROUTES = [
   ['GET', '/api/auth/google/link?ticket=tkt_x'],
   ['GET', '/api/auth/google/reauth?ticket=tkt_x'],
   ['POST', '/api/auth/google/exchange'],
-  ['GET', '/api/auth/google-fit?ticket=tkt_x'],
-  ['GET', '/api/auth/google-fit/callback?code=c&state=s'],
-  ['POST', '/api/auth/google-fit/disconnect'],
   ['POST', '/api/user/unlink-google'],
   ['POST', '/api/user/set-password']
 ];
 
 async function testRoutesAreGone(baseUrl, user) {
-  console.log('\n--- TEST: the Google routes no longer exist ---');
+  console.log('\n--- TEST: the Google sign-in routes no longer exist ---');
   for (const [method, urlPath] of REMOVED_ROUTES) {
     const anonymous = await call(baseUrl, method, urlPath, { body: method === 'POST' ? {} : undefined });
     assert(
@@ -101,64 +95,16 @@ async function testRoutesAreGone(baseUrl, user) {
   }
 }
 
-async function testProfileAndSync(baseUrl, user) {
-  console.log('\n--- TEST: the profile and the manual sync say nothing about Google ---');
+async function testProfile(baseUrl, user) {
+  console.log('\n--- TEST: the profile says nothing about a Google identity ---');
   const profile = await call(baseUrl, 'GET', '/api/user/profile', { token: user.token });
   assert(profile.status === 200, 'the profile loads');
-  for (const key of ['has_google', 'has_google_fit', 'google_configured']) {
-    assert(!(key in profile.json), `the profile has no '${key}' (even for a row with google_id set)`);
-  }
+  assert(!('has_google' in profile.json), "the profile has no 'has_google' (even for a row with google_id set)");
   assert(profile.json.password_set === true, 'password_set is still reported');
-
-  const sync = await call(baseUrl, 'POST', '/api/sync/manual', { token: user.token, body: {} });
-  assert(sync.status === 200 && !('google_fit' in sync.json), 'the manual sync reports Oura and Withings only');
-}
-
-async function testAdminPanelRefusesGoogleKeys(baseUrl, admin) {
-  console.log('\n--- TEST: the Admin Panel neither stores nor returns the Google client ---');
-  const save = await call(baseUrl, 'POST', '/api/admin/config', {
-    token: admin.token,
-    body: { google_client_id: 'cid.apps.example', google_client_secret: 'csecret', app_url: 'https://diet.example.invalid' }
-  });
-  assert(save.status === 200, 'saving the config still works');
-  const stored = await db.all(`SELECT key FROM app_config WHERE key LIKE 'google_%'`);
-  assert(stored.length === 0, `no google_* key was written (found ${stored.map(r => r.key).join(', ') || 'none'})`);
-  assert((await db.get(`SELECT value FROM app_config WHERE key = 'app_url'`)).value === 'https://diet.example.invalid', 'the allowed keys next to them were saved');
-
-  // A row that got there some other way (a restored backup) is not echoed back either.
-  await db.run(`INSERT INTO app_config (key, value) VALUES ('google_client_id', 'leftover')`);
-  const read = await call(baseUrl, 'GET', '/api/admin/config', { token: admin.token });
-  assert(read.status === 200 && !('google_client_id' in read.json), 'GET /api/admin/config does not return a leftover google_client_id');
-  await db.run(`DELETE FROM app_config WHERE key = 'google_client_id'`);
-}
-
-async function testMigrationDropsSecretsKeepsHistory(user) {
-  console.log('\n--- TEST: the start-up migration deletes Google secrets and keeps Google Fit history ---');
-  await db.run(`INSERT INTO app_config (key, value) VALUES ('google_client_id', 'cid'), ('google_client_secret', 'enc:v1:whatever')`);
-  await db.run(`
-    INSERT INTO oauth_tokens (user_id, service, access_token, refresh_token, expires_at)
-    VALUES (?, 'google_fit', 'enc:v1:a', 'enc:v1:r', datetime('now', '+1 hour')),
-           (?, 'oura', 'enc:v1:a', 'enc:v1:r', datetime('now', '+1 hour'))
-  `, [user.id, user.id]);
-  await db.run(`
-    INSERT INTO health_metrics (user_id, date, steps, active_calories, activity_source, steps_source, active_calories_source)
-    VALUES (?, '2026-09-01', 8421, 377, 'google_fit', 'google_fit', 'google_fit')
-  `, [user.id]);
-
-  await db.initDb();
-  await db.initDb(); // idempotent: a second start finds nothing to delete and changes nothing
-
-  assert((await db.all(`SELECT key FROM app_config WHERE key LIKE 'google_%'`)).length === 0, 'the Google client keys are deleted');
-  assert(!(await db.get(`SELECT 1 FROM oauth_tokens WHERE service = 'google_fit'`)), 'the Google Fit tokens are deleted');
-  assert(!!(await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'oura'`, [user.id])), 'other integrations\' tokens are untouched');
-  const day = await db.get(`SELECT steps, active_calories, activity_source, steps_source FROM health_metrics WHERE user_id = ? AND date = '2026-09-01'`, [user.id]);
-  assert(day && day.steps === 8421 && day.active_calories === 377, 'the steps and calories Google Fit wrote are still there');
-  assert(day.activity_source === 'google_fit' && day.steps_source === 'google_fit', 'and so is their provenance');
-  assert((await db.get(`SELECT google_id FROM users WHERE id = ?`, [user.id])).google_id !== null, 'users.google_id is left as it was (the column is inert, not dropped)');
 }
 
 function testNoGoogleEndpointsInSource() {
-  console.log('\n--- TEST: no backend code calls Google OAuth or Fitness ---');
+  console.log('\n--- TEST: no backend code signs anybody in with Google ---');
   const offenders = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -167,14 +113,16 @@ function testNoGoogleEndpointsInSource() {
       if (entry.isDirectory()) walk(full);
       else if (entry.name.endsWith('.js')) {
         const source = fs.readFileSync(full, 'utf8');
-        for (const host of ['accounts.google.com', 'oauth2.googleapis.com', 'www.googleapis.com/oauth2', 'www.googleapis.com/fitness']) {
+        // The userinfo endpoint and the `openid` scope are what sign-in needs and Google Fit
+        // does not.
+        for (const host of ['www.googleapis.com/oauth2', "'openid"]) {
           if (source.includes(host)) offenders.push(`${path.relative(BACKEND_DIR, full)}: ${host}`);
         }
       }
     }
   };
   walk(BACKEND_DIR);
-  assert(offenders.length === 0, `no source file names a Google OAuth/Fitness endpoint${offenders.length ? ': ' + offenders.join('; ') : ''}`);
+  assert(offenders.length === 0, `no source file asks Google who the user is${offenders.length ? ': ' + offenders.join('; ') : ''}`);
 }
 
 async function run() {
@@ -182,11 +130,8 @@ async function run() {
   const { server, baseUrl } = await startServer();
   try {
     const user = await createUserWithSession('user');
-    const admin = await createUserWithSession('admin');
     await testRoutesAreGone(baseUrl, user);
-    await testProfileAndSync(baseUrl, user);
-    await testAdminPanelRefusesGoogleKeys(baseUrl, admin);
-    await testMigrationDropsSecretsKeepsHistory(user);
+    await testProfile(baseUrl, user);
     testNoGoogleEndpointsInSource();
   } finally {
     server.close();
@@ -195,13 +140,13 @@ async function run() {
 
 run()
   .then(() => {
-    console.log('\n🎉 GOOGLE REMOVAL TESTS PASSED\n');
+    console.log('\n🎉 GOOGLE SIGN-IN REMOVAL TESTS PASSED\n');
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
     process.exit(0);
   })
   .catch((err) => {
     console.error('\n' + (err.stack || err.message));
-    console.error('❌ GOOGLE REMOVAL TESTS FAILED');
+    console.error('❌ GOOGLE SIGN-IN REMOVAL TESTS FAILED');
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
     process.exit(1);
   });

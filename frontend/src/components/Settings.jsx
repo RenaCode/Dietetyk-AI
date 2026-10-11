@@ -1107,6 +1107,32 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
     }
   };
 
+  // Connecting/disconnecting Google Fit (the source of step and calorie data), analogous to
+  // Oura/Withings but without its own Client ID/Secret - it uses the global Google client the
+  // administrator sets in the Admin Panel, where Google Fit is also switched on (it is off by
+  // default; see the card below).
+  const handleConnectGoogleFit = () => startOAuthFlow('google-fit');
+
+  const handleDisconnectGoogleFit = async () => {
+    if (!confirm(t('Czy na pewno chcesz odłączyć integrację z Google Fit?'))) return;
+    try {
+      const res = await fetch('/api/auth/google-fit/disconnect', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${sessionToken}` }
+      });
+      if (res.ok) {
+        onProfileUpdate();
+        setMessage({ type: 'success', text: t('Odłączono integrację z Google Fit!') });
+        setTimeout(() => setMessage({ type: '', text: '' }), 5000);
+      } else {
+        setMessage({ type: 'error', text: t('Nie udało się odłączyć integracji.') });
+      }
+    } catch (err) {
+      console.error(err);
+      setMessage({ type: 'error', text: t('Błąd połączenia z serwerem.') });
+    }
+  };
+
   return (
     <div className="setup-container">
       
@@ -2009,7 +2035,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
 
               <h4 style={{ fontSize: '1rem', color: 'var(--danger)', marginBottom: '8px' }}>{t("Usunięcie konta")}</h4>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '16px' }}>
-                Trwale usuwa Twoje konto i wszystkie powiązane dane (posiłki, ustawienia, historię zdrowotną, połączenia Oura/Withings). Tej operacji nie można odwrócić.
+                Trwale usuwa Twoje konto i wszystkie powiązane dane (posiłki, ustawienia, historię zdrowotną, połączenia Oura/Withings/Google Fit). Tej operacji nie można odwrócić.
               </p>
 
               {deleteMessage.text && (
@@ -2063,7 +2089,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           </div>
         )}
 
-        {(userProfile.has_oura || userProfile.has_withings) && (
+        {(userProfile.has_oura || userProfile.has_withings || (userProfile.google_fit_enabled && userProfile.has_google_fit)) && (
           <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: '20px' }}>
             <button
               type="button"
@@ -2177,6 +2203,56 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               </div>
             )}
           </div>
+
+          {/* Google Fit - the source of step, calorie and activity data, analogous to
+              Oura/Withings but without its own Client ID/Secret (it uses the global Google
+              client set by the admin). Shown only while an administrator has switched Google
+              Fit on (google_fit_enabled - off by default, and its routes are 404 then), and
+              then only with a configured client or an existing connection. */}
+          {userProfile.google_fit_enabled && (userProfile.google_configured || userProfile.has_google_fit) && (
+          <div style={{
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '16px',
+            background: 'rgba(255, 255, 255, 0.02)',
+            border: '1px solid var(--border-glass)',
+            borderRadius: '12px',
+            gap: '16px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <span style={{ fontSize: '2rem' }}>🏃</span>
+                <div>
+                  <strong style={{ display: 'block', color: '#fff' }}>{t("Google Fit (Kroki, Kalorie, Aktywność)")}</strong>
+                  <span style={{ fontSize: '0.8rem', color: userProfile.has_google_fit ? 'var(--success-light)' : 'var(--text-dim)' }}>
+                    {userProfile.has_google_fit ? t('✅ Połączono z Google Fit') : t('❌ Brak połączenia')}
+                  </span>
+                </div>
+              </div>
+              <div>
+                {userProfile.has_google_fit ? (
+                  <button
+                    type="button"
+                    className="btn-danger"
+                    style={{ padding: '8px 16px' }}
+                    onClick={handleDisconnectGoogleFit}
+                  >
+                    Odłącz Google Fit
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    style={{ padding: '8px 16px' }}
+                    onClick={handleConnectGoogleFit}
+                  >
+                    Połącz z Google Fit
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+          )}
 
           {/* Oura Ring */}
           <div style={{

@@ -17,11 +17,12 @@ test('an unknown tab name is ignored, not rendered as an empty page', () => {
   assert.equal(resolveTabParam(null), null);
 });
 
-// Google sign-in and Google Fit were removed on 2026-10-11. The return from the Google flows
-// used to be read from the URL (a one-time code, error and link parameters) and
-// the login screen asked /api/auth/google/enabled; no source file may do either any more, or
-// the frontend calls endpoints that answer 401/404 and shows buttons that lead nowhere.
-test('no frontend source refers to the removed Google endpoints or return parameters', () => {
+// Google sign-in was removed on 2026-10-11 (Google Fit stays, switched off by default). The
+// return from the sign-in flows used to be read from the URL (a one-time code, error and link
+// parameters) and the login screen asked /api/auth/google/enabled; no source file may do either
+// any more, or the frontend calls endpoints that answer 401/404 and shows buttons that lead
+// nowhere.
+test('no frontend source refers to the removed Google sign-in endpoints or return parameters', () => {
   const srcDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
   const offenders = [];
   const walk = (dir) => {
@@ -30,7 +31,9 @@ test('no frontend source refers to the removed Google endpoints or return parame
       if (entry.isDirectory()) walk(full);
       else if (/\.(jsx?|tsx?)$/.test(entry.name) && !entry.name.endsWith('.test.js')) {
         const source = fs.readFileSync(full, 'utf8');
-        for (const needle of ['/api/auth/google', 'google_code', 'google_error', 'google_link', 'google_reauth', 'google-fit', '/api/user/unlink-google', '/api/user/set-password', 'has_google', 'google_configured', 'google_client_']) {
+        // `/api/auth/google/` and `has_google"` (with the trailing slash and quote) so that
+        // Google Fit - kept behind a switch: /api/auth/google-fit, has_google_fit - does not match.
+        for (const needle of ['/api/auth/google/', "'/api/auth/google'", 'google_code', 'google_error', 'google_link', 'google_reauth', '/api/user/unlink-google', '/api/user/set-password', 'has_google)', 'has_google ', 'has_google?']) {
           if (source.includes(needle)) offenders.push(`${path.relative(srcDir, full)}: ${needle}`);
         }
       }

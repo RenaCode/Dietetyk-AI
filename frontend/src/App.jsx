@@ -245,10 +245,18 @@ export default function App() {
         window.history.replaceState({}, document.title, '/');
         fetchUserProfile();
         fetchDashboardData();
+      } else if (successParam === 'google_fit') {
+        setSuccessMessage(t('Pomyślnie zintegrowano z Google Fit!'));
+        setTimeout(() => setSuccessMessage(''), 6000);
+        window.history.replaceState({}, document.title, '/');
+        fetchUserProfile();
+        fetchDashboardData();
       } else if (errorParam) {
         let msg = t('Wystąpił błąd podczas integracji.');
         if (errorParam === 'oura_auth_failed' || errorParam === 'oura_exchange_failed') {
           msg = t('Nie udało się połączyć z Oura Ring. Sprawdź poświadczenia w panelu admina.');
+        } else if (errorParam === 'google_fit_auth_failed' || errorParam === 'google_fit_exchange_failed') {
+          msg = t('Nie udało się połączyć z Google Fit. Sprawdź konfigurację Google w panelu admina.');
         } else if (errorParam === 'withings_auth_failed' || errorParam === 'withings_exchange_failed') {
           msg = t('Nie udało się połączyć z Withings. Sprawdź poświadczenia w panelu admina.');
         }

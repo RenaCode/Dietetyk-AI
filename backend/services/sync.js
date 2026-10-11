@@ -1,5 +1,5 @@
 const db = require('../db');
-const { formatDateString, timestampToDateString, toWarsawIsoString } = require('../utils/dates');
+const { formatDateString, timestampToDateString, getWarsawDayStartMillis, toWarsawIsoString } = require('../utils/dates');
 const { ouraMainSleepTimes, sleepTimesUpdateSql } = require('../utils/sleepTimes');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const {
@@ -11,7 +11,7 @@ const {
   activitySourceValues
 } = require('../utils/activitySources');
 
-const { getOrRefreshToken, getUserSetting } = require('./oauthHelpers');
+const { getOrRefreshToken, getUserSetting, isGoogleFitEnabled } = require('./oauthHelpers');
 const logger = require('./logger');
 
 // Per-user flag (settings table): the stored Oura token was granted without the `spo2` scope.
@@ -23,15 +23,18 @@ const logger = require('./logger');
 const OURA_SPO2_SCOPE_MISSING_KEY = 'oura_spo2_scope_missing';
 
 const OURA_RANK = getActivitySourceRank('oura');
+const GOOGLE_FIT_RANK = getActivitySourceRank('google_fit');
 
 // Columns whose non-zero value means "this source really did provide activity data for
 // that day" - they decide whether the activity_source label stays with the existing,
 // higher-ranked source. The list itself lives in utils/activitySources.js so that this
 // file, routes/appleHealth.js and the db.js migration cannot drift apart.
 const ACTIVITY_LABEL_COLUMNS = ACTIVITY_METRIC_COLUMNS;
+const GOOGLE_FIT_LABEL_COLUMNS = ['steps', 'active_calories', 'distance_meters'];
 
 // The `<column>_source` companions that go into the INSERT (see activitySourceColumns).
 const OURA_SOURCE_COLUMNS = activitySourceColumns(ACTIVITY_LABEL_COLUMNS);
+const GOOGLE_FIT_SOURCE_COLUMNS = activitySourceColumns(GOOGLE_FIT_LABEL_COLUMNS);
 
 async function syncOura(userId) {
   const accessToken = await getOrRefreshToken(userId, 'oura');
@@ -535,8 +538,132 @@ async function syncWithings(userId) {
   }
 }
 
+// Google Fit sync (steps, active calories). Unlike Apple Health, which pushes through the
+// Health Auto Export webhook, Google Fit has no push mechanism, so we pull actively over
+// the REST API (dataset:aggregate), as with Oura and Withings.
+async function syncGoogleFit(userId) {
+  const accessToken = await getOrRefreshToken(userId, 'google_fit');
+  if (!accessToken) {
+    return { success: false, error: 'Brak aktywnego tokenu Google Fit. Połącz się ponownie w Ustawieniach.' };
+  }
+
+  // The window boundaries MUST start exactly at midnight Europe/Warsaw time.
+  // bucketByTime in Google Fit splits the window into buckets of durationMillis measured
+  // from startTimeMillis - so buckets are aligned to the START POINT, not to UTC.
+  // The start used to be "now minus 7 days", so each bucket covered a day counted from the
+  // current hour (14:00-14:00, say) rather than a calendar day. Seven-day totals came out
+  // roughly right, but the attribution to a specific DAY was shifted - and the time-based
+  // insights (meal-timing-sleep, sedentary-sleep, early-strain-alert) rest on exactly that,
+  // where a shift changes the conclusion rather than just the number. Starting at Warsaw
+  // midnight makes each bucket exactly one calendar day in the same timezone the rest of the
+  // application uses (see utils/dates.js).
+  const now = new Date();
+  const startTimeMillis = getWarsawDayStartMillis(now, -7);
+  const endTimeMillis = now.getTime();
+
+  console.log(`[SYNC GOOGLE FIT] Fetching steps/calories for user ${userId}...`);
+
+  try {
+    const response = await fetchWithTimeout('https://www.googleapis.com/fitness/v1/users/me/dataset:aggregate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({
+        aggregateBy: [
+          { dataTypeName: 'com.google.step_count.delta' },
+          { dataTypeName: 'com.google.calories.expended' },
+          { dataTypeName: 'com.google.distance.delta' }
+        ],
+        bucketByTime: { durationMillis: 86400000 },
+        startTimeMillis: String(startTimeMillis),
+        endTimeMillis: String(endTimeMillis)
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Błąd Google Fit API (Status ${response.status}): ${errText}`);
+    }
+
+    const data = await response.json();
+    const buckets = data.bucket || [];
+    const lastSyncTime = new Date().toISOString();
+
+    for (const bucket of buckets) {
+      // The buckets are aligned to Warsaw midnight (see startTimeMillis above), but
+      // durationMillis is a fixed 24h, so after a daylight-saving change the later buckets in
+      // the window drift by an hour - starting at 23:00 the previous day, for instance. We
+      // therefore label a bucket by its MIDPOINT rather than its start: for an aligned bucket
+      // the midpoint falls at noon of the same day, and for one shifted by an hour it still
+      // lands inside the correct day. That keeps the day attribution correct even in the week
+      // a clock change happens.
+      // (The bucket's contents are then shifted by an hour - unavoidable with a fixed
+      // durationMillis, short of making seven separate API requests.)
+      const bucketStartMs = Number(bucket.startTimeMillis);
+      const bucketEndMs = Number(bucket.endTimeMillis) || (bucketStartMs + 86400000);
+      const bucketMidpointMs = bucketStartMs + (bucketEndMs - bucketStartMs) / 2;
+      const dateStr = timestampToDateString(Math.floor(bucketMidpointMs / 1000));
+
+      let steps = 0;
+      let calories = 0;
+      let distance = 0;
+      (bucket.dataset || []).forEach(ds => {
+        (ds.point || []).forEach(point => {
+          const val = point.value && point.value[0];
+          if (!val) return;
+          if (ds.dataSourceId && ds.dataSourceId.includes('step_count')) {
+            steps += val.intVal || 0;
+          } else if (ds.dataSourceId && ds.dataSourceId.includes('calories')) {
+            calories += val.fpVal || 0;
+          } else if (ds.dataSourceId && ds.dataSourceId.includes('distance')) {
+            distance += val.fpVal || 0;
+          }
+        });
+      });
+      calories = Math.round(calories);
+      distance = Math.round(distance);
+
+      if (steps > 0 || calories > 0 || distance > 0) {
+        // The same column-protection pattern as syncOura, from the one shared hierarchy in
+        // utils/activitySources.js: apple > google_fit > oura. Google Fit ranks above Oura
+        // because, like Apple Health, it reports continuously from the phone, whereas Oura
+        // only finalises a day the following morning.
+        // The three `<column>_source` values are literals rather than bound parameters
+        // because, unlike Oura and Apple, this branch only runs when all three figures are
+        // real numbers (see the `steps > 0 || calories > 0 || distance > 0` guard above) -
+        // Google Fit never writes a partial day here, so every column it inserts is its own.
+        await db.run(`
+          INSERT INTO health_metrics (user_id, date, steps, active_calories, distance_meters, activity_source, ${GOOGLE_FIT_SOURCE_COLUMNS.join(', ')}, last_sync)
+          VALUES (?, ?, ?, ?, ?, 'google_fit', ${GOOGLE_FIT_SOURCE_COLUMNS.map(() => "'google_fit'").join(', ')}, ?)
+          ON CONFLICT(user_id, date) DO UPDATE SET
+            ${preserveHigherPriority('steps', GOOGLE_FIT_RANK)},
+            ${preserveHigherPriority('active_calories', GOOGLE_FIT_RANK)},
+            ${preserveHigherPriority('distance_meters', GOOGLE_FIT_RANK)},
+            ${preserveSourceLabel(GOOGLE_FIT_RANK, GOOGLE_FIT_LABEL_COLUMNS)},
+            last_sync = excluded.last_sync
+        `, [
+          userId, dateStr,
+          // Round 12 (audit): the "|| null" was removed. These values start at 0 and are
+          // accumulated by summing Google Fit points - 0 is a legitimate, real value for a
+          // day (genuinely zero steps) rather than "no data". Converting it to null broke
+          // the ON CONFLICT pattern COALESCE(excluded.x, x): null made SQLite keep the OLD
+          // value, so a day with a real zero never overwrote wrong or stale data from an
+          // earlier sync.
+          steps, calories, distance, lastSyncTime
+        ]);
+      }
+    }
+    return { success: true };
+  } catch (err) {
+    console.error(`[SYNC GOOGLE FIT ERROR] User ${userId}:`, err);
+    return { success: false, error: err.message };
+  }
+}
+
 // One user's failure must not end the loop for everyone after them (audit 2026-10-02).
-// syncOura/syncWithings catch their own HTTP errors, but getOrRefreshToken()
+// syncOura/syncWithings/syncGoogleFit catch their own HTTP errors, but getOrRefreshToken()
 // runs BEFORE their try and calls decrypt() on the stored tokens, which throws on a
 // ciphertext that no longer authenticates (a botched APP_PASSWORD rotation, a hand-edited
 // row). That exception used to escape into the syncAll* catch below and abort the whole
@@ -592,10 +719,31 @@ async function syncAllWithings() {
   }
 }
 
+// Google Fit sync for every user (invoked by the shared hourly scheduler, 05:00-22:00)
+//
+// Does nothing while Google Fit is switched off (app_config.google_fit_enabled, see
+// services/oauthHelpers.js): stored tokens are neither used nor refreshed, so switching it back
+// on resumes with them - or with a reconnect, if Google has expired them meanwhile.
+async function syncAllGoogleFit() {
+  try {
+    // Silently: an hourly "switched off" line would be the only thing in the log about an
+    // integration nobody uses.
+    if (!(await isGoogleFitEnabled())) return;
+    console.log('[CRON GOOGLE FIT] Syncing data...');
+    const tokens = await db.all(`SELECT DISTINCT user_id FROM oauth_tokens WHERE service = 'google_fit'`);
+    const { ok, failed } = await syncEachUser('Google Fit', tokens, syncGoogleFit);
+    console.log(`[CRON GOOGLE FIT] Synced ${ok}/${tokens.length} user(s)${failed ? `, ${failed} failed (see app_logs, category SYNC)` : ''}.`);
+  } catch (err) {
+    logger.error(`Google Fit sync failed: ${err.message}`, 'SYNC', err);
+  }
+}
+
 module.exports = {
   OURA_SPO2_SCOPE_MISSING_KEY,
   syncOura,
   syncWithings,
+  syncGoogleFit,
   syncAllOura,
-  syncAllWithings
+  syncAllWithings,
+  syncAllGoogleFit
 };

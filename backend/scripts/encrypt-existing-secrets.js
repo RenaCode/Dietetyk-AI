@@ -3,8 +3,8 @@
 // Jednorazowy, idempotentny skrypt migracyjny: szyfruje sekrety zapisane w bazie
 // BEFORE utils/encryption.js was introduced (round 18 audit fix). Without this script the
 // existing OAuth tokens (oauth_tokens) and API keys (settings.gemini_api_key,
-// settings.oura_client_secret, settings.withings_client_secret, app_config.mailgun_api_key)
-// would only be encrypted on their NEXT write - an OAuth
+// settings.oura_client_secret, settings.withings_client_secret, app_config.mailgun_api_key,
+// app_config.google_client_secret) would only be encrypted on their NEXT write - an OAuth
 // token refresh, or settings being saved again - which for rarely refreshed values (a Gemini
 // key set once and never edited) could mean weeks or months of delay.
 //

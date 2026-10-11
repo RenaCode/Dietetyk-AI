@@ -1,11 +1,11 @@
 const crypto = require('crypto');
 
-// Encryption of secrets stored in SQLite (OAuth tokens for Oura/Withings in
+// Encryption of secrets stored in SQLite (OAuth tokens for Oura/Withings/Google Fit in
 // `oauth_tokens`, plus per-user and global secrets in `settings`/`app_config` - see
 // utils/secretKeys.js for the list of keys treated as secret). All of these used to sit
 // in the database as plain text: anyone with access to the .db file alone (via the
 // dietetyk-db container or a backup) had ready-to-use access tokens for users' Oura and
-// Withings accounts, plus the Gemini/Mailgun API keys.
+// Withings accounts, plus the Gemini/Mailgun/Google API keys.
 //
 // The key is derived from APP_PASSWORD (scrypt + a fixed, unique "context" string) rather than
 // from a separate ENCRYPTION_KEY variable: APP_PASSWORD is already required, and in production

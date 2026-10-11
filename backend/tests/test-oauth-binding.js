@@ -13,8 +13,9 @@
 //     (nor a linked Google identity, while Google sign-in existed) - so a stolen session could
 //     plant a way back in that outlived the owner's response.
 //
-// These tests drove the Google Fit flow until Google Fit and Google sign-in were removed on
+// These tests drove the Google Fit flow until Google Fit was switched off by default on
 // 2026-10-11; they now drive Oura, which goes through the same binding helpers.
+// tests/test-google-fit-switch.js covers Google Fit with the switch on and off.
 //
 // Run with: node tests/test-oauth-binding.js
 
@@ -153,8 +154,8 @@ async function testTicketsReplaceSessionTokens(baseUrl) {
   const anonymous = await post(baseUrl, '/api/auth/ticket', { service: 'oura' });
   assert(anonymous.status === 401, 'tickets are only issued to an authenticated session');
 
-  // The ticket kinds of the removed Google flows are not issued any more.
-  for (const service of ['google-fit', 'google_link', 'google_reauth']) {
+  // The ticket kinds of the removed Google sign-in flows are not issued any more.
+  for (const service of ['google_link', 'google_reauth']) {
     const r = await post(baseUrl, '/api/auth/ticket', { service, password: PASSWORD }, user.token);
     assert(r.status === 400 && !r.body.ticket, `no '${service}' ticket (got ${r.status})`);
   }

@@ -1,7 +1,7 @@
 // Tests that one user's broken integration cannot stop the hourly sync for everybody else
 // (audit 2026-10-02).
 //
-// syncAllOura / syncAllWithings loop over every connected user and await
+// syncAllOura / syncAllWithings / syncAllGoogleFit loop over every connected user and await
 // syncOura(userId) etc. inside ONE try/catch around the whole loop. The per-user functions
 // catch their own HTTP errors, but getOrRefreshToken() runs before their try - and it calls
 // decrypt() on the stored tokens, which throws on a ciphertext that no longer authenticates
@@ -46,7 +46,7 @@ stubModule('utils/fetchWithTimeout.js', {
 });
 
 const db = require('../db');
-const { syncAllOura, syncAllWithings } = require('../services/sync');
+const { syncAllOura, syncAllWithings, syncAllGoogleFit } = require('../services/sync');
 
 async function main() {
   console.log('=== SYNC-ALL ISOLATION TESTS ===');
@@ -58,10 +58,14 @@ async function main() {
         [id, `sync_isolation_${id}`, `sync_isolation_token_${id}`]
       );
     }
+    // Google Fit is off by default (services/oauthHelpers.js, isGoogleFitEnabled) and its
+    // syncAll then returns before the loop under test; switch it on as an administrator would.
+    await db.run(`INSERT INTO app_config (key, value) VALUES ('google_fit_enabled', '1')`);
     const farFuture = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
     const runs = [
       ['oura', syncAllOura],
-      ['withings', syncAllWithings]
+      ['withings', syncAllWithings],
+      ['google_fit', syncAllGoogleFit]
     ];
     for (const [service, syncAll] of runs) {
       console.log(`\n--- ${service}: a user whose token cannot be decrypted does not stop the next one ---`);

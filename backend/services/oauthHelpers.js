@@ -12,11 +12,12 @@ const { encrypt, decrypt } = require('../utils/encryption');
 // single value both the OAuth signing key and the key material for encrypting the database
 // (utils/encryption.js), and backend/.env.example shipped a CONCRETE value for it, committed to
 // the repository. Anyone who read the repo could therefore sign
-// `<victimId>:google_link:<salt>:<hmac>`, complete the Google consent screen on their OWN Google
-// account, and routes/auth.js would write that Google account onto the victim's user row - after
-// which the ordinary "Sign in with Google" button issued a session for the victim's account.
-// Google sign-in is gone (2026-10-11), but a forged state for the Oura/Withings flows still
-// writes one person's tokens onto another person's account, so the reasoning stands.
+// `<victimId>:google_link:<salt>:<hmac>`, complete the Google consent screen on their OWN
+// Google account, and routes/auth.js would write that Google account onto the victim's user row
+// - after which the ordinary "Sign in with Google" button issued a session for the victim's
+// account. Google sign-in is gone (2026-10-11), but a forged state for the Oura/Withings/Google
+// Fit flows still writes one person's tokens onto another person's account, so the reasoning
+// stands.
 //
 // Hence fail-fast instead of a quiet downgrade: a deployment that silently signs state with a
 // weaker (or publicly known) secret looks perfectly healthy while its CSRF protection is
@@ -26,7 +27,7 @@ const OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET;
 if (!OAUTH_STATE_SECRET) {
   throw new Error(
     'OAUTH_STATE_SECRET is missing from the environment. It signs the `state` parameter of the ' +
-    'OAuth flow (Oura/Withings) and must be a dedicated random value - NOT APP_PASSWORD ' +
+    'OAuth flow (Oura/Withings/Google Fit) and must be a dedicated random value - NOT APP_PASSWORD ' +
     'and not any other secret reused elsewhere. Generate one with `openssl rand -hex 32` and add ' +
     'OAUTH_STATE_SECRET=<value> to backend/.env (see backend/docs/secret-rotation.md).'
   );
@@ -44,6 +45,28 @@ async function getAppConfig(key) {
   return row ? decrypt(row.value) : null;
 }
 
+// Whether the Google OAuth client is set up in the Admin Panel. It is used only by Google Fit
+// since Google sign-in was removed (2026-10-11). Both halves are required: without the secret
+// every callback fails on the code exchange, so offering the button with only a Client ID just
+// moves the error one step later.
+async function isGoogleConfigured() {
+  const [clientId, clientSecret] = await Promise.all([
+    getAppConfig('google_client_id'),
+    getAppConfig('google_client_secret')
+  ]);
+  return !!clientId && !!clientSecret;
+}
+
+// Google Fit is switched OFF unless an administrator turns it on (Admin Panel ->
+// app_config.google_fit_enabled = '1'), the same convention as force_2fa and
+// allow_public_registration: a missing row means off. Off means the whole integration is
+// dormant, not deleted - the routes answer 404, the hourly sync skips it, the UI hides it, and
+// stored tokens and history stay exactly as they are, so switching it back on resumes where it
+// stopped. Read on every call (one indexed row), so the switch takes effect without a restart.
+async function isGoogleFitEnabled() {
+  return (await getAppConfig('google_fit_enabled')) === '1';
+}
+
 // Helper for reading a specific user's settings - decrypt() as above, safe for non-secret
 // values (a no-op without the enc:v1: prefix).
 async function getUserSetting(userId, key) {
@@ -57,7 +80,7 @@ async function getUserSetting(userId, key) {
 // the 302 Location header, and keep that one string as a working login-CSRF ingredient for
 // months - nothing in the flow ever aged it out or recorded that it had been used.
 //
-// Ten minutes is a common lifetime for an authorization code at the providers, so a legitimate user
+// Ten minutes is the window Google itself gives an authorization code, so a legitimate user
 // who reaches the consent screen and approves it is always inside it; a state harvested and
 // then delivered to a victim by e-mail, chat or a shortened link almost never is.
 const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
@@ -101,14 +124,13 @@ function verifyOAuthState(state) {
   // ever, because nothing expires them.
   //
   // This is the bug that made "Sign in with Google" (removed since) impossible to complete.
-  // routes/auth.js bound the sign-in state to the client by passing
-  // `google_login:<sha256 fingerprint>` as the service, which makes the state FIVE
-  // colon-separated fields instead of four. The old `if (parts.length === 4)` check simply
-  // fell through for every one of them, so verifyOAuthState returned null on every
-  // legitimate callback and the flow ended at `/?google_error=csrf_failed` - a CSRF
-  // rejection of the application's own state. The account-linking flow (service
-  // 'google_link', no colon) kept working, which is why this looked like "Google sign-in is
-  // broken" rather than "state verification is broken".
+  // routes/auth.js bound the sign-in state to the client by passing `google_login:<sha256
+  // fingerprint>` as the service, which makes the state FIVE colon-separated fields instead of
+  // four. The old `if (parts.length === 4)` check simply fell through for every one of them, so
+  // verifyOAuthState returned null on every legitimate callback and the flow ended at
+  // `/?google_error=csrf_failed` - a CSRF rejection of the application's own state. The
+  // account-linking flow (service 'google_link', no colon) kept working, which is why this
+  // looked like "Google sign-in is broken" rather than "state verification is broken".
   //
   // Reading userId from the front and salt/hmac from the back keeps every state that
   // generateOAuthState can produce verifiable, whatever the service string contains, and
@@ -170,15 +192,15 @@ function sha256Hex(value) {
 }
 
 // ===== Binding a connect/link flow to the browser that started it =====
-// The signed state of the Oura / Withings flows (and of the since-removed Google Fit and
-// Google-link flows) used to bind only a userId. It proved "this backend minted it for
-// user X", not "the browser now arriving at the callback is user X's": an attacker could start the flow for their OWN account, stop
-// at the provider's consent screen and send that URL to a victim. The victim saw a genuine
-// "Dietetyk AI wants access" screen, approved it, and the callback stored the VICTIM's
-// Google Fit / Oura tokens on the ATTACKER's account (who could then read the victim's
-// activity), or - in the Google-link variant - pinned the victim's Google identity to the
-// attacker's account, so the victim's next "Sign in with Google" landed in the attacker's
-// account. The state was also valid for ten minutes and reusable within them.
+// The signed state of the Oura / Withings / Google Fit flows (and of the since-removed
+// Google-link flow) used to bind only a userId. It proved "this backend minted it for user X",
+// not "the browser now arriving at the callback is user X's": an attacker could start the
+// flow for their OWN account, stop at the provider's consent screen and send that URL to a
+// victim. The victim saw a genuine "Dietetyk AI wants access" screen, approved it, and the
+// callback stored the VICTIM's Google Fit / Oura tokens on the ATTACKER's account (who could
+// then read the victim's activity), or - in the Google-link variant - pinned the victim's
+// Google identity to the attacker's account, so the victim's next "Sign in with Google" landed
+// in the attacker's account. The state was also valid for ten minutes and reusable within them.
 //
 // Same remedy as the (since removed) Google sign-in flow used: a random nonce in a short-lived
 // HttpOnly cookie set on the response that starts the flow, its SHA-256 in the signed state
@@ -378,6 +400,42 @@ async function loadOrRefreshToken(userId, service) {
       `, [encrypt(data.access_token), encrypt(data.refresh_token || token.refresh_token), newExpiresAt, userId]);
 
       return data.access_token;
+    } else if (service === 'google_fit') {
+      const clientId = await getAppConfig('google_client_id');
+      const clientSecret = await getAppConfig('google_client_secret');
+      if (!clientId || !clientSecret) {
+        isPermanentFailure = true;
+        throw new Error('Brak Client ID lub Secret dla Google (konfiguracja globalna).');
+      }
+
+      const response = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: token.refresh_token,
+          client_id: clientId,
+          client_secret: clientSecret
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        if (isRevokedGrant(response.status, errorText)) {
+          isPermanentFailure = true;
+        }
+        throw new Error(`Błąd odświeżania Google Fit (Status ${response.status}): ${errorText}`);
+      }
+
+      const data = await response.json();
+      const newExpiresAt = new Date(Date.now() + data.expires_in * 1000).toISOString();
+      await db.run(`
+        UPDATE oauth_tokens
+        SET access_token = ?, refresh_token = ?, expires_at = ?
+        WHERE user_id = ? AND service = 'google_fit'
+      `, [encrypt(data.access_token), encrypt(data.refresh_token || token.refresh_token), newExpiresAt, userId]);
+
+      return data.access_token;
     }
   } catch (err) {
     console.error(`[OAUTH ERROR] Failed to refresh the token for ${service} (user ${userId}):`, err.message);
@@ -394,6 +452,8 @@ async function loadOrRefreshToken(userId, service) {
 
 module.exports = {
   getAppConfig,
+  isGoogleConfigured,
+  isGoogleFitEnabled,
   getUserSetting,
   generateOAuthState,
   verifyOAuthState,

@@ -32,21 +32,24 @@ async function requireAuth(req, res, next) {
     req.path === '/register-public' ||
     req.path === '/auth/oura/callback' ||
     req.path === '/auth/withings/callback' ||
-    // Routes that INITIATE a connection to Oura/Withings. The frontend navigates to these
-    // via window.location.href, because only a top-level navigation can redirect the browser
-    // to the OAuth provider's consent screen - a fetch() with an Authorization header cannot
-    // produce that redirect.
+    req.path === '/auth/google-fit/callback' ||
+    // Routes that INITIATE a connection to Oura/Withings/Google Fit. The frontend navigates
+    // to these via window.location.href, because only a top-level navigation can redirect the
+    // browser to the OAuth provider's consent screen - a fetch() with an Authorization header
+    // cannot produce that redirect.
     // They are authorised by a one-time ?ticket= (services/authTickets.js) minted by an
     // authenticated POST /api/auth/ticket, NOT by the Bearer header and no longer by the
     // session token in the query string, which ended up in the nginx access log. Each of
-    // these routes consumes the ticket itself and does not use req.user.
+    // these routes consumes the ticket itself and does not use req.user. The two Google Fit
+    // routes are additionally 404 while Google Fit is switched off (routes/integrations.js).
     //
-    // The Google sign-in and Google Fit routes (/auth/google, /auth/google/*, /auth/google-fit,
-    // /auth/google-fit/callback) were listed here until they were removed on 2026-10-11. They
-    // must not come back to this list without their handlers: an anonymous request to a path
-    // on it skips authentication, so the list is exactly the application's public surface.
+    // The Google sign-in routes (/auth/google, /enabled, /callback, /exchange, /link, /reauth)
+    // were listed here until sign-in was removed on 2026-10-11. They must not come back to this
+    // list without their handlers: an anonymous request to a path on it skips authentication,
+    // so the list is exactly the application's public surface.
     req.path === '/auth/oura' ||
-    req.path === '/auth/withings'
+    req.path === '/auth/withings' ||
+    req.path === '/auth/google-fit'
   ) {
     return next();
   }

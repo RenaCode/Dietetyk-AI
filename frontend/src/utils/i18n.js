@@ -539,6 +539,14 @@ const TRANSLATIONS = {
   "Nowe hasła nie są identyczne!": "The new passwords do not match.",
   "Hasło zostało pomyślnie zmienione!": "Password changed.",
 
+  // Google Fit (off by default since 2026-10-11, switched on in the Admin Panel)
+  "Google Fit (Kroki, Kalorie, Aktywność)": "Google Fit (steps, calories, activity)",
+  "Pomyślnie zintegrowano z Google Fit!": "Connected to Google Fit.",
+  "Nie udało się połączyć z Google Fit. Sprawdź konfigurację Google w panelu admina.": "Could not connect to Google Fit. Check the Google configuration in the admin panel.",
+  "Czy na pewno chcesz odłączyć integrację z Google Fit?": "Disconnect the Google Fit integration?",
+  "Odłączono integrację z Google Fit!": "Google Fit integration disconnected.",
+  "✅ Połączono z Google Fit": "✅ Connected to Google Fit",
+  "Włącz integrację Google Fit (kroki i kalorie) dla użytkowników": "Enable the Google Fit integration (steps and calories) for users",
   // Account security (audit 2026-10-09: password re-entry; the Google re-authentication
   // entries went with Google sign-in on 2026-10-11)
   "To konto nie ma ustawionego hasła. Poproś administratora o jednorazowe hasło - przy logowaniu ustawisz własne.": "This account has no password set. Ask an administrator for a one-time password - you will choose your own when you sign in.",

@@ -44,14 +44,14 @@ function assert(condition, message) {
   console.log(`✅ ${message}`);
 }
 
-const calls = { oura: 0, withings: 0, daily: [], loggedErrors: [] };
+const calls = { oura: 0, withings: 0, googleFit: 0, daily: [], loggedErrors: [] };
 // Lets one test make the external sync hang the way a half-delivered HTTP body used to hang
 // it (see utils/fetchWithTimeout.js).
 let ouraGate = null;
 
 // Replaces a module in the require cache BEFORE scheduler.js is loaded, so the scheduler gets
-// these objects instead of the real ones - the real ones would reach the Oura/Withings APIs
-// and Mailgun.
+// these objects instead of the real ones - the real ones would reach the Oura/Withings/Google
+// APIs and Mailgun.
 function stubModule(relativePath, exports) {
   const full = require.resolve(path.join(BACKEND_DIR, relativePath));
   require.cache[full] = { id: full, filename: full, loaded: true, exports, children: [], paths: [] };
@@ -59,7 +59,8 @@ function stubModule(relativePath, exports) {
 
 stubModule('services/sync.js', {
   syncAllOura: async () => { calls.oura += 1; if (ouraGate) await ouraGate; },
-  syncAllWithings: async () => { calls.withings += 1; }
+  syncAllWithings: async () => { calls.withings += 1; },
+  syncAllGoogleFit: async () => { calls.googleFit += 1; }
 });
 stubModule('services/summaries.js', {
   sendDailySummaryForUser: async (userId) => { calls.daily.push(userId); },
@@ -157,8 +158,8 @@ async function testLaterTickInTheSameHourStillChecks() {
   await seedDailySummaryAt('17:00');
   await tickAt('2026-09-15T15:00:00Z'); // 17:00 local, inside the 05:00-22:00 window
   assert(
-    calls.oura === 1 && calls.withings === 1,
-    'a tick inside the sync window runs the two external syncs'
+    calls.oura === 1 && calls.withings === 1 && calls.googleFit === 1,
+    'a tick inside the sync window runs the three external syncs'
   );
   await tickAt('2026-09-15T15:05:00Z'); // 17:05 local, same clock hour
   assert(

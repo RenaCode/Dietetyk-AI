@@ -1,8 +1,7 @@
 // Testy arytmetyki dat w strefie Europe/Warsaw (utils/dates.js).
 //
 // This class of bug is unusually expensive because it does not crash anything - the data
-// simply lands under the wrong day. The Google Fit fetch window (Google Fit was removed on
-// 2026-10-11; getWarsawDayStartMillis stays for the backup schedule) used to start at "now minus
+// simply lands under the wrong day. The Google Fit fetch window used to start at "now minus
 // 7 days", and the daily buckets in dataset:aggregate are aligned to the START POINT - so
 // each day ran from the current hour (14:00-14:00, say) rather than from midnight. Weekly
 // totals came out roughly correct, which kept the bug invisible, while the time-based
@@ -76,9 +75,8 @@ function testCalendarShiftNotMillisecondShift() {
 function testBucketLabellingSurvivesDstChange() {
   console.log('\n--- TEST 3: labelling buckets by MIDPOINT survives the DST change ---');
 
-  // Reproduces what the Google Fit sync in services/sync.js did: a window starting at Warsaw
-  // midnight, fixed 24h buckets (as Google Fit's bucketByTime works), labelled from the bucket
-  // midpoint.
+  // Reproduces what services/sync.js does: a window starting at Warsaw midnight, fixed 24h
+  // buckets (as Google Fit's bucketByTime works), labelled from the bucket midpoint.
   const now = new Date('2026-10-27T10:00:00Z'); // the week spans the 25 Oct DST change
   const start = getWarsawDayStartMillis(now, -7);
 

@@ -1,6 +1,6 @@
 const db = require('./db');
 const { getLocalDateString, getWarsawWallClock } = require('./utils/dates');
-const { syncAllOura, syncAllWithings } = require('./services/sync');
+const { syncAllOura, syncAllWithings, syncAllGoogleFit } = require('./services/sync');
 const { sendWeeklySummaryForUser, sendDailySummaryForUser, sendMonthlySummaryForUser } = require('./services/summaries');
 const { sendWeeklyAdminReport } = require('./services/adminReport');
 const logger = require('./services/logger');
@@ -198,7 +198,7 @@ let lastSyncedHourKey = null;
 // NOTE: setting `lastSyncedHourKey` BEFORE the sync runs only protects
 // against running again WITHIN THE SAME hour (the next 5-minute tick carries the same
 // hourKey). It does NOT protect against overlapping runs when syncing many users -
-// processed SEQUENTIALLY, see syncAllOura/syncAllWithings in sync.js -
+// processed SEQUENTIALLY, see syncAllOura/syncAllWithings/syncAllGoogleFit in sync.js -
 // takes longer than the remainder of the clock hour. Then hourKey changes, the previous
 // condition lets a new call through, and two full runs proceed concurrently, hitting the
 // same external APIs and database rows for the same users. The `isSyncRunning` flag is a
@@ -238,7 +238,7 @@ async function runHourlySyncIfDue() {
 
   // THE ONCE-PER-HOUR GATE PROTECTS THE EXTERNAL SYNCS, NOTHING ELSE (audit 2026-09-23).
   //
-  // The 05:00-22:00 window and the hourKey gate exist for Oura/Withings: there is
+  // The 05:00-22:00 window and the hourKey gate exist for Oura/Withings/Google Fit: there is
   // nothing to fetch overnight, and no reason to burn those API quotas every five minutes.
   // The summary check used to sit behind both of them, and behind the hourKey gate in
   // particular that is fatal, because checkAndSendAutomatedSummaries() decides on
@@ -275,6 +275,7 @@ async function runHourlySyncIfDue() {
         console.log(`[SCHEDULER] Starting the hourly data sync (hour ${warsawHour}:00)...`);
         await syncAllOura();
         await syncAllWithings();
+        await syncAllGoogleFit();
       } catch (err) {
         console.error('[SCHEDULER ERROR] Hourly sync failed:', err);
       } finally {

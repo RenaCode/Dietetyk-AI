@@ -9,7 +9,7 @@ const QRCode = require('qrcode');
 const { sendWeeklySummaryForUser, sendDailySummaryForUser, sendMonthlySummaryForUser } = require('../services/summaries');
 const { buildHealthReportPdf } = require('../services/pdfReport');
 const { createShareLink, listSharesForUser, revokeShare, VALIDITY_OPTIONS_HOURS } = require('../services/sharedReports');
-const { getAppConfig } = require('../services/oauthHelpers');
+const { getAppConfig, isGoogleConfigured, isGoogleFitEnabled } = require('../services/oauthHelpers');
 const { summaryEmailLimiter, pdfRateLimiter } = require('../middleware/rateLimit');
 const { revokeUserSessions } = require('../middleware/auth');
 const loginAttempts = require('../services/loginAttempts');
@@ -346,6 +346,7 @@ router.get('/api/user/profile', async (req, res) => {
 
     const hasOuraRow = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'oura'`, [req.user.id]);
     const hasWithingsRow = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'withings'`, [req.user.id]);
+    const hasGoogleFitRow = await db.get(`SELECT 1 FROM oauth_tokens WHERE user_id = ? AND service = 'google_fit'`, [req.user.id]);
     const ouraSpo2ScopeMissingRow = await db.get(`SELECT 1 FROM settings WHERE user_id = ? AND key = 'oura_spo2_scope_missing' AND value = '1'`, [req.user.id]);
 
     res.json({
@@ -379,7 +380,16 @@ router.get('/api/user/profile', async (req, res) => {
       // false only for an account that has never had a password it knows (see
       // respondIfNoPassword) - the UI then says to ask an administrator instead of asking for
       // a current password (N-S4).
-      password_set: user.password_set !== 0
+      password_set: user.password_set !== 0,
+      // Google Fit is off unless an administrator switches it on (google_fit_enabled - see
+      // isGoogleFitEnabled in services/oauthHelpers.js); Settings shows the card only then.
+      // has_google_fit stays true for a stored connection while the integration is off, so
+      // turning it back on shows the connection that is still there.
+      google_fit_enabled: await isGoogleFitEnabled(),
+      has_google_fit: !!hasGoogleFitRow,
+      // Whether the instance has a Google OAuth client at all - Settings hides "Connect Google
+      // Fit" without one (it would end on a 400 page).
+      google_configured: await isGoogleConfigured()
     });
   } catch (err) {
     console.error(err);
@@ -803,11 +813,12 @@ router.post('/api/user/disable-2fa', async (req, res) => {
 // One-time ticket that starts an OAuth flow by top-level navigation - see
 // services/authTickets.js for why the session token no longer goes in that URL.
 //
-// The data-source flows (Oura, Withings) only bring data INTO the account and need just the
-// session. The ticket kinds that added or proved a way to log in - 'google_link' (password
-// plus TOTP) and 'google_reauth' - went with Google sign-in on 2026-10-11, and so did
-// 'google-fit'; an unknown service is answered with 400.
-const TICKET_SERVICES = new Set(['oura', 'withings']);
+// The data-source flows (Oura, Withings, Google Fit) only bring data INTO the account and need
+// just the session. The ticket kinds that added or proved a way to log in - 'google_link'
+// (password plus TOTP) and 'google_reauth' - went with Google sign-in on 2026-10-11; an
+// unknown service is answered with 400. 'google-fit' is refused with 404 while Google Fit is
+// switched off, like its routes.
+const TICKET_SERVICES = new Set(['oura', 'withings', 'google-fit']);
 
 router.post('/api/auth/ticket', async (req, res) => {
   const { service } = req.body || {};
@@ -816,6 +827,9 @@ router.post('/api/auth/ticket', async (req, res) => {
   }
 
   try {
+    if (service === 'google-fit' && !(await isGoogleFitEnabled())) {
+      return res.status(404).json({ error: 'Integracja Google Fit jest wyłączona.' });
+    }
     res.json({ ticket: issueTicket(req.user.id, service) });
   } catch (err) {
     console.error('[AUTH TICKET ERROR]', err);

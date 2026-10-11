@@ -68,13 +68,9 @@ Two consequences that shape everything below:
 
 Encrypted columns (the full list, from `utils/secretKeys.js` and `oauth_tokens`):
 
-- `oauth_tokens.access_token`, `oauth_tokens.refresh_token` (Oura, Withings)
+- `oauth_tokens.access_token`, `oauth_tokens.refresh_token` (Oura, Withings, Google Fit)
 - `settings.gemini_api_key`, `settings.oura_client_secret`, `settings.withings_client_secret`
-- `app_config.mailgun_api_key`
-
-Google Fit tokens (`oauth_tokens`, service `google_fit`) and `app_config.google_client_secret`
-were on this list until Google sign-in and Google Fit were removed (2026-10-11); the start-up
-migration in `db.js` deletes any such rows.
+- `app_config.mailgun_api_key`, `app_config.google_client_secret`
 
 **Not** derived from either secret, and therefore untouched by rotation:
 
@@ -140,15 +136,15 @@ that does not undo anything: if the production Secret ever carried the committed
   was forgeable. A forged `<victimId>:google_link:<salt>:<hmac>` plus consent on the attacker's
   own Google account made `routes/auth.js` write the attacker's `google_id` onto the victim's
   user row — after which the ordinary "Sign in with Google" button handed out a session for the
-  victim's account. Google sign-in is gone, but a forged state for the Oura/Withings flows still
-  stores one user's tokens on another user's account.
+  victim's account. Google sign-in is gone (2026-10-11), but a forged state for the
+  Oura/Withings/Google Fit flows still stores one user's tokens on another user's account.
 
 ## Order of operations for `APP_PASSWORD`
 
 `APP_PASSWORD` → `ENCRYPTION_KEY` → the ciphertext in the database. Change the first and the
 third stops being readable, because AES-GCM authentication fails under the new key. The failure
 is loud but late: the pod starts and passes its health check, and the damage only shows up when
-something tries to *use* a secret — an Oura/Withings sync, an AI call with a user's
+something tries to *use* a secret — an Oura/Withings/Google Fit sync, an AI call with a user's
 own Gemini key, a Mailgun send. Nothing is destroyed (the ciphertext stays in the table, and a
 failed decrypt throws instead of deleting the row — token rows are only deleted on a 4xx from the
 provider), so putting the old value back restores service. But until you do, the integrations are
@@ -429,7 +425,7 @@ kubectl logs -f job/dietetyk-reencrypt -n default
    kubectl logs deploy/dietetyk-backend -n default -c backend --tail=50
    ```
 
-   - trigger a manual sync for an account that has Oura/Withings connected,
+   - trigger a manual sync for an account that has Oura/Withings/Google Fit connected,
    - run one AI request for a user with their own Gemini key configured,
    - send a test e-mail (Mailgun) from the admin panel.
 
@@ -485,9 +481,9 @@ at runtime, and no wiping of user data.
   maintenance window into a permanent second key path — the migration would never finish.
 
 - **One-off invalidation** (clear the encrypted columns and let everyone re-enter their keys) is
-  worse than re-encryption on every axis: it disconnects every user's Oura/Withings,
+  worse than re-encryption on every axis: it disconnects every user's Oura/Withings/Google Fit,
   forces each of them to fetch their API keys again, and requires the admin to re-enter the
-  Mailgun secret — all for no security gain, since re-encryption produces the
+  Mailgun and Google OAuth (Google Fit) secrets — all for no security gain, since re-encryption produces the
   same end state under the new key. Use it **only** if the old `APP_PASSWORD` has genuinely been
   lost, in which case there is no alternative.
 
@@ -513,9 +509,9 @@ already exist:
   Anything copied off the PVC earlier (an off-site backup, a file pulled to a laptop) is outside
   the cluster's reach entirely and has to be tracked down by hand.
 - **The credentials inside the database.** If a copy of the `.db` ever left the server, treat every
-  secret it contained as compromised regardless of the encryption: the Mailgun API key, per-user
-  Gemini keys, and the Oura/Withings access and refresh tokens (and, in a copy from before
-  2026-10-11, the Google OAuth client secret and Google Fit tokens, if any were ever set). Re-encrypting them under a new key does not make an already-copied value secret again.
+  secret it contained as compromised regardless of the encryption: the Mailgun API key, the Google
+  OAuth client secret, per-user Gemini keys, and the Oura/Withings/Google Fit access and refresh
+  tokens. Re-encrypting them under a new key does not make an already-copied value secret again.
   Revoking and reissuing those downstream credentials is a separate task, and it is the one with
   the shortest deadline.
 - **`ADMIN_INITIAL_PASSWORD`** in the e2e job of `.github/workflows/docker-publish.yml` is a

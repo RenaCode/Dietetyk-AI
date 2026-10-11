@@ -67,7 +67,7 @@ spec:
 ---
 # Egress for both pods: no route into the private networks listed in
 # networkPolicy.egress.siecDomowa (set by the cluster operator), everything else unchanged - DNS, other
-# pods, the internet (Gemini, Anthropic, Oura, Withings, Mailgun). Rules and the reason
+# pods, the internet (Gemini, Anthropic, Google OAuth, Oura, Mailgun). Rules and the reason
 # 0.0.0.0/0 is split in two: `dietetyk.regulyEgress` in _helpers.tpl.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

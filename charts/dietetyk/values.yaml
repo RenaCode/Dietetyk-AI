@@ -99,6 +99,16 @@ ingress:
   # Second Ingress on port 80 that only redirects to HTTPS (templates/middleware.yaml).
   redirectToHttps: true
 
+# SSO (Authelia with enforced 2FA) in front of /api/admin only - templates/ingress-admin.yaml.
+# Off by default; the cluster operator turns it on in the Argo CD valuesObject after
+# registering 2FA in Authelia. The rest of the host never goes behind SSO.
+sso:
+  enabled: false
+  # forwardAuth Middleware in the cluster (renacode-infra k3s/platforma/authelia.yaml).
+  middleware:
+    name: authelia-sso
+    namespace: default
+
 persistence:
   size: 2Gi
   storageClass: local-path

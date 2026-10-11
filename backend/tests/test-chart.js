@@ -123,6 +123,19 @@ function run() {
   assert(!/name: dietetyk-egress/.test(noEgress) && /name: dietetyk-backend\n/.test(noEgress), 'networkPolicy.egress.enabled=false drops only the egress policy');
   const disabled = render('--set', 'networkPolicy.enabled=false');
   assert(!/^kind: NetworkPolicy$/m.test(disabled), 'networkPolicy.enabled=false renders no policy (quick rollback)');
+
+  console.log('\n--- TEST: SSO (Authelia) only in front of /api/admin ---');
+  assert(!/authelia/.test(rendered) && !/^kind: IngressRoute$/m.test(rendered), 'by default nothing goes behind SSO');
+  const sso = render('--set', 'sso.enabled=true');
+  const ssoDocs = sso.split(/^---$/m);
+  const route = ssoDocs.find(d => /^kind: IngressRoute$/m.test(d)) || '';
+  assert(/match: Host\(`dietetyk\.renacode\.com`\) && PathRegexp\(`\(\?i\)\^\/api\/admin`\)/.test(route), 'the admin route matches /api/admin case-insensitively (Express routes ignore case)');
+  assert(/middlewares:\s*\n\s*- name: authelia-sso\s*\n\s*namespace: default/.test(route), 'the admin route goes through the Authelia forwardAuth middleware');
+  assert(/entryPoints:\s*\n\s*- websecure/.test(route) && /secretName: dietetyk-tls-cert/.test(route), 'HTTPS only, with the main certificate');
+  assert(!/cert-manager\.io\/cluster-issuer:/.test(route), 'the route requests no second certificate');
+  const mainWithSso = ssoDocs.find(d => /^kind: Ingress$/m.test(d) && /^ {2}name: dietetyk$/m.test(d)) || '';
+  assert(!/authelia/.test(mainWithSso) && /path: \//.test(mainWithSso), 'the public Ingress (users, Apple Health, OAuth callbacks, shared reports) stays without SSO');
+  assert(ssoDocs.filter(d => /authelia/.test(d)).length === 1, 'exactly one object references Authelia');
 }
 
 try {

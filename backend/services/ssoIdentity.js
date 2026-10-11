@@ -19,12 +19,14 @@ const db = require('../db');
 const isSsoEnabled = () => process.env.SSO_NAGLOWKI === '1';
 
 // Authelia admits a user to dietetyk.renacode.com only in one of these groups (renacode-infra
-// k3s/platforma/authelia.yaml, rule for the host). Checked here as well, so that a rule
+// k3s/platforma/authelia.yaml, rule for the host): `wlasciciel` - the owner's private,
+// everyday account; `admins` - the separate account that administers the app; `dietetyk` -
+// anyone else given access later. Checked here as well, so that a rule
 // widened by mistake on the Authelia side - or a host attached to the middleware before its
 // rule was written - does not silently become access to health data. This decides ENTRY
 // only: the application role (admin or not) still comes from users.role, never from the
 // header, so membership of `admins` in Authelia does not make anyone an admin here.
-const ALLOWED_GROUPS = ['admins', 'dietetyk'];
+const ALLOWED_GROUPS = ['wlasciciel', 'admins', 'dietetyk'];
 
 // The contract's charset for Remote-User. Authelia's user names fit it; anything else means
 // the header did not come from Authelia, and guessing what was meant is how a lenient parser

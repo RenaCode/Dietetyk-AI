@@ -170,7 +170,9 @@ async function testRefusals() {
 
   const user = await createUser();
   const noGroup = await ssoLogin(identity('ania', user.email, 'rodzina'));
-  assert(noGroup.status === 403 && noGroup.body.ssoDenied === 'group', `a user outside admins/dietetyk is 403 (got ${noGroup.status})`);
+  assert(noGroup.status === 403 && noGroup.body.ssoDenied === 'group', `a user outside wlasciciel/admins/dietetyk is 403 (got ${noGroup.status})`);
+  const wrongGroups = await ssoLogin(identity('ania', user.email, 'rodzina, wlasciciele,dietetyka'));
+  assert(wrongGroups.status === 403, `group names must match exactly, not by prefix (got ${wrongGroups.status})`);
   const emptyGroups = await ssoLogin({ 'Remote-User': 'ania', 'Remote-Email': user.email });
   assert(emptyGroups.status === 403, `no Remote-Groups at all is 403 (got ${emptyGroups.status})`);
   assert(await sessionCount(user.id) === 0, 'neither refusal created a session');
@@ -189,6 +191,17 @@ async function testRefusals() {
   const pending = await createUser({ status: 'pending' });
   const pend = await ssoLogin(identity('nowy', pending.email));
   assert(pend.status === 403 && pend.body.ssoDenied === 'inactive', `a pending invitation is not an account yet (got ${pend.status})`);
+
+  // The owner's two Authelia users (decision 2026-10-11): `marcin` in `wlasciciel` maps to the
+  // private everyday account, `admin` in `admins` to the account that is admin IN THE DATABASE.
+  const ownerPrivate = await createUser();
+  const ownerSso = await ssoLogin(identity('marcin', ownerPrivate.email, 'wlasciciel'));
+  assert(ownerSso.status === 200, `the owner group admits to the host (got ${ownerSso.status})`);
+  const ownerHeaders = identity('marcin', ownerPrivate.email, 'wlasciciel');
+  const ownerProfile = await call('GET', '/api/user/profile', { token: ownerSso.body.token, headers: ownerHeaders });
+  assert(ownerProfile.status === 200 && ownerProfile.body.username === ownerPrivate.username && ownerProfile.body.role === 'user', 'as the private account, with its own role');
+  const ownerAdmin = await call('GET', '/api/admin/users', { token: ownerSso.body.token, headers: ownerHeaders });
+  assert(ownerAdmin.status === 403, `the owner group grants no admin rights in the app (got ${ownerAdmin.status})`);
 
   const plain = await createUser();
   const asAdminsGroup = await ssoLogin(identity('ania', plain.email, 'admins'));

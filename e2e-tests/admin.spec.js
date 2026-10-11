@@ -55,10 +55,20 @@ test.describe('Panel admina: akcje potwierdzane hasłem administratora', () => {
     await expect(row).toContainText('Wymuszone');
 
     // Cancel leaves everything as it was.
-    await row.getByRole('button', { name: 'Usuń' }).click();
+    const deleteButton = row.getByRole('button', { name: 'Usuń' });
+    await deleteButton.click();
     await expect(dialog).toBeVisible();
+    await expect(dialog.locator('#admin-password-input')).toBeFocused();
+    // Tab stays inside the modal: from its last button back to the password field.
+    await dialog.getByRole('button', { name: 'Usuń' }).focus();
+    await page.keyboard.press('Tab');
+    await expect(dialog.locator('#admin-password-input')).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(dialog.getByRole('button', { name: 'Usuń' })).toBeFocused();
     await dialog.getByRole('button', { name: 'Anuluj' }).click();
     await expect(dialog).toHaveCount(0);
     await expect(row).toBeVisible();
+    // Focus returns to the button that opened the dialog.
+    await expect(deleteButton).toBeFocused();
   });
 });

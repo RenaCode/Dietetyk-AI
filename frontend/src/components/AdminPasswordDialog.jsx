@@ -16,12 +16,24 @@ export default function AdminPasswordDialog({ request, onCancel, onDone, onLogou
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const inputRef = useRef(null);
+  const formRef = useRef(null);
+  // The button that opened the dialog: focus goes back to it on close, so a keyboard or
+  // screen-reader user is not dropped at the top of the page. A row that is gone by then (a
+  // deleted user) leaves focus where the browser puts it.
+  const openerRef = useRef(null);
 
   useEffect(() => {
     setPassword('');
     setError('');
     setIsSubmitting(false);
-    if (request && inputRef.current) inputRef.current.focus();
+    if (request) {
+      openerRef.current = document.activeElement;
+      if (inputRef.current) inputRef.current.focus();
+    } else if (openerRef.current) {
+      const opener = openerRef.current;
+      openerRef.current = null;
+      if (opener.isConnected && typeof opener.focus === 'function') opener.focus();
+    }
   }, [request]);
 
   useEffect(() => {
@@ -32,6 +44,23 @@ export default function AdminPasswordDialog({ request, onCancel, onDone, onLogou
   }, [request, isSubmitting, onCancel]);
 
   if (!request) return null;
+
+  // aria-modal tells assistive technology the page behind is inert, but Tab still walked out
+  // into it - onto the very buttons the dialog stands in front of. Keep it inside.
+  const handleKeyDown = (e) => {
+    if (e.key !== 'Tab' || !formRef.current) return;
+    const items = Array.from(formRef.current.querySelectorAll('input, button')).filter((el) => !el.disabled);
+    if (items.length === 0) return;
+    const first = items[0];
+    const last = items[items.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -71,6 +100,7 @@ export default function AdminPasswordDialog({ request, onCancel, onDone, onLogou
       onClick={() => { if (!isSubmitting) onCancel(); }}
     >
       <form
+        ref={formRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="admin-password-title"
@@ -79,6 +109,7 @@ export default function AdminPasswordDialog({ request, onCancel, onDone, onLogou
         style={{ width: '100%', maxWidth: '440px', margin: 0 }}
         onClick={(e) => e.stopPropagation()}
         onSubmit={handleSubmit}
+        onKeyDown={handleKeyDown}
       >
         <h3 id="admin-password-title" className="card-title" style={{ marginBottom: '12px' }}>{request.title}</h3>
         {request.message && (

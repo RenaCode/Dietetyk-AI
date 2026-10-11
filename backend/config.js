@@ -3,7 +3,17 @@ const dotenv = require('dotenv');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 // Load environment variables
+//
+// Except SSO_NAGLOWKI, which may come only from the pod spec, where the chart sets it from
+// `sso.enabled` - the same value that strips client-supplied Remote-* headers in Traefik
+// (services/ssoIdentity.js). A copy in the Secret's .env would survive switching SSO off and
+// leave the app believing identity headers that nothing strips any more.
+const ssoFlagFromPodSpec = process.env.SSO_NAGLOWKI;
 dotenv.config({ path: path.join(__dirname, '.env') });
+if (ssoFlagFromPodSpec === undefined && process.env.SSO_NAGLOWKI !== undefined) {
+  delete process.env.SSO_NAGLOWKI;
+  console.warn('[SSO] SSO_NAGLOWKI in .env is ignored - it is set only by the chart (sso.enabled).');
+}
 
 const PORT = process.env.PORT || 3000;
 

@@ -1395,7 +1395,13 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 onChange={(e) => setEmailInput(e.target.value)}
                 placeholder="np. jan.kowalski@example.com"
                 required
+                readOnly={!!userProfile.email_managed_by_sso}
               />
+              {userProfile.email_managed_by_sso && (
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '6px 0 0' }}>
+                  {t("To Twój login w portalu logowania (SSO). Adres zmienia administrator w Authelii.")}
+                </p>
+              )}
             </div>
 
             <div className="input-group">

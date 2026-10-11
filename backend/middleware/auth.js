@@ -1,4 +1,5 @@
 const db = require('../db');
+const { readSsoIdentity, identityMatchesEmail } = require('../services/ssoIdentity');
 
 // Deletes a user's session rows. With `keepToken` the caller's own session survives, which is
 // what every "this was me, log everything else out" action wants: the user stays where they
@@ -30,6 +31,9 @@ async function requireAuth(req, res, next) {
     req.path === '/register-invitation' ||
     req.path === '/change-password-forced' ||
     req.path === '/register-public' ||
+    // Turns Authelia's identity headers into a session (routes/auth.js). It reads nothing but
+    // those headers, and only with SSO_NAGLOWKI=1 - without the flag it is a plain 404.
+    req.path === '/auth/sso' ||
     req.path === '/auth/oura/callback' ||
     req.path === '/auth/withings/callback' ||
     req.path === '/auth/google-fit/callback' ||
@@ -71,7 +75,7 @@ async function requireAuth(req, res, next) {
   }
   try {
     const session = await db.get(`
-      SELECT s.*, u.username, u.totp_enabled, u.role, u.first_name, u.last_name
+      SELECT s.*, u.username, u.email, u.totp_enabled, u.role, u.first_name, u.last_name
       FROM sessions s
       JOIN users u ON s.user_id = u.id
       WHERE s.token = ? AND datetime(s.expires_at) > datetime('now')
@@ -96,6 +100,32 @@ async function requireAuth(req, res, next) {
     // token format changes.
     if (session.is_temp === 1) {
       return res.status(401).json({ error: 'Sesja tymczasowa. Dokończ logowanie (2FA / zmiana hasła).' });
+    }
+
+    // Single sign-on (services/ssoIdentity.js). `readSsoIdentity` returns null unless
+    // SSO_NAGLOWKI=1 AND the request carries Remote-User, so with the flag off everything
+    // below is skipped and a forged header changes nothing.
+    //
+    // An 'sso' session was handed out on the strength of Authelia's headers alone - no password,
+    // no app TOTP - so it is worth something only on a request that still carries the same
+    // identity. Without this a token copied out of localStorage would work from anywhere the
+    // headers do not come from: through `kubectl port-forward`, or after the flag is switched
+    // off (a session issued under SSO must not outlive the trust it was issued under).
+    //
+    // A session of ANOTHER account than the one Authelia names is refused too, whatever its
+    // kind: on a shared browser the previous user's token stays in localStorage after they log
+    // out of Authelia and someone else logs in. `ssoReauth` tells the frontend to drop the
+    // token and ask POST /api/auth/sso for one of its own.
+    const sso = readSsoIdentity(req);
+    if (sso && sso.error) {
+      return res.status(sso.error.status).json(sso.error.body);
+    }
+    const ssoIdentity = sso ? sso.identity : null;
+    if (session.auth_method === 'sso' && !ssoIdentity) {
+      return res.status(401).json({ error: 'Sesja SSO jest ważna tylko po zalogowaniu przez portal. Zaloguj się ponownie.', ssoReauth: true });
+    }
+    if (ssoIdentity && !identityMatchesEmail(ssoIdentity, session.email)) {
+      return res.status(401).json({ error: 'Sesja należy do innego użytkownika niż zalogowany w portalu. Zaloguj się ponownie.', ssoReauth: true });
     }
 
     // Deny access when the user has 2FA enabled but the session is not yet verified.
@@ -153,6 +183,10 @@ async function requireAuth(req, res, next) {
     // deleting the rest. Reading the Authorization header again inside each route would
     // duplicate the 'Bearer ' handling above and drift from it.
     req.sessionToken = token;
+    // 'sso' or 'password' - routes that treat the two differently (the e-mail change in
+    // routes/account.js, logout in routes/auth.js) read this rather than the row again.
+    req.authMethod = session.auth_method === 'sso' ? 'sso' : 'password';
+    req.ssoIdentity = ssoIdentity;
 
     req.user = {
       id: session.user_id,

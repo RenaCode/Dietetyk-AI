@@ -21,6 +21,7 @@ const { geocodeLocation } = require('../utils/weatherContext');
 const { sessionFingerprint, emailRevertMessage, notifyEmailChanged, EMAIL_CHANGE_REVERT_DAYS } = require('../services/emailChange');
 const { cleanUpAfterCredentialReset } = require('../services/accountCleanup');
 const { isImageDataUrl } = require('../utils/imageDataUrl');
+const { isSsoEnabled } = require('../services/ssoIdentity');
 
 // Simple email format validation (not full RFC 5322 - this is enough to reject obviously
 // invalid values written straight to the database or used as a Mailgun recipient).
@@ -137,6 +138,16 @@ async function respondIfNoPassword(req, res) {
   return false;
 }
 
+// A session from single sign-on (req.authMethod === 'sso') goes through this exactly like a
+// password session - it is NOT a fresh authentication (renacode-infra docs/sso-tozsamosc.md,
+// section 4). Its only proof is a header Authelia sets for as long as its own cookie lives
+// (up to 12 hours, or 7 days with "remember me"), so an unlocked laptop or a stolen Authelia
+// cookie would otherwise be enough to set a new local password - turning a borrowed browser
+// into a permanent credential, the break-glass one included - or to enrol an attacker's TOTP,
+// or to mail the health summaries elsewhere. The local password stays the second key for
+// those. The cost: an SSO user who has forgotten a password they never type gets a one-time
+// one from an administrator (scripts/reset-password.js), as an account without one already
+// does.
 async function confirmCurrentPassword(req, res, password, action) {
   if (await respondIfNoPassword(req, res)) return false;
   if (!password || typeof password !== 'string') {
@@ -381,6 +392,9 @@ router.get('/api/user/profile', async (req, res) => {
       // respondIfNoPassword) - the UI then says to ask an administrator instead of asking for
       // a current password (N-S4).
       password_set: user.password_set !== 0,
+      // True on a request that came through Authelia: the address is the SSO login there, and
+      // POST /api/user/profile refuses to change it (see there). Settings shows it read-only.
+      email_managed_by_sso: !!req.ssoIdentity,
       // Google Fit is off unless an administrator switches it on (google_fit_enabled - see
       // isGoogleFitEnabled in services/oauthHelpers.js); Settings shows the card only then.
       // has_google_fit stays true for a stored connection while the integration is off, so
@@ -411,6 +425,23 @@ router.post('/api/user/profile', async (req, res) => {
     const oldEmail = currentRow ? currentRow.email || null : null;
     if (email === '') email = null;
     const emailChanged = email !== undefined && (email || null) !== oldEmail;
+    // Behind Authelia the address IS the login: POST /api/auth/sso finds the account by it
+    // (services/ssoIdentity.js), and requireAuth refuses any session whose account's address
+    // differs from Remote-Email. Changing it here would log the user out on the next request
+    // and leave them with "no account for <old address>" - while the summaries went to an
+    // address Authelia knows nothing about. So on a request that came through Authelia the
+    // change is refused outright, before the password is asked for or counted.
+    //
+    // The way to change it: the address in Authelia's users.yml first, then here from a
+    // break-glass session (`kubectl port-forward`, the app's own login, no Remote-* headers) - the
+    // branch below lets that through. Both orders leave a window in which SSO answers 403 for
+    // this user; this order keeps it to the minutes between the two edits.
+    if (emailChanged && req.ssoIdentity) {
+      return res.status(409).json({
+        error: 'Adres e-mail jest Twoim loginem w portalu logowania (SSO) - zmienia go administrator, w Authelii i tutaj.',
+        ssoManagedEmail: true
+      });
+    }
     if (emailChanged && !(await confirmCurrentPassword(req, res, currentPassword, 'change-email'))) {
       return;
     }
@@ -491,9 +522,17 @@ router.post('/api/user/profile', async (req, res) => {
         && Number.isFinite(changedAtMs)
         && Date.now() - changedAtMs <= EMAIL_CHANGE_REVERT_DAYS * 24 * 60 * 60 * 1000;
       const restorePoint = continuesSeries ? history.previous_email : oldEmail;
+      // With SSO on, the only change that gets this far is the break-glass one above, made to
+      // follow an address already changed in Authelia. Recording it as undoable would let the
+      // user's next "log out other devices" - from an SSO session, a different session than
+      // this one - put the OLD address back (services/emailChange.js), which no longer
+      // matches Authelia, and lock them out of SSO. The undo exists against a stolen session;
+      // this one needed cluster access and the account's password, so there is nothing for it
+      // to undo. The series is cleared instead of written.
+      const undoable = !isSsoEnabled();
       await db.run(
-        `UPDATE users SET email = ?, previous_email = ?, email_changed_at = datetime('now'), email_changed_by_session = ? WHERE id = ?`,
-        [email, restorePoint, fingerprint, req.user.id]
+        `UPDATE users SET email = ?, previous_email = ?, email_changed_at = ${undoable ? "datetime('now')" : 'NULL'}, email_changed_by_session = ? WHERE id = ?`,
+        [email, undoable ? restorePoint : null, undoable ? fingerprint : null, req.user.id]
       );
       logger.security(`Account e-mail changed (UID: ${req.user.id})`, 'AUTH_EMAIL_CHANGE', { userId: req.user.id }, req.ip, req.user.id);
       await notifyEmailChanged(oldEmail, email, currentRow.username);
@@ -837,6 +876,14 @@ router.post('/api/auth/ticket', async (req, res) => {
   }
 });
 
+// Revoking sessions does not end access gained through Authelia: a device with a live Authelia
+// cookie passes forwardAuth on its next page load and POST /api/auth/sso gives it a new
+// session without asking anything. Saying "the other devices were logged out" without this
+// would be the false comfort the revocation exists to replace. Ending those takes logging out
+// of the portal on that device, or an Authelia administrator.
+const SSO_SESSIONS_NOTE = ' Urządzenia z aktywną sesją w portalu logowania (SSO) zalogują się ponownie same - zakończysz ją, wylogowując się na tamtym urządzeniu, albo poproś administratora.';
+const ssoSessionsNote = () => (isSsoEnabled() ? SSO_SESSIONS_NOTE : '');
+
 // 6c. Change the user's password
 router.post('/api/user/change-password', async (req, res) => {
   const { currentPassword, newPassword } = req.body;
@@ -902,7 +949,7 @@ router.post('/api/user/change-password', async (req, res) => {
 
     res.json({
       success: true,
-      message: parts.join(', ') + '.',
+      message: parts.join(', ') + '.' + ssoSessionsNote(),
       revokedSessions,
       revokedShares,
       syncTokenRotated: true,
@@ -939,7 +986,8 @@ router.post('/api/user/logout-all', async (req, res) => {
     res.json({
       success: true,
       message: 'Pozostałe urządzenia zostały wylogowane. Adres webhooka Apple Health został zmieniony - zaktualizuj go w Health Auto Export.'
-        + (emailRevert ? ` Ponadto: ${emailRevertMessage(emailRevert)}.` : ''),
+        + (emailRevert ? ` Ponadto: ${emailRevertMessage(emailRevert)}.` : '')
+        + ssoSessionsNote(),
       revokedSessions: revoked,
       syncTokenRotated: true,
       emailReverted: !!emailRevert

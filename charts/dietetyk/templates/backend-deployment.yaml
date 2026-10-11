@@ -65,6 +65,16 @@ spec:
               value: "3000"
             - name: TZ
               value: "Europe/Warsaw"
+            {{- if .Values.sso.enabled }}
+            # Trust in Authelia's Remote-* headers (backend/services/ssoIdentity.js) comes from
+            # the same value that puts the header-stripping middleware on every router - never
+            # one without the other. backend/config.js ignores a copy in the Secret's .env, which
+            # would stay on after sso.enabled was switched off, with nothing stripping the headers.
+            - name: SSO_NAGLOWKI
+              value: "1"
+            - name: SSO_LOGOUT_URL
+              value: {{ printf "%s/logout?rd=%s" (trimSuffix "/" .Values.sso.portalUrl) (urlquery (printf "https://%s/" .Values.ingress.host)) | quote }}
+            {{- end }}
           volumeMounts:
             - name: data-volume
               mountPath: /app/data

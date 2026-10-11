@@ -140,6 +140,17 @@ function run() {
   assert(/secretName: dietetyk-tls-cert/.test(route) && !/cert-manager\.io\/cluster-issuer:/.test(route), 'HTTPS with the main certificate, no second certificate');
   const ssoRedirect = ssoDocs.find(d => /^ {2}name: dietetyk-http-redirect$/m.test(d)) || '';
   assert(!/authelia/.test(ssoRedirect), 'the HTTP->HTTPS redirect needs no SSO (it never reaches the app)');
+
+  // The app trusts Remote-* headers only with SSO_NAGLOWKI=1 (backend/services/ssoIdentity.js).
+  // The same switch must set it - never trust without the stripping middleware, never the
+  // middleware without the app reading who is logged in.
+  const backendDoc = (docs) => docs.find(d => /^kind: Deployment$/m.test(d) && /^ {2}name: dietetyk-backend$/m.test(d)) || '';
+  const ssoBackend = backendDoc(ssoDocs);
+  assert(/- name: SSO_NAGLOWKI\n\s*value: "1"/.test(ssoBackend), 'sso.enabled sets SSO_NAGLOWKI=1 in the backend pod');
+  assert(/- name: SSO_LOGOUT_URL\n\s*value: "https:\/\/auth\.renacode\.com\/logout\?rd=https%3A%2F%2Fdietetyk\.renacode\.com%2F"/.test(ssoBackend), 'and the portal logout URL returning to this host');
+  assert(!/SSO_/.test(backendDoc(rendered.split(/^---$/m))), 'by default the backend gets no SSO variable at all');
+  const frontendSso = ssoDocs.find(d => /^kind: Deployment$/m.test(d) && /^ {2}name: dietetyk-frontend$/m.test(d)) || '';
+  assert(frontendSso && !/SSO_NAGLOWKI/.test(frontendSso), 'only the backend reads the flag');
 }
 
 try {

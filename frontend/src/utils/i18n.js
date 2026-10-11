@@ -214,6 +214,13 @@ const TRANSLATIONS = {
   "Anuluj": "Cancel",
   "Wyloguj": "Log Out",
   "Sesja wygasła. Zaloguj się ponownie.": "Session expired. Please log in again.",
+
+  // Single sign-on (Authelia)
+  "Logowanie przez portal…": "Signing in through the portal…",
+  "Ładowanie…": "Loading…",
+  "Logowanie SSO odrzucone.": "Single sign-on was refused.",
+  "Nie udało się utrzymać sesji SSO. Odśwież stronę albo zaloguj się hasłem.": "Could not keep the single sign-on session. Reload the page or sign in with your password.",
+  "To Twój login w portalu logowania (SSO). Adres zmienia administrator w Authelii.": "This is your sign-in portal (SSO) login. An administrator changes it in Authelia.",
   "Błąd pobierania profilu.": "Error fetching user profile.",
   "Brak klucza API": "Missing API Key",
 

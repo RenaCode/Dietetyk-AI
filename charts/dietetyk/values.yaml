@@ -116,6 +116,10 @@ sso:
   stripHeadersMiddleware:
     name: authelia-naglowki
     namespace: default
+  # The same switch also sets SSO_NAGLOWKI=1 in the backend pod (templates/backend-deployment.yaml):
+  # the app trusts Remote-* headers ONLY then, so stripping and trust are always on or off
+  # together. "Wyloguj" sends the browser to <portalUrl>/logout?rd=https://<ingress.host>/.
+  portalUrl: https://auth.renacode.com
 
 persistence:
   size: 2Gi

@@ -12,6 +12,7 @@ import { resolveTabParam } from './utils/tabParam';
 import { newMealSubmission, retryMealSubmission } from './utils/mealSubmission';
 import TotpSecretKey from './components/TotpSecretKey';
 import { NavIcon, LogoMark } from './components/NavIcons';
+import { requestSsoSession, reloadForSso, SSO_HOST_KEY, SSO_LOGOUT_URL_KEY } from './utils/sso';
 
 // Today's date in YYYY-MM-DD, in the timezone the BACKEND uses (Europe/Warsaw).
 //
@@ -166,6 +167,19 @@ export default function App() {
 // A counter compares the response against the request that actually started last, the same
 // way ActivityTracker.jsx already does it for measurements (measurementsRequestRef).
   const dashboardRequestSeqRef = useRef(0);
+
+  // Single sign-on (utils/sso.js). Without a token the app first asks POST /api/auth/sso for
+  // one; the login form appears only when that says SSO is off, or on the break-glass path
+  // (no identity), or with the refusal it explains. `ssoChecking` keeps the form from flashing
+  // up for the fraction of a second before an SSO session arrives.
+  const [ssoChecking, setSsoChecking] = useState(!localStorage.getItem('diet_session_token'));
+  // Set by the "Wyloguj" button: after a deliberate logout the app must not sign straight back
+  // in from the identity headers while the browser is on its way to the portal.
+  const loggedOutByUserRef = useRef(false);
+  // Times of recent SSO sessions handed out. One that is refused the moment it is issued would
+  // otherwise loop - 401, sign in, 401 - minting a session row on every turn. Only sessions
+  // count: on an instance without SSO every 401 asks once more and gets a harmless 404.
+  const ssoAttemptsRef = useRef([]);
 // Whether the LAST attempt to read /api/dashboard actually failed, as opposed to simply
 // not having finished. On the very first render isLoading is still false (the effect that
 // starts the fetch has not run yet), so keying the placeholder off isLoading alone would
@@ -200,6 +214,54 @@ export default function App() {
       dashboardRequestSeqRef.current += 1;
     };
   }, [selectedDate, sessionToken]);
+
+// Sign in from Authelia's identity whenever there is no session: on load, and after any 401
+// has cleared the token (an SSO session refused because another person is now logged in to
+// the portal on this browser, or one that expired) - the same request then hands out a new one.
+  useEffect(() => {
+    if (sessionToken) {
+      loggedOutByUserRef.current = false;
+      return;
+    }
+    // An invitation link is for finishing a registration; the account behind it is not active
+    // yet, so SSO could only answer "no account" over the registration form.
+    if (registerToken || window.location.pathname === '/register' || loggedOutByUserRef.current) {
+      setSsoChecking(false);
+      return;
+    }
+    const now = Date.now();
+    ssoAttemptsRef.current = ssoAttemptsRef.current.filter(at => now - at < 60 * 1000);
+    if (ssoAttemptsRef.current.length >= 3) {
+      setSsoChecking(false);
+      setLoginError(t('Nie udało się utrzymać sesji SSO. Odśwież stronę albo zaloguj się hasłem.'));
+      return;
+    }
+
+    let cancelled = false;
+    setSsoChecking(true);
+    requestSsoSession().then((result) => {
+      if (cancelled) return;
+      if (result.kind === 'session') {
+        ssoAttemptsRef.current.push(Date.now());
+        localStorage.setItem(SSO_HOST_KEY, '1');
+        if (result.logoutUrl) localStorage.setItem(SSO_LOGOUT_URL_KEY, result.logoutUrl);
+        localStorage.setItem('diet_session_token', result.token);
+        setLoginError('');
+        setSessionToken(result.token);
+      } else if (result.kind === 'off') {
+        localStorage.removeItem(SSO_HOST_KEY);
+        localStorage.removeItem(SSO_LOGOUT_URL_KEY);
+      } else if (result.kind === 'denied') {
+        localStorage.setItem(SSO_HOST_KEY, '1');
+        setLoginError(result.error || t('Logowanie SSO odrzucone.'));
+      } else if (result.kind === 'lost' && localStorage.getItem(SSO_HOST_KEY) === '1' && reloadForSso()) {
+        // The Authelia session ran out: a reload goes through the portal's login and back.
+        return;
+      }
+      setSsoChecking(false);
+    });
+    return () => { cancelled = true; };
+  }, [sessionToken, registerToken]);
 
 // Frequent meals (round 9) - independent of selectedDate (computed from the whole history),
 // so they are fetched only when the session changes, not on every date change.
@@ -809,8 +871,10 @@ export default function App() {
     }
   };
 
-  const handleLogout = async () => {
-    if (sessionToken) {
+  // `alreadyLoggedOut`: the caller has called POST /api/logout itself (handleLogoutClick).
+  // Every other caller is a 401 handler, which passes nothing.
+  const handleLogout = async (alreadyLoggedOut = false) => {
+    if (sessionToken && alreadyLoggedOut !== true) {
       try {
         await fetch('/api/logout', {
           method: 'POST',
@@ -851,6 +915,36 @@ export default function App() {
       meals: [],
       aiAdvice: t('Zaloguj się, aby zobaczyć porady.')
     });
+  };
+
+  // The "Wyloguj" button. Behind Authelia the browser then goes to the portal, which ends the
+  // Authelia session and shows its login page - deleting the app session alone would be undone
+  // by the next request, which still carries the identity. The URL comes from the backend
+  // (POST /api/logout), or from the one remembered at sign-in when the session is already gone.
+  const handleLogoutClick = async () => {
+    loggedOutByUserRef.current = true;
+    let portalUrl = '';
+    if (sessionToken) {
+      try {
+        const res = await fetch('/api/logout', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${sessionToken}` }
+        });
+        const data = await res.json().catch(() => ({}));
+        portalUrl = data.logoutUrl || '';
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    if (!portalUrl && localStorage.getItem(SSO_HOST_KEY) === '1') {
+      portalUrl = localStorage.getItem(SSO_LOGOUT_URL_KEY) || '';
+    }
+    if (portalUrl) {
+      localStorage.removeItem('diet_session_token');
+      window.location.assign(portalUrl);
+      return;
+    }
+    await handleLogout(true);
   };
 
   if (registerToken) {
@@ -928,6 +1022,16 @@ export default function App() {
               </button>
             </div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (!sessionToken && ssoChecking) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '90vh', padding: '16px', position: 'relative', zIndex: 10 }}>
+        <div className="glass-card" style={{ width: '100%', maxWidth: '400px', textAlign: 'center', color: 'var(--text-muted)' }}>
+          {localStorage.getItem(SSO_HOST_KEY) === '1' ? t("Logowanie przez portal…") : t("Ładowanie…")}
         </div>
       </div>
     );
@@ -1264,7 +1368,7 @@ export default function App() {
             )}
             <span className="user-chip-name">{userProfile.username}</span>
           </div>
-          <button type="button" className="logout-btn" onClick={handleLogout}>
+          <button type="button" className="logout-btn" onClick={handleLogoutClick}>
             <NavIcon name="logout" size={18} />
             <span>{t("Wyloguj")}</span>
           </button>

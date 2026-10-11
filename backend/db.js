@@ -627,6 +627,15 @@ const initDb = async () => {
     console.log(`[DB MIGRATE] Capped ${cappedSessions.changes} session(s) without an absolute expiry at their current expires_at.`);
   }
 
+  // How the session was established: NULL for the application's own login (password, plus
+  // its TOTP where enabled), 'sso' for one created from Authelia's identity headers
+  // (services/ssoIdentity.js, POST /api/auth/sso). An 'sso' session never asked for the
+  // password or the app's TOTP, so middleware/auth.js accepts it only on a request that still
+  // carries the matching identity - the marker must come from the row, because the token
+  // itself says nothing about how it was obtained. Existing rows are all password sessions,
+  // which NULL already says; there is nothing to backfill.
+  await addColumn(`ALTER TABLE sessions ADD COLUMN auth_method TEXT DEFAULT NULL`);
+
   // 5b. Tabela blokady brute-force logowania (login_attempts) - przeniesiona
   // from process memory (a Map) into the database, so that blocks survive a restart of the
   // backend container - during a deploy, for instance. See services/loginAttempts.js.

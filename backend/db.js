@@ -514,14 +514,14 @@ const initDb = async () => {
   }
 
   // Insert the default user targets
-  const defaultMarcinSettings = [
+  const defaultFirstUserSettings = [
     { key: 'target_calories', value: '2500' },
     { key: 'target_protein', value: '150' },
     { key: 'target_carbs', value: '250' },
     { key: 'target_fat', value: '80' },
     { key: 'bmr', value: '1800' }
   ];
-  for (const s of defaultMarcinSettings) {
+  for (const s of defaultFirstUserSettings) {
     await run(`INSERT OR IGNORE INTO settings (user_id, key, value) VALUES (1, ?, ?)`, [s.key, s.value]);
   }
 

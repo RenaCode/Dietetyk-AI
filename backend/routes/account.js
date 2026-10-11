@@ -499,7 +499,7 @@ router.post('/api/user/profile', async (req, res) => {
       await notifyEmailChanged(oldEmail, email, currentRow.username);
     }
 
-    // First/last name - used by the AI dietician to personalise its phrasing ('Hi Marcin').
+    // First/last name - used by the AI dietician to personalise its phrasing ('Hi <first name>').
     // Trimmed, with an empty string turned into NULL so the model never receives a literally
     // empty string as the user's name.
     if (first_name !== undefined) {

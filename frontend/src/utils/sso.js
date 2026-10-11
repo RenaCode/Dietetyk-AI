@@ -14,6 +14,20 @@ export const SSO_HOST_KEY = 'diet_sso_host';
 export const SSO_LOGOUT_URL_KEY = 'diet_sso_logout_url';
 const RELOAD_AT_KEY = 'diet_sso_reload_at';
 
+// The portal logout address goes straight into window.location, so only an https: URL is
+// accepted - a `javascript:` value (from a misconfigured SSO_LOGOUT_URL, or written into
+// localStorage by anything that can) would otherwise run as code on this origin. Returns ''
+// for anything else, which callers treat as "no portal".
+export function safeLogoutUrl(url) {
+  if (typeof url !== 'string' || !url) return '';
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' ? parsed.href : '';
+  } catch {
+    return '';
+  }
+}
+
 // Asks the backend for a session from the identity headers. Never throws. One of:
 //   { kind: 'session', token, logoutUrl } - logged in;
 //   { kind: 'off' }      - SSO is not enabled on this instance: show the login form;
@@ -43,7 +57,7 @@ export async function requestSsoSession(fetchImpl = fetch) {
     return { kind: 'lost' };
   }
   if (res.ok && data.token) {
-    return { kind: 'session', token: data.token, logoutUrl: data.logoutUrl || '' };
+    return { kind: 'session', token: data.token, logoutUrl: safeLogoutUrl(data.logoutUrl) };
   }
   if (data.ssoEnabled === false) return { kind: 'off' };
   if (res.status === 401) return { kind: 'none' };

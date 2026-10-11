@@ -1,7 +1,7 @@
 // Run with: npm test  (node:test, part of Node - no test dependency is added)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { requestSsoSession, shouldReload, reloadForSso, installSsoFetchGuard, SSO_HOST_KEY } from './sso.js';
+import { requestSsoSession, shouldReload, reloadForSso, installSsoFetchGuard, safeLogoutUrl, SSO_HOST_KEY } from './sso.js';
 
 const jsonResponse = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 
@@ -85,4 +85,13 @@ test('the fetch guard leaves everything else alone', async () => {
   installSsoFetchGuard(ok);
   assert.equal((await ok.fetch('/api/x')).status, 200);
   assert.equal(ok.reloads, 0);
+});
+
+test('only an https portal address is followed on logout', async () => {
+  assert.equal(safeLogoutUrl('https://auth.example/logout?rd=x'), 'https://auth.example/logout?rd=x');
+  for (const bad of ['javascript:alert(1)', 'JAVASCRIPT:alert(1)', 'http://auth.example/logout', 'data:text/html,x', '//evil.example', '', null, 42]) {
+    assert.equal(safeLogoutUrl(bad), '', String(bad));
+  }
+  const r = await requestSsoSession(async () => jsonResponse(200, { token: 'sess_x', logoutUrl: 'javascript:alert(1)', ssoEnabled: true }));
+  assert.deepEqual(r, { kind: 'session', token: 'sess_x', logoutUrl: '' });
 });

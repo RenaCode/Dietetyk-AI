@@ -148,6 +148,7 @@ async function testSsoLoginByEmail() {
     await settle();
     const audit = await db.get(`SELECT message, details FROM app_logs WHERE category = 'AUTH_SSO_LOGIN' AND user_id = ? ORDER BY id DESC`, [user.id]);
     assert(audit && /ania/.test(audit.message) && /"groups":\["dietetyk"\]/.test(audit.details), 'the SSO login is in app_logs with the Authelia user and groups');
+    assert(!`${audit.message} ${audit.details}`.toLowerCase().includes(user.email.toLowerCase()), 'without the e-mail address (personal data, the UID leads to it)');
 
     // The break-glass path keeps the app's own second factor.
     const local = await passwordLogin(user.username);

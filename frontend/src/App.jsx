@@ -12,7 +12,7 @@ import { resolveTabParam } from './utils/tabParam';
 import { newMealSubmission, retryMealSubmission } from './utils/mealSubmission';
 import TotpSecretKey from './components/TotpSecretKey';
 import { NavIcon, LogoMark } from './components/NavIcons';
-import { requestSsoSession, reloadForSso, SSO_HOST_KEY, SSO_LOGOUT_URL_KEY } from './utils/sso';
+import { requestSsoSession, reloadForSso, safeLogoutUrl, SSO_HOST_KEY, SSO_LOGOUT_URL_KEY } from './utils/sso';
 
 // Today's date in YYYY-MM-DD, in the timezone the BACKEND uses (Europe/Warsaw).
 //
@@ -931,13 +931,13 @@ export default function App() {
           headers: { 'Authorization': `Bearer ${sessionToken}` }
         });
         const data = await res.json().catch(() => ({}));
-        portalUrl = data.logoutUrl || '';
+        portalUrl = safeLogoutUrl(data.logoutUrl);
       } catch (e) {
         console.error(e);
       }
     }
     if (!portalUrl && localStorage.getItem(SSO_HOST_KEY) === '1') {
-      portalUrl = localStorage.getItem(SSO_LOGOUT_URL_KEY) || '';
+      portalUrl = safeLogoutUrl(localStorage.getItem(SSO_LOGOUT_URL_KEY));
     }
     if (portalUrl) {
       localStorage.removeItem('diet_session_token');

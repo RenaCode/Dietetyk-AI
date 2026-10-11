@@ -278,11 +278,14 @@ router.post('/api/auth/sso', async (req, res) => {
 
     const token = await createSession(account.user.id, true, PERMANENT_SESSION_TTL_DAYS, 'sso');
     // The audit trail the weekly security report reads: who came in through SSO, under which
-    // Authelia identity, as which account. Groups are recorded because they decided entry.
+    // Authelia identity, as which account. Groups are recorded because they decided entry. The
+    // address is left out: it is the account's own (the UID leads to it), and every SSO
+    // sign-in - each page load without a token - would otherwise copy personal data into
+    // app_logs and the report. A refusal keeps it: there no account exists to look it up in.
     logger.security(
-      `SSO login: ${identity.user} <${identity.email}> as ${account.user.username} (UID: ${account.user.id})`,
+      `SSO login: ${identity.user} as ${account.user.username} (UID: ${account.user.id})`,
       'AUTH_SSO_LOGIN',
-      { remoteUser: identity.user, email: identity.email, groups: identity.groups, userId: account.user.id },
+      { remoteUser: identity.user, groups: identity.groups, userId: account.user.id },
       req.ip,
       account.user.id
     );

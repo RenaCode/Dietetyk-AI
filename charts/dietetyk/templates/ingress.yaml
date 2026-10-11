@@ -5,7 +5,13 @@ metadata:
   name: {{ include "dietetyk.fullname" . }}
   labels:
     {{- include "dietetyk.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
+  {{- /* SSO (values `sso`): strip client-supplied identity headers, then Authelia forwardAuth.
+  Machine paths that must stay reachable without a browser login: ingress-machine.yaml. */}}
+  {{- $annotations := deepCopy (.Values.ingress.annotations | default dict) }}
+  {{- if .Values.sso.enabled }}
+  {{- $_ := set $annotations "traefik.ingress.kubernetes.io/router.middlewares" (join "," .Values.sso.middlewares) }}
+  {{- end }}
+  {{- with $annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}

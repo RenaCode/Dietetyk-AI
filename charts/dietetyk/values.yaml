@@ -99,6 +99,24 @@ ingress:
   # Second Ingress on port 80 that only redirects to HTTPS (templates/middleware.yaml).
   redirectToHttps: true
 
+# SSO (Authelia with enforced 2FA, renacode-infra k3s/platforma/authelia.yaml) in front of the
+# WHOLE host, except two machine paths (templates/ingress-machine.yaml): the Apple Health webhook
+# and token-shared PDF reports. Off by default; the cluster operator turns it on in the Argo CD
+# valuesObject after registering 2FA. With it on, every user needs an Authelia account (group
+# `dietetyk`) - public registration is closed in practice. The app's own login stays.
+sso:
+  enabled: false
+  # Middlewares on the main Ingress, IN THIS ORDER: strip client-supplied Remote-* identity
+  # headers, then forwardAuth (which sets them from Authelia). Identity contract:
+  # renacode-infra docs/sso-tozsamosc.md.
+  middlewares:
+    - default-authelia-naglowki@kubernetescrd
+    - default-authelia-sso@kubernetescrd
+  # The same header-strip middleware for the machine routes (IngressRoute syntax).
+  stripHeadersMiddleware:
+    name: authelia-naglowki
+    namespace: default
+
 persistence:
   size: 2Gi
   storageClass: local-path

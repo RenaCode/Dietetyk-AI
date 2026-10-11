@@ -26,6 +26,10 @@ services:
     image: ghcr.io/renacode/dietetyk-ai-frontend:latest
     container_name: dietetyk-frontend
     restart: unless-stopped
+    # The image runs nginx as uid 101 since 2026-10 (nginx-unprivileged, for k3s). This legacy
+    # setup reads root-only certbot keys from /etc/letsencrypt and listens on 80/443
+    # (docker/nginx.conf), so it keeps running the container as root.
+    user: "0:0"
     ports:
       - "80:80"
       - "443:443"

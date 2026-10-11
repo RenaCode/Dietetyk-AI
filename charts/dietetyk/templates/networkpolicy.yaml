@@ -58,8 +58,10 @@ spec:
           podSelector:
             matchLabels:
               {{- toYaml .Values.networkPolicy.traefik.podLabels | nindent 14 }}
+      # The POD's port (8080 since the frontend runs as non-root), not the Service's 80:
+      # a NetworkPolicy matches traffic after the Service has translated it.
       ports:
-        - port: 80
+        - port: 8080
           protocol: TCP
 {{- if .Values.networkPolicy.egress.enabled }}
 ---

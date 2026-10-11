@@ -40,7 +40,8 @@ data:
     }
 
     server {
-        listen 80;
+        # 8080, not 80: nginx runs as non-root (frontend-deployment.yaml).
+        listen 8080;
         server_name localhost;
         server_tokens off;
 

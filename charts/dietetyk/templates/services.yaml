@@ -24,8 +24,10 @@ metadata:
     app.kubernetes.io/component: frontend
 spec:
   ports:
+    # The Service stays on 80 (the Ingress points at it); the pod listens on 8080 since it
+    # runs as non-root (frontend-deployment.yaml).
     - port: 80
-      targetPort: 80
+      targetPort: 8080
       protocol: TCP
       name: http
   selector:

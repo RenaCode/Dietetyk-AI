@@ -193,7 +193,7 @@ async function requireAuth(req, res, next) {
       username: session.username,
       role: session.role,
       // First/last name (optional, set in Settings) - used to personalise the AI
-      // dietician's phrasing ("Hi Marcin" rather than the username).
+      // dietician's phrasing ("Hi <first name>" rather than the username).
       first_name: session.first_name,
       last_name: session.last_name
     };

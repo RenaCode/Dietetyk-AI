@@ -87,7 +87,7 @@ async function syncAppleColumns(db, userId, dates) {
       `SELECT ${columns.join(', ')}, apple_columns_json FROM health_metrics WHERE user_id = ? AND date = ?`,
       [userId, date]
     );
-    let lastApple = {};
+    let lastApple;
     try {
       lastApple = current && current.apple_columns_json ? JSON.parse(current.apple_columns_json) : {};
     } catch {

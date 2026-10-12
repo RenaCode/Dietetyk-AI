@@ -25,7 +25,7 @@ const SUMMARY_RETRY_BACKOFF_MS = 60 * 60 * 1000;
 async function claimSummaryAttempt(userId, kind, periodKey) {
   const key = `summary_attempt_${kind}`;
   const row = await db.get(`SELECT value FROM settings WHERE user_id = ? AND key = ?`, [userId, key]);
-  let previous = null;
+  let previous;
   try {
     previous = row ? JSON.parse(row.value) : null;
   } catch {

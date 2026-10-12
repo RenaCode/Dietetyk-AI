@@ -34,7 +34,7 @@ process.env.OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || 'test-oauth-s
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { authenticator } = require('otplib');
+const { newTotpSecret, totpCode } = require('../utils/totp');
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 
@@ -50,7 +50,7 @@ function assert(condition, message) {
 // A TOTP code that is guaranteed NOT to be the valid one for this secret, so the test never
 // flakes by accidentally guessing right on the tick boundary.
 function wrongCode(secret) {
-  const valid = authenticator.generate(secret);
+  const valid = totpCode(secret);
   return valid === '000000' ? '111111' : '000000';
 }
 
@@ -152,7 +152,7 @@ async function testTempTokenBlockedButSetupWorks(baseUrl) {
 
   const setup = await post(baseUrl, '/api/verify-2fa-setup', {
     tempToken,
-    code: authenticator.generate(dbUser.totp_secret)
+    code: totpCode(dbUser.totp_secret)
   });
   assert(setup.status === 200, `POST /api/verify-2fa-setup with the tempToken succeeds (got ${setup.status}, expected 200)`);
   assert(typeof setup.body.token === 'string', 'verify-2fa-setup returns a permanent session token');
@@ -202,7 +202,7 @@ async function testForcedPasswordChangeStillWorks(baseUrl) {
 async function test2faLockoutAccumulatesAcrossLogins(baseUrl) {
   console.log('\n--- TEST: 2FA lockout accumulates across re-logins ---');
   await setForce2fa('0');
-  const secret = authenticator.generateSecret();
+  const secret = newTotpSecret();
   const user = await createUser({ totp_enabled: 1, totp_secret: secret });
 
   const login1 = await post(baseUrl, '/api/login', { username: user.username, password: PASSWORD });

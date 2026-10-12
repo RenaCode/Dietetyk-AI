@@ -339,7 +339,7 @@ router.get('/api/dashboard', async (req, res) => {
     const calorieBaseline = await getCalorieBaseline(req.user.id, date);
     let totalEaten = { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, sugar: 0, sodium: 0 };
     const meals = mealRows.map(r => {
-      let analysis = {};
+      let analysis;
       try {
         analysis = JSON.parse(r.analysis_json);
       } catch (e) {

@@ -542,7 +542,7 @@ async function sendWeeklySummaryForUser(userId, customEmail = null) {
   // and cycle position - see utils/appleHealthPrompt.js. Never throws.
   const appleContext = await buildAppleHealthPeriodContext(db, userId, shiftDate(getLocalDateString(), -6), getLocalDateString(), language);
 
-  let advicePrompt = '';
+  let advicePrompt;
   if (language === 'en') {
     advicePrompt = `
 You are a professional AI sports dietician working in the "Dietetyk AI" app.
@@ -745,7 +745,7 @@ async function sendDailySummaryForUser(userId, customEmail = null) {
   const userLocation = await getUserLocationOverride(userId);
   const weatherTimeContext = await getWeatherAndTimeContext(language, userLocation?.lat, userLocation?.lon);
 
-  let advicePrompt = '';
+  let advicePrompt;
   if (language === 'en') {
     advicePrompt = `
 You are a professional, friendly AI sports dietician working in the "Dietetyk AI" app.
@@ -902,7 +902,7 @@ async function sendMonthlySummaryForUser(userId, customEmail = null) {
   // and cycle position - see utils/appleHealthPrompt.js. Never throws.
   const appleContext = await buildAppleHealthPeriodContext(db, userId, shiftDate(getLocalDateString(), -29), getLocalDateString(), language);
 
-  let advicePrompt = '';
+  let advicePrompt;
   if (language === 'en') {
     advicePrompt = `
 You are a professional AI sports dietician working in the "Dietetyk AI" app.

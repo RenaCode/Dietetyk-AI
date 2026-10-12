@@ -309,8 +309,8 @@ jobs:
 # The chart has no image to gate: Argo CD applies it as soon as it lands on main. This job
 # is its check on every PR - helm lint/template, and the frontend's nginx config must start
 # with no DNS at all (scripts/check-nginx-chart.sh; after the 2026-10-05 node reboot nginx
-# did not start because the backend's name was resolved at load time). helm and docker come
-# preinstalled on ubuntu-latest.
+# did not start because the backend's name was resolved at load time). helm is pinned (the
+# runner image's copy changes with the image); docker comes with ubuntu-latest.
   test-chart:
     name: Helm chart and nginx config
     runs-on: ubuntu-latest
@@ -320,6 +320,11 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Set up helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.0
 
       - name: Render the chart and test nginx without DNS
         run: ./scripts/check-nginx-chart.sh

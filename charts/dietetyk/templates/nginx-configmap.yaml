@@ -39,6 +39,24 @@ data:
         ""      $scheme;
     }
 
+    # The backend, resolved at run time instead of at start. A literal host in proxy_pass is
+    # resolved once while nginx loads its config, and a failed lookup is fatal: after a node
+    # reboot (2026-10-05) the pod started before cluster DNS answered and nginx did not come
+    # up at all. `server ... resolve` (open-source nginx since 1.27.3; the image runs 1.31.6)
+    # lets nginx start with the name unresolved - /api answers 502 at once - and re-resolves
+    # it in the background every `valid`, so it recovers by itself and follows a new
+    # ClusterIP. When DNS stops answering it keeps the last good address, so a CoreDNS restart
+    # does not interrupt /api (unlike proxy_pass with a variable, which needs DNS again after
+    # every `valid` and answers 502 without it).
+    # The resolver ignores resolv.conf's search domains, hence the FQDN; and its address must
+    # be an IP - a hostname there is itself resolved at start (values.yaml, frontend.nginx).
+    upstream dietetyk_backend {
+        zone dietetyk_backend 64k;
+        resolver {{ .Values.frontend.nginx.resolver }} valid={{ .Values.frontend.nginx.resolverValid }} ipv6=off;
+        resolver_timeout 5s;
+        server {{ include "dietetyk.fullname" . }}-backend.{{ .Release.Namespace }}.svc.{{ .Values.frontend.nginx.clusterDomain }}:3000 resolve;
+    }
+
     server {
         # 8080, not 80: nginx runs as non-root (frontend-deployment.yaml).
         listen 8080;
@@ -96,19 +114,12 @@ data:
             # what keeps the token out of the log - error_log above does that, also for the
             # larger bodies that still go to a temp file.
             client_body_buffer_size 1m;
-            # The backend's name is resolved per request, not at start. With a literal host in
-            # proxy_pass nginx resolves it once while loading the config, and a failed lookup
-            # is fatal: after a node reboot (2026-10-05) the pod started before cluster DNS
-            # answered and nginx did not come up at all. With a variable it starts regardless,
-            # answers /api with 502 while the name does not resolve, and recovers by itself.
-            # The resolver directive does not use resolv.conf's search domains, hence the FQDN;
-            # and its address must be an IP - a hostname there is again resolved at start.
-            # No URI part after the port: nginx then sends the client's original request URI
-            # (path and query string, unnormalised), exactly as the literal proxy_pass did.
-            resolver {{ .Values.frontend.nginx.resolver }} valid={{ .Values.frontend.nginx.resolverValid }} ipv6=off;
-            resolver_timeout 5s;
-            set $dietetyk_backend "{{ include "dietetyk.fullname" . }}-backend.{{ .Release.Namespace }}.svc.{{ .Values.frontend.nginx.clusterDomain }}:3000";
-            proxy_pass http://$dietetyk_backend;
+            # Upstream `dietetyk_backend` above: the name is resolved in the background, not at start.
+            proxy_pass http://dietetyk_backend;
+            # `proxy_redirect default` would now match the upstream's name (http://dietetyk_backend/api),
+            # which the backend never sends. This is the rewrite the literal proxy_pass used to get
+            # by default: an absolute Location pointing at the Service becomes this host's /api.
+            proxy_redirect http://{{ include "dietetyk.fullname" . }}-backend:3000/api /api;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection 'upgrade';

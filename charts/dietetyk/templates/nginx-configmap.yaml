@@ -39,6 +39,24 @@ data:
         ""      $scheme;
     }
 
+    # The backend, resolved at run time instead of at start. A literal host in proxy_pass is
+    # resolved once while nginx loads its config, and a failed lookup is fatal: after a node
+    # reboot (2026-10-05) the pod started before cluster DNS answered and nginx did not come
+    # up at all. `server ... resolve` (open-source nginx since 1.27.3; the image runs 1.31.6)
+    # lets nginx start with the name unresolved - /api answers 502 at once - and re-resolves
+    # it in the background every `valid`, so it recovers by itself and follows a new
+    # ClusterIP. When DNS stops answering it keeps the last good address, so a CoreDNS restart
+    # does not interrupt /api (unlike proxy_pass with a variable, which needs DNS again after
+    # every `valid` and answers 502 without it).
+    # The resolver ignores resolv.conf's search domains, hence the FQDN; and its address must
+    # be an IP - a hostname there is itself resolved at start (values.yaml, frontend.nginx).
+    upstream dietetyk_backend {
+        zone dietetyk_backend 64k;
+        resolver {{ .Values.frontend.nginx.resolver }} valid={{ .Values.frontend.nginx.resolverValid }} ipv6=off;
+        resolver_timeout 5s;
+        server {{ include "dietetyk.fullname" . }}-backend.{{ .Release.Namespace }}.svc.{{ .Values.frontend.nginx.clusterDomain }}:3000 resolve;
+    }
+
     server {
         # 8080, not 80: nginx runs as non-root (frontend-deployment.yaml).
         listen 8080;
@@ -96,7 +114,13 @@ data:
             # what keeps the token out of the log - error_log above does that, also for the
             # larger bodies that still go to a temp file.
             client_body_buffer_size 1m;
-            proxy_pass http://{{ include "dietetyk.fullname" . }}-backend:3000;
+            # Upstream `dietetyk_backend` above: the name is resolved in the background, not at start.
+            proxy_pass http://dietetyk_backend;
+            # `proxy_redirect default` would now match the upstream's name (http://dietetyk_backend/),
+            # which the backend never sends. The literal `proxy_pass http://<svc>:3000;` (no URI)
+            # rewrote every Location under http://<svc>:3000/ to this host's own path - any path,
+            # not only /api. This keeps that behaviour.
+            proxy_redirect http://{{ include "dietetyk.fullname" . }}-backend:3000/ /;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection 'upgrade';

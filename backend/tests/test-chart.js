@@ -63,6 +63,20 @@ function run() {
   // D-1 (2026-10-04): the error log printed the raw request line with the sync_token.
   assert(/^\s*error_log \/dev\/stderr error;/m.test(nginx), 'the error log is at level error (no request-line warnings)');
   assert(/location \/api \{[^}]*client_body_buffer_size 1m;/.test(nginx), 'webhook bodies up to 1 MB stay in memory');
+  // 2026-10-05: after a node reboot nginx resolved the literal backend host in proxy_pass at
+  // start, before cluster DNS answered, and did not come up. Starting with no DNS at all is
+  // checked by scripts/check-nginx-chart.sh (nginx -t with --network none, CI job test-chart).
+  // `server ... resolve` rather than a variable in proxy_pass: a variable needs DNS again after
+  // every `valid` (502 on all of /api during a CoreDNS restart), the upstream keeps the last
+  // good address.
+  const upstream = (nginx.match(/upstream dietetyk_backend \{[^}]*\}/) || [''])[0];
+  assert(/zone dietetyk_backend \d+k;/.test(upstream) && /\n\s*resolver 10\.43\.0\.10 valid=\d+s ipv6=off;/.test(upstream), 'upstream dietetyk_backend has a zone and a resolver given as an IP (kube-dns), not a hostname');
+  assert((upstream.match(/^\s*server .*$/gm) || []).join() === '        server dietetyk-backend.default.svc.cluster.local:3000 resolve;', 'its only server is the backend FQDN, re-resolved at run time');
+  assert(/location \/api \{[^}]*\n\s*proxy_pass http:\/\/dietetyk_backend;/.test(nginx), 'location /api proxies to that upstream, with no URI part (request URI passed unchanged)');
+  assert(/proxy_pass http:\/\/dietetyk_backend;\n(\s*#.*\n)*\s*proxy_redirect http:\/\/dietetyk-backend:3000\/ \/;/.test(nginx), 'every absolute Location under the backend Service is still rewritten to this host (as the literal proxy_pass did)');
+  assert((nginx.match(/^\s*proxy_pass .*$/gm) || []).every(l => /proxy_pass http:\/\/dietetyk_backend;/.test(l)), 'no proxy_pass with a literal host:port (resolved at start)');
+  const otherNs = render('-n', 'apps', '--set', 'frontend.nginx.resolver=192.0.2.53');
+  assert(/server dietetyk-backend\.apps\.svc\.cluster\.local:3000 resolve;/.test(otherNs) && /resolver 192\.0\.2\.53 /.test(otherNs), 'the FQDN follows the release namespace and the resolver comes from values');
   const frontend = find('Deployment', 'dietetyk-frontend');
   assert(/checksum\/nginx-config: [0-9a-f]{64}/.test(frontend), 'a config change rolls the frontend pod (subPath mounts never update)');
 

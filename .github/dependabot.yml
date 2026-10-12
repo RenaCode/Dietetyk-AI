@@ -13,6 +13,16 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # ESLint 10 is held back in the frontend (10.2026, #64): eslint-plugin-react 7.37.5, the
+    # latest release, declares peer eslint up to ^9.7, so `npm ci` stops with ERESOLVE, and
+    # forced past that the plugin crashes on the removed context.getFilename(). Drop this
+    # entry once eslint-plugin-react supports ESLint 10. The backend has no such plugin and
+    # is already on 10.
+    ignore:
+      - dependency-name: eslint
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: npm
     directory: /
     schedule:

@@ -64,7 +64,7 @@ async function claimMealSubmission(userId, key) {
   );
   if (!row) return claimMealSubmission(userId, key); // released between the two statements
   if (row.status === 'done') {
-    let mealIds = [];
+    let mealIds;
     try { mealIds = JSON.parse(row.meal_ids || '[]'); } catch (e) { mealIds = []; }
     return { state: 'done', mealIds };
   }
@@ -267,7 +267,7 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
       analysis = JSON.parse(responseText);
     } catch (err) {
       console.error('[API ERROR] Failed to parse the AI response:', responseText);
-      throw new Error('AI nie zwróciło poprawnego formatu JSON.');
+      throw new Error('AI nie zwróciło poprawnego formatu JSON.', { cause: err });
     }
 
     // With a photo the AI may return several separate meals (analysis.meals - see the prompt
@@ -425,7 +425,7 @@ router.get('/api/meals', async (req, res) => {
     const calorieBaseline = await getCalorieBaseline(req.user.id, date);
 
     const meals = rows.map(r => {
-      let analysis = {};
+      let analysis;
       try {
         analysis = JSON.parse(r.analysis_json);
       } catch (e) {

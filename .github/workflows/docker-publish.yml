@@ -129,6 +129,14 @@ jobs:
           npm ci --ignore-scripts
           npm rebuild sqlite3
 
+      # Lint (12.10.2026). Until then nothing ran ESLint on the backend, so the @eslint/js 10
+      # bump (#65) went green while `eslint .` reported 10 errors from rules it newly enabled
+      # (no-useless-assignment, preserve-caught-error). Errors fail the job; warnings do not.
+      # Before the tests: it needs no secrets and fails in seconds.
+      - name: Lint (backend)
+        working-directory: ./backend
+        run: npm run lint
+
       # Test secrets are generated per run instead of being written into this file. A constant
       # here would be the same mistake as the constant that used to sit in backend/.env.example:
       # a value in the repository is a value an attacker has, and APP_PASSWORD is the material

@@ -73,7 +73,7 @@ function readTrustProxyFromServer() {
   try {
     return JSON.parse(raw.replace(/'/g, '"'));
   } catch (e) {
-    throw new Error(`❌ unrecognised 'trust proxy' value in app.js: ${raw}`);
+    throw new Error(`❌ unrecognised 'trust proxy' value in app.js: ${raw}`, { cause: e });
   }
 }
 

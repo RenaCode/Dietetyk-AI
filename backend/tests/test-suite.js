@@ -1,6 +1,6 @@
 const db = require('../db');
 const bcrypt = require('bcryptjs');
-const { authenticator } = require('otplib');
+const { newTotpSecret } = require('../utils/totp');
 
 async function testDatabaseSchema() {
   console.log('\n--- TEST 1: Weryfikacja Schematu Bazy Danych ---');
@@ -57,7 +57,7 @@ async function testUserMfaForcedFlow() {
   }
 
   if (user.totp_enabled === 0 && user.username !== 'admin') {
-    const secret = user.totp_secret || authenticator.generateSecret();
+    const secret = user.totp_secret || newTotpSecret();
     console.log(`✅ Sukces: Użytkownik ${user.username} ma wyłączone 2FA, generujemy klucz tajny: ${secret}`);
   } else {
     console.error('❌ Error: login did not enforce 2FA for a standard user.');

@@ -3,8 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const { authenticator } = require('otplib');
-const { verifyTotpOnce } = require('../utils/totp');
+const { verifyTotpOnce, newTotpSecret, totpKeyUri } = require('../utils/totp');
 const QRCode = require('qrcode');
 const { sendWeeklySummaryForUser, sendDailySummaryForUser, sendMonthlySummaryForUser } = require('../services/summaries');
 const { buildHealthReportPdf } = require('../services/pdfReport');
@@ -614,7 +613,7 @@ router.post('/api/user/setup-2fa', async (req, res) => {
       return;
     }
 
-    const secret = authenticator.generateSecret();
+    const secret = newTotpSecret();
     await db.run(`UPDATE users SET totp_secret = ? WHERE id = ?`, [secret, req.user.id]);
 
     const tempToken = 'temp_' + crypto.randomBytes(24).toString('hex');
@@ -629,7 +628,7 @@ router.post('/api/user/setup-2fa', async (req, res) => {
       VALUES (?, ?, ?, 0, 1)
     `, [tempToken, req.user.id, expiresAt]);
 
-    const otpauth = authenticator.keyuri(user.username, 'Dietetyk AI', secret);
+    const otpauth = totpKeyUri(user.username, secret);
     const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
 
     res.json({

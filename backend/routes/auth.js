@@ -2,8 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const bcrypt = require('bcryptjs');
-const { authenticator } = require('otplib');
-const { verifyTotpOnce } = require('../utils/totp');
+const { verifyTotpOnce, newTotpSecret, totpKeyUri } = require('../utils/totp');
 const QRCode = require('qrcode');
 const crypto = require('crypto');
 const loginAttempts = require('../services/loginAttempts');
@@ -156,11 +155,11 @@ async function completeLogin(user) {
       // A stolen session could call setup-2fa, read the secret from the response, and wait:
       // once an administrator forced 2FA, the owner was shown the attacker's secret as their
       // new authenticator, and both of them held a valid second factor from then on.
-      const secret = authenticator.generateSecret();
+      const secret = newTotpSecret();
       await db.run(`UPDATE users SET totp_secret = ? WHERE id = ?`, [secret, user.id]);
 
       const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
-      const otpauth = authenticator.keyuri(user.username, 'Dietetyk AI', secret);
+      const otpauth = totpKeyUri(user.username, secret);
       const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
 
       return { status: 'setup_2fa', tempToken, qrCode: qrCodeDataUrl, secret };
@@ -538,10 +537,10 @@ router.post('/api/change-password-forced', async (req, res) => {
       const isUserForce2fa = user.force_2fa === 1;
 
       if (isForce2faEnabled || isUserForce2fa) {
-        const secret = authenticator.generateSecret();
+        const secret = newTotpSecret();
         await db.run(`UPDATE users SET totp_secret = ? WHERE id = ?`, [secret, session.user_id]);
 
-        const otpauth = authenticator.keyuri(user.username, 'Dietetyk AI', secret);
+        const otpauth = totpKeyUri(user.username, secret);
         const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
 
     // B-W5: invalidate the old tempToken and issue a new one before setup_2fa
@@ -626,7 +625,7 @@ router.post('/api/register-invitation', async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const secret = authenticator.generateSecret();
+    const secret = newTotpSecret();
     
     await db.run(`
       UPDATE users 
@@ -639,7 +638,7 @@ router.post('/api/register-invitation', async (req, res) => {
 
     if (isForce2faEnabled) {
       const tempToken = await createSession(user.id, false, TEMP_SESSION_TTL_DAYS);
-      const otpauth = authenticator.keyuri(username, 'Dietetyk AI', secret);
+      const otpauth = totpKeyUri(username, secret);
       const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
 
       res.json({
@@ -705,7 +704,7 @@ router.post('/api/register-public', async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, 10);
-    const secret = authenticator.generateSecret();
+    const secret = newTotpSecret();
     const syncToken = 'sync_' + crypto.randomBytes(24).toString('hex');
 
     const result = await db.run(`
@@ -724,7 +723,7 @@ router.post('/api/register-public', async (req, res) => {
 
     if (isForce2faEnabled) {
       const tempToken = await createSession(result.id, false, TEMP_SESSION_TTL_DAYS);
-      const otpauth = authenticator.keyuri(username, 'Dietetyk AI', secret);
+      const otpauth = totpKeyUri(username, secret);
       const qrCodeDataUrl = await QRCode.toDataURL(otpauth);
 
       res.json({

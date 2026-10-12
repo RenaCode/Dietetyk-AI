@@ -48,7 +48,7 @@ stubModule('utils/fetchWithTimeout.js', {
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { authenticator } = require('otplib');
+const { newTotpSecret } = require('../utils/totp');
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 
@@ -201,7 +201,7 @@ async function testPasswordCheckLimitedPerAccount(baseUrl) {
 
 async function testForced2faAlwaysFreshSecret(baseUrl) {
   console.log('\n--- TEST (B-S2): forced 2FA enrolment never reuses a planted secret ---');
-  const planted = authenticator.generateSecret();
+  const planted = newTotpSecret();
   const user = await createUser({ force_2fa: 1, totp_secret: planted });
   const r = await call(baseUrl, 'POST', '/api/login', { username: user.username, password: PASSWORD });
   assert(r.body.status === 'setup_2fa', 'login asks for 2FA enrolment');

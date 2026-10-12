@@ -32,7 +32,7 @@ process.env.OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || 'test-oauth-s
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { authenticator } = require('otplib');
+const { newTotpSecret } = require('../utils/totp');
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 
@@ -243,7 +243,7 @@ async function testForcedPasswordChangeRevokesOtherSessions(baseUrl) {
 
 async function testDisable2faRevokesSessionsButKeepsShares(baseUrl) {
   console.log('\n--- TEST: disabling 2FA ends other sessions but leaves share links alone ---');
-  const secret = authenticator.generateSecret();
+  const secret = newTotpSecret();
   const user = await createUser({ totp_enabled: 1, totp_secret: secret });
   const callerToken = await mintSession(user.id);
   const attackerToken = await mintSession(user.id);

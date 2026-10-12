@@ -37,6 +37,17 @@ frontend:
     requests:
       cpu: 50m
       memory: 128Mi
+  # How nginx finds the backend (`location /api` in templates/nginx-configmap.yaml): the name
+  # is resolved per request through this resolver, so nginx starts even when cluster DNS is
+  # not answering yet. `resolver` must be an IP address - nginx would resolve a hostname
+  # there at start, the very dependency this removes. 10.43.0.10 is kube-dns' ClusterIP in
+  # k3s' default service CIDR (10.43.0.0/16); another cluster: `kubectl -n kube-system get
+  # svc kube-dns`. `resolverValid` caps how long an answer is cached (the ClusterIP changes
+  # only when the Service is recreated).
+  nginx:
+    resolver: 10.43.0.10
+    resolverValid: 30s
+    clusterDomain: cluster.local
 
 # sqlite-web sidecar in the backend pod. OFF by default: sqlite-web has no authentication,
 # the image listens on 0.0.0.0:8080, and it mounts the database read-write - so with it on,

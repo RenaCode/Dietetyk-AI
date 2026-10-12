@@ -63,6 +63,14 @@ function run() {
   // D-1 (2026-10-04): the error log printed the raw request line with the sync_token.
   assert(/^\s*error_log \/dev\/stderr error;/m.test(nginx), 'the error log is at level error (no request-line warnings)');
   assert(/location \/api \{[^}]*client_body_buffer_size 1m;/.test(nginx), 'webhook bodies up to 1 MB stay in memory');
+  // 2026-10-05: after a node reboot nginx resolved the literal backend host in proxy_pass at
+  // start, before cluster DNS answered, and did not come up. Starting with no DNS at all is
+  // checked by scripts/check-nginx-chart.sh (nginx -t with --network none, CI job test-chart).
+  assert(/location \/api \{[^}]*\n\s*resolver 10\.43\.0\.10 valid=\d+s ipv6=off;/.test(nginx), 'location /api has a resolver given as an IP (kube-dns), not a hostname');
+  assert(/location \/api \{[^}]*\n\s*set \$dietetyk_backend "dietetyk-backend\.default\.svc\.cluster\.local:3000";\n\s*proxy_pass http:\/\/\$dietetyk_backend;/.test(nginx), 'proxy_pass resolves the backend FQDN per request, with no URI part (request URI passed unchanged)');
+  assert(!/^\s*proxy_pass http:\/\/[a-z0-9]/m.test(nginx), 'no proxy_pass with a literal host (resolved at start)');
+  const otherNs = render('-n', 'apps', '--set', 'frontend.nginx.resolver=192.0.2.53');
+  assert(/set \$dietetyk_backend "dietetyk-backend\.apps\.svc\.cluster\.local:3000";/.test(otherNs) && /resolver 192\.0\.2\.53 /.test(otherNs), 'the FQDN follows the release namespace and the resolver comes from values');
   const frontend = find('Deployment', 'dietetyk-frontend');
   assert(/checksum\/nginx-config: [0-9a-f]{64}/.test(frontend), 'a config change rolls the frontend pod (subPath mounts never update)');
 

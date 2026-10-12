@@ -306,6 +306,24 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=frontend
 
+# The chart has no image to gate: Argo CD applies it as soon as it lands on main. This job
+# is its check on every PR - helm lint/template, and the frontend's nginx config must start
+# with no DNS at all (scripts/check-nginx-chart.sh; after the 2026-10-05 node reboot nginx
+# did not start because the backend's name was resolved at load time). helm and docker come
+# preinstalled on ubuntu-latest.
+  test-chart:
+    name: Helm chart and nginx config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Render the chart and test nginx without DNS
+        run: ./scripts/check-nginx-chart.sh
+
 # E2E gates publishing: both build jobs list test-e2e in `needs` and require it to succeed,
 # so an image that failed E2E never reaches ghcr.io and never gets its tag written into
 # values.yaml (sha-73e4afe went to production from a run with red E2E, because this job used

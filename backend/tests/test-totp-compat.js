@@ -23,6 +23,7 @@ process.env.OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || 'test-oauth-s
 const bcrypt = require('bcryptjs');
 const db = require('../db');
 const { verifyTotpOnce, newTotpSecret, totpKeyUri, totpCode, matchingTimeStep } = require('../utils/totp');
+const { freshTotpCode } = require('./helpers/totp');
 
 function assert(condition, message) {
   if (!condition) {
@@ -115,7 +116,8 @@ function testNewSecretsAndUri() {
   console.log('\n--- TEST: new secrets and the QR code URI ---');
   const secret = newTotpSecret();
   assert(/^[A-Z2-7]{32}$/.test(secret), `a new secret is 20 bytes of base32 (got ${secret.length} characters)`);
-  assert(matchingTimeStep(secret, totpCode(secret)) !== null, 'a code for a new secret verifies');
+  const now = Math.floor(Date.now() / 1000);
+  assert(matchingTimeStep(secret, totpCode(secret, now), now) !== null, 'a code for a new secret verifies');
 
   const uri = new URL(totpKeyUri('test user', 'JBSWY3DPEHPK3PXP'));
   assert(uri.protocol === 'otpauth:' && uri.host === 'totp', `the URI is otpauth://totp (got ${uri.protocol}//${uri.host})`);
@@ -140,12 +142,7 @@ async function testVerifyTotpOnceWithLegacySecret() {
   const userId = result.id;
 
   // Generate and verify inside the same step, so the test cannot straddle a step boundary.
-  let code;
-  for (;;) {
-    const now = Date.now() / 1000;
-    if (30 - (now % 30) > 2) { code = totpCode(secret); break; }
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-  }
+  const code = await freshTotpCode(secret);
   assert(await verifyTotpOnce(userId, secret, code) === true, 'the current code for a legacy secret is accepted');
   assert(await verifyTotpOnce(userId, secret, code) === false, 'and refused the second time (replay protection still works)');
   const row = await db.get(`SELECT totp_last_step FROM users WHERE id = ?`, [userId]);

@@ -20,7 +20,8 @@ process.env.OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || 'test-oauth-s
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { newTotpSecret, totpCode } = require('../utils/totp');
+const { newTotpSecret } = require('../utils/totp');
+const { freshTotpCode } = require('./helpers/totp');
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { MAX_ATTEMPTS } = require('../services/loginAttempts');
@@ -66,11 +67,9 @@ async function testTotpReplay(baseUrl) {
   `, [username, await bcrypt.hash(PASSWORD, 10), 'sync_replay_' + 'f'.repeat(24), secret]);
 
   // Both logins below must fall inside ONE 30-second TOTP step, or the test would be proving
-  // that a code expires rather than that it is burned. Wait out the tail of a step if needed.
-  const msIntoStep = Date.now() % 30000;
-  if (msIntoStep > 25000) await new Promise((r) => setTimeout(r, 30000 - msIntoStep + 200));
-
-  const code = totpCode(secret);
+  // that a code expires rather than that it is burned. Four requests, two of them bcrypt
+  // logins: a 5-second margin rather than the helper's default 2.
+  const code = await freshTotpCode(secret, 5000);
   const first = await call(baseUrl, 'POST', '/api/login', { username, password: PASSWORD });
   const ok = await call(baseUrl, 'POST', '/api/login-2fa', { tempToken: first.body.tempToken, code });
   assert(ok.status === 200 && typeof ok.body.token === 'string', 'the first use of the code logs in');
@@ -116,7 +115,7 @@ async function testVerify2faIsLimited(baseUrl) {
 
   const setup = await call(baseUrl, 'POST', '/api/user/setup-2fa', { password: PASSWORD }, sessionToken);
   assert(setup.status === 200 && setup.body.tempToken, 'setup-2fa hands out a temp token');
-  const current = totpCode(setup.body.secret);
+  const current = await freshTotpCode(setup.body.secret);
 
   const statuses = [];
   for (let i = 0; i < MAX_ATTEMPTS + 1; i++) {

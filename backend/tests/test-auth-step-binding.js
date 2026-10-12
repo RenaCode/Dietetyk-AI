@@ -35,7 +35,8 @@ process.env.OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || 'test-oauth-s
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { newTotpSecret, totpCode } = require('../utils/totp');
+const { newTotpSecret } = require('../utils/totp');
+const { freshTotpCode } = require('./helpers/totp');
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 
@@ -100,7 +101,7 @@ async function createUser(overrides = {}) {
 
 async function fullLogin(baseUrl, username, secret) {
   const step1 = await post(baseUrl, '/api/login', { username, password: PASSWORD });
-  const step2 = await post(baseUrl, '/api/login-2fa', { tempToken: step1.body.tempToken, code: totpCode(secret) });
+  const step2 = await post(baseUrl, '/api/login-2fa', { tempToken: step1.body.tempToken, code: await freshTotpCode(secret) });
   return step2.body.token;
 }
 
@@ -143,15 +144,15 @@ async function testOwedPasswordChangeCannotBeSkipped(baseUrl) {
   const unchanged = await db.get(`SELECT password_hash, force_password_change FROM users WHERE id = ?`, [user.id]);
   assert(await bcrypt.compare(PASSWORD, unchanged.password_hash) && unchanged.force_password_change === 1, 'the password is unchanged and the change is still owed');
 
-  const via2fa = await post(baseUrl, '/api/login-2fa', { tempToken: login.body.tempToken, code: totpCode(secret) });
+  const via2fa = await post(baseUrl, '/api/login-2fa', { tempToken: login.body.tempToken, code: await freshTotpCode(secret) });
   assert(via2fa.status === 200 && via2fa.body.status === 'force_password_change' && !via2fa.body.token,
     `a valid code leads to the password change, not to a session (got ${via2fa.status} ${via2fa.body.status})`);
   const changeToken = via2fa.body.tempToken;
 
   // The post-2FA change token must not be turned into a session through the 2FA routes.
-  const replay2fa = await post(baseUrl, '/api/login-2fa', { tempToken: changeToken, code: totpCode(secret) });
+  const replay2fa = await post(baseUrl, '/api/login-2fa', { tempToken: changeToken, code: await freshTotpCode(secret) });
   assert(replay2fa.status === 401 && !replay2fa.body.token, `login-2fa refuses the password-change token (got ${replay2fa.status})`);
-  const viaSetup = await post(baseUrl, '/api/verify-2fa-setup', { tempToken: changeToken, code: totpCode(secret) });
+  const viaSetup = await post(baseUrl, '/api/verify-2fa-setup', { tempToken: changeToken, code: await freshTotpCode(secret) });
   assert(viaSetup.status === 401 && !viaSetup.body.token, `verify-2fa-setup refuses it too (got ${viaSetup.status})`);
 
   const change = await post(baseUrl, '/api/change-password-forced', { tempToken: changeToken, newPassword: 'ownernewpass456' });
@@ -169,7 +170,7 @@ async function testNo2faAccountWithStraySecretCannotSkipChange(baseUrl) {
   const user = await createUser({ totp_enabled: 0, totp_secret: secret, force_password_change: 1 });
   const login = await post(baseUrl, '/api/login', { username: user.username, password: PASSWORD });
   assert(login.body.status === 'force_password_change', 'login asks for the forced password change');
-  const via2fa = await post(baseUrl, '/api/login-2fa', { tempToken: login.body.tempToken, code: totpCode(secret) });
+  const via2fa = await post(baseUrl, '/api/login-2fa', { tempToken: login.body.tempToken, code: await freshTotpCode(secret) });
   assert(via2fa.status === 401 && !via2fa.body.token, `login-2fa does not turn it into a session (got ${via2fa.status})`);
   const change = await post(baseUrl, '/api/change-password-forced', { tempToken: login.body.tempToken, newPassword: 'ownernewpass456' });
   assert(change.status === 200 && typeof change.body.token === 'string', 'the forced change itself still works');

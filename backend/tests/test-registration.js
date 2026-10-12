@@ -1,6 +1,6 @@
 const db = require('../db');
 const bcrypt = require('bcryptjs');
-const { authenticator } = require('otplib');
+const { newTotpSecret } = require('../utils/totp');
 
 async function testRegistrationAndMfaDelay() {
   console.log('\n--- RUNNING REGISTRATION & 2FA DELAY TESTS ---');
@@ -14,7 +14,7 @@ async function testRegistrationAndMfaDelay() {
   
   // Hash password
   const passwordHash = await bcrypt.hash(password, 10);
-  const secret = authenticator.generateSecret();
+  const secret = newTotpSecret();
   const syncToken = 'sync_' + Math.random().toString(36).substring(2);
 
   // Simulate register-public logic

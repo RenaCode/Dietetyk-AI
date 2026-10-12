@@ -25,7 +25,7 @@ process.env.OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || 'test-oauth-s
 
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { authenticator } = require('otplib');
+const { newTotpSecret, totpCode } = require('../utils/totp');
 const db = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { MAX_ATTEMPTS } = require('../services/loginAttempts');
@@ -99,13 +99,13 @@ async function testParallelPasswordBurst(baseUrl) {
 
 async function testParallelTotpBurst(baseUrl) {
   console.log('\n--- TEST: a parallel burst of wrong TOTP codes is capped at MAX_ATTEMPTS ---');
-  const secret = authenticator.generateSecret();
+  const secret = newTotpSecret();
   const user = await createUser({ totp_enabled: 1, totp_secret: secret });
 
   const login = await post(baseUrl, '/api/login', { username: user.username, password: PASSWORD });
   assert(login.body.status === 'require_2fa', 'the password step hands out a temp token');
 
-  const current = authenticator.generate(secret);
+  const current = totpCode(secret);
   const attempts = [];
   for (let i = 0; i < BURST; i++) {
     // Six-digit codes that are guaranteed wrong.

@@ -116,10 +116,11 @@ data:
             client_body_buffer_size 1m;
             # Upstream `dietetyk_backend` above: the name is resolved in the background, not at start.
             proxy_pass http://dietetyk_backend;
-            # `proxy_redirect default` would now match the upstream's name (http://dietetyk_backend/api),
-            # which the backend never sends. This is the rewrite the literal proxy_pass used to get
-            # by default: an absolute Location pointing at the Service becomes this host's /api.
-            proxy_redirect http://{{ include "dietetyk.fullname" . }}-backend:3000/api /api;
+            # `proxy_redirect default` would now match the upstream's name (http://dietetyk_backend/),
+            # which the backend never sends. The literal `proxy_pass http://<svc>:3000;` (no URI)
+            # rewrote every Location under http://<svc>:3000/ to this host's own path - any path,
+            # not only /api. This keeps that behaviour.
+            proxy_redirect http://{{ include "dietetyk.fullname" . }}-backend:3000/ /;
             proxy_http_version 1.1;
             proxy_set_header Upgrade $http_upgrade;
             proxy_set_header Connection 'upgrade';

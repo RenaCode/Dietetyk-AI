@@ -73,7 +73,7 @@ function run() {
   assert(/zone dietetyk_backend \d+k;/.test(upstream) && /\n\s*resolver 10\.43\.0\.10 valid=\d+s ipv6=off;/.test(upstream), 'upstream dietetyk_backend has a zone and a resolver given as an IP (kube-dns), not a hostname');
   assert((upstream.match(/^\s*server .*$/gm) || []).join() === '        server dietetyk-backend.default.svc.cluster.local:3000 resolve;', 'its only server is the backend FQDN, re-resolved at run time');
   assert(/location \/api \{[^}]*\n\s*proxy_pass http:\/\/dietetyk_backend;/.test(nginx), 'location /api proxies to that upstream, with no URI part (request URI passed unchanged)');
-  assert(/proxy_pass http:\/\/dietetyk_backend;\n(\s*#.*\n)*\s*proxy_redirect http:\/\/dietetyk-backend:3000\/api \/api;/.test(nginx), 'an absolute Location naming the backend Service is still rewritten (as proxy_redirect default did)');
+  assert(/proxy_pass http:\/\/dietetyk_backend;\n(\s*#.*\n)*\s*proxy_redirect http:\/\/dietetyk-backend:3000\/ \/;/.test(nginx), 'every absolute Location under the backend Service is still rewritten to this host (as the literal proxy_pass did)');
   assert((nginx.match(/^\s*proxy_pass .*$/gm) || []).every(l => /proxy_pass http:\/\/dietetyk_backend;/.test(l)), 'no proxy_pass with a literal host:port (resolved at start)');
   const otherNs = render('-n', 'apps', '--set', 'frontend.nginx.resolver=192.0.2.53');
   assert(/server dietetyk-backend\.apps\.svc\.cluster\.local:3000 resolve;/.test(otherNs) && /resolver 192\.0\.2\.53 /.test(otherNs), 'the FQDN follows the release namespace and the resolver comes from values');

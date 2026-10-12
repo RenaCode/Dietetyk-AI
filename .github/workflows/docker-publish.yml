@@ -240,12 +240,16 @@ jobs:
         working-directory: ./frontend
         run: npm ci --ignore-scripts
 
-      - name: Unit tests, i18n check, lint (frontend)
+      # check-css builds the frontend into a temporary directory and checks the CSS that came
+      # out: Vite 8's minifier keeps only the last of a -webkit-X / X pair, and that once
+      # silently removed backdrop-filter for every browser but Safari (review of #74).
+      - name: Unit tests, i18n check, lint, built CSS (frontend)
         working-directory: ./frontend
         run: |
           npm test
           npm run check-i18n
           npm run lint
+          npm run check-css
 
   build-frontend:
     name: Build and push image (frontend)

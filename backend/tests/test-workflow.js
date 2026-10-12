@@ -50,6 +50,7 @@ try {
   assert(/merge-base --is-ancestor "\$GITHUB_SHA" "\$current"/.test(jobBlock('update-git')), 'update-git refuses to write an older tag');
   const fe = jobBlock('test-frontend');
   assert(/npm test/.test(fe) && /check-i18n/.test(fe) && /npm run lint/.test(fe), 'test-frontend runs unit tests, i18n check and lint');
+  assert(/npm run check-css/.test(fe), 'test-frontend checks the built CSS for dropped unprefixed declarations');
   assert(/\non:\n(?: {2}\S.*\n(?: {4}.*\n)*)* {2}pull_request:/.test(code), 'pull requests run the workflow');
   assert(!code.includes('pull_request_target'), 'PRs never run with the base repository\'s secrets (no pull_request_target)');
   for (const job of ['build-backend', 'build-frontend', 'update-git']) {

@@ -373,8 +373,10 @@ h1, h2, h3, h4 {
 /* Szklane karty (Glassmorphism) */
 .glass-card {
   background: var(--bg-card);
-  backdrop-filter: blur(18px);
+  /* -webkit- first: Vite 8's minifier (Lightning CSS) keeps only the LAST of the pair, and
+     the unprefixed one is the one Chrome, Edge and Firefox read. npm run check-css. */
   -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
   border: 1px solid var(--border-glass);
   border-radius: var(--radius-lg);
   padding: 24px;
@@ -2296,8 +2298,9 @@ h1, h2, h3, h4 {
     gap: 2px;
     padding: 6px;
     background: rgba(12, 17, 20, 0.88);
-    backdrop-filter: blur(18px);
+    /* -webkit- first - see .glass-card. */
     -webkit-backdrop-filter: blur(18px);
+    backdrop-filter: blur(18px);
     border: 1px solid var(--border-glass-strong);
     border-radius: 22px;
     box-shadow: 0 16px 40px -10px rgba(0, 0, 0, 0.8);

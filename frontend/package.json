@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "check-i18n": "node scripts/check-i18n.js",
+    "check-css": "node scripts/check-css-prefixes.js",
     "test": "node --test src/utils/*.test.js"
   },
   "dependencies": {

@@ -9,7 +9,7 @@
 #
 # Credentials come from a Secret created by hand (this repository is public):
 #   kubectl create secret generic {{ .Values.catering.secretName }} \
-#     --from-literal=DIETLY_EMAIL=... --from-literal=DIETLY_PASSWORD=... \
+#     --from-literal=DIETLY_USERNAME=... --from-literal=DIETLY_PASSWORD=... \
 #     --from-literal=DIETETYK_SYNC_TOKEN=<sync token from Settings>
 apiVersion: batch/v1
 kind: CronJob

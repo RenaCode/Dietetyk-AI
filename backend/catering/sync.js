@@ -10,7 +10,7 @@
 //   node catering/sync.js --dry-run  fetch and print the day, send nothing
 //   node catering/sync.js --probe    print the response SHAPES (keys, no values) and exit
 //
-// Environment: DIETLY_EMAIL, DIETLY_PASSWORD, DIETLY_COMPANY (the catering's slug,
+// Environment: DIETLY_USERNAME (the panel login is a user name, not an e-mail), DIETLY_PASSWORD, DIETLY_COMPANY (the catering's slug,
 // `betterlifecateringdietetyczny` for Better Life), CATERING_SOURCE (default `betterlife`),
 // DIETETYK_URL (default the in-cluster backend Service), DIETETYK_SYNC_TOKEN.
 //
@@ -81,7 +81,7 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   const source = env.CATERING_SOURCE || 'betterlife';
 
   const client = new DietlyClient({
-    email: env.DIETLY_EMAIL,
+    username: env.DIETLY_USERNAME,
     password: env.DIETLY_PASSWORD,
     companyId: env.DIETLY_COMPANY
   });

@@ -84,8 +84,8 @@ function testParsing() {
   try { mealsFromDetails({ somethingElse: [] }); } catch { threw = true; }
   assert(threw, 'a details payload without deliveryMeals is an error, not an empty day');
 
-  const shape = JSON.stringify(describeShape({ email: 'x@y.pl', deliveries: [{ date: '2026-10-13' }] }));
-  assert(!shape.includes('x@y.pl') && !shape.includes('2026'), 'describeShape prints keys and types, never values');
+  const shape = JSON.stringify(describeShape({ phone: 'secret-value-123', deliveries: [{ date: '2026-10-13' }] }));
+  assert(!shape.includes('secret-value-123') && !shape.includes('2026'), 'describeShape prints keys and types, never values');
 }
 
 // --- the sync job's decisions -----------------------------------------------------------
@@ -112,15 +112,15 @@ async function testLoginKeepsSessionCookie() {
     const headers = url.endsWith('/auth/login') ? { 'set-cookie': 'SESSION=abc123; Path=/; HttpOnly' } : {};
     return new Response(url.endsWith('/auth/login') ? '' : '[]', { status: 200, headers });
   };
-  const client = new DietlyClient({ email: 'a@b.pl', password: 'p&ss word', companyId: 'betterlifecateringdietetyczny', fetchImpl: fakeFetch });
+  const client = new DietlyClient({ username: 'jan kowal+1', password: 'p&ss word', companyId: 'betterlifecateringdietetyczny', fetchImpl: fakeFetch });
   await client.login();
   await client.activeOrderIds();
-  assert(calls[0].opts.body === 'username=a%40b.pl&password=p%26ss%20word', 'login is form-encoded, special characters escaped');
+  assert(calls[0].opts.body === 'username=jan%20kowal%2B1&password=p%26ss%20word', 'login is form-encoded, special characters escaped');
   assert(calls[1].opts.headers.Cookie === 'SESSION=abc123', 'the session cookie from login is sent on the next request');
   assert(calls[1].opts.headers['company-id'] === 'betterlifecateringdietetyczny', 'company-id header names the catering');
 
   const rejecting = new DietlyClient({
-    email: 'a@b.pl', password: 'x', companyId: 'c',
+    username: 'someone', password: 'x', companyId: 'c',
     fetchImpl: async () => new Response('', { status: 401 })
   });
   let message = '';

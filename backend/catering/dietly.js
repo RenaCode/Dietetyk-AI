@@ -35,11 +35,11 @@ function cookieHeader(jar) {
 }
 
 class DietlyClient {
-  constructor({ email, password, companyId, base = DIETLY_BASE, fetchImpl = fetchWithTimeout }) {
-    if (!email || !password || !companyId) {
-      throw new DietlyError('DIETLY_EMAIL, DIETLY_PASSWORD and DIETLY_COMPANY are all required');
+  constructor({ username, password, companyId, base = DIETLY_BASE, fetchImpl = fetchWithTimeout }) {
+    if (!username || !password || !companyId) {
+      throw new DietlyError('DIETLY_USERNAME, DIETLY_PASSWORD and DIETLY_COMPANY are all required');
     }
-    this.email = email;
+    this.username = username;
     this.password = password;
     this.companyId = companyId;
     this.base = base;
@@ -57,7 +57,7 @@ class DietlyClient {
   }
 
   async login() {
-    const body = `username=${encodeURIComponent(this.email)}&password=${encodeURIComponent(this.password)}`;
+    const body = `username=${encodeURIComponent(this.username)}&password=${encodeURIComponent(this.password)}`;
     const res = await this.fetch(`${this.base}/auth/login`, {
       method: 'POST',
       headers: this.headers({ 'Content-Type': 'application/x-www-form-urlencoded' }),
@@ -69,7 +69,7 @@ class DietlyClient {
     // The status alone is not proof: some panels answer 200 to a bad password and only
     // refuse the NEXT request. `getJson` below turns that 401/403 into the same message.
     if (res.status === 401 || res.status === 403) {
-      throw new DietlyError(`login rejected (HTTP ${res.status}) - check DIETLY_EMAIL/DIETLY_PASSWORD`);
+      throw new DietlyError(`login rejected (HTTP ${res.status}) - check DIETLY_USERNAME/DIETLY_PASSWORD`);
     }
     if (res.status >= 400) throw new DietlyError(`login failed (HTTP ${res.status})`);
     if (!this.jar.size) throw new DietlyError('login returned no session cookie');

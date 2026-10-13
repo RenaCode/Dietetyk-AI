@@ -95,6 +95,8 @@ morgan.token('safe-url', (req) => {
     // the query-string replace above does not cover it, so the token ended up in the logs
     // in plain text. We redact it separately here, regardless of its length or format.
     .replace(/(\/api\/integrations\/apple-health\/)[^/?]+/i, '$1%5Bredacted%5D')
+    // The catering import (routes/catering.js) carries the same sync_token in its path.
+    .replace(/(\/api\/integrations\/catering\/)[^/?]+/i, '$1%5Bredacted%5D')
     // Same for the public shared-report link (routes/sharedReport.js): the token in that
     // path is the ONLY thing protecting a PDF of somebody's health data, and it was logged in
     // full on every view.
@@ -167,6 +169,10 @@ app.use(express.static(path.join(__dirname, 'public')));
 // requireAuth, because it authenticates per request with a sync_token in the URL (see
 // routes/appleHealth.js) rather than with a session or cookie like the rest of /api/.
 app.use(require('./routes/appleHealth'));
+
+// The catering import (catering/sync.js, a CronJob) - the same sync_token authorisation as
+// the Apple Health webhook, so it is mounted before requireAuth for the same reason.
+app.use(require('./routes/catering'));
 
 // Public, unauthenticated retrieval of a shared PDF report (product feature: share a
 // report by link) - for the same reasons it must be mounted BEFORE requireAuth. The token

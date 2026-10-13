@@ -1,0 +1,74 @@
+{{- if .Values.catering.enabled }}
+# Catering sync (backend/catering/sync.js): today's menu from the catering's customer panel
+# (Dietly) -> today's meals in Dietetyk, through the backend's import endpoint.
+#
+# Its own container and its own pod, but the BACKEND IMAGE: the job is ~200 lines that reuse
+# the backend's date and fetch helpers, and a third image would need a third build job and a
+# third tag for update-git to keep in step. It mounts no volume - the SQLite file has exactly
+# one writer, the backend, and this job talks to it over HTTP like any other client.
+#
+# Credentials come from a Secret created by hand (this repository is public):
+#   kubectl create secret generic {{ .Values.catering.secretName }} \
+#     --from-literal=DIETLY_USERNAME=... --from-literal=DIETLY_PASSWORD=... \
+#     --from-literal=DIETETYK_SYNC_TOKEN=<sync token from Settings>
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "dietetyk.fullname" . }}-catering-sync
+  labels:
+    {{- include "dietetyk.labels" . | nindent 4 }}
+    app.kubernetes.io/component: catering-sync
+spec:
+  schedule: {{ .Values.catering.schedule | quote }}
+  # Without timeZone the schedule is read in the node's local time, which on this cluster is
+  # not UTC and not obviously Warsaw either - an explicit zone removes the guesswork.
+  timeZone: Europe/Warsaw
+  # Each run replaces the whole day, so two overlapping runs gain nothing and a slow one
+  # must not pile up behind itself.
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            {{- include "dietetyk.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: catering-sync
+        spec:
+          restartPolicy: Never
+          {{- include "dietetyk.imagePullSecrets" . | nindent 10 }}
+          automountServiceAccountToken: false
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: catering-sync
+              image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+              command: ["node", "catering/sync.js"]
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                runAsGroup: 1000
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: TZ
+                  value: "Europe/Warsaw"
+                - name: DIETLY_COMPANY
+                  value: {{ .Values.catering.dietlyCompany | quote }}
+                - name: CATERING_SOURCE
+                  value: {{ .Values.catering.source | quote }}
+                - name: DIETETYK_URL
+                  value: "http://{{ include "dietetyk.fullname" . }}-backend:3000"
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.catering.secretName }}
+              resources:
+                {{- toYaml .Values.catering.resources | nindent 16 }}
+{{- end }}

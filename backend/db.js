@@ -457,6 +457,19 @@ const initDb = async () => {
   await addColumn(`ALTER TABLE meals ADD COLUMN sugar REAL DEFAULT NULL`);
   await addColumn(`ALTER TABLE meals ADD COLUMN sodium REAL DEFAULT NULL`);
 
+  // Migration: meals imported from a catering provider (routes/catering.js). `source` names
+  // the provider ('betterlife'); NULL means a meal the user logged and Gemini estimated.
+  // The difference matters downstream: catering values come from the provider's own
+  // nutrition table, not from a model guess, so they must stay distinguishable from
+  // estimates (see the sodium/fiber insights, whose input is otherwise model output).
+  // `external_id` is the provider's id for that meal on that day; the partial unique index
+  // makes re-running the import an update instead of a duplicate - the sync job runs several
+  // times a day and the user can swap a dish in the provider's panel between runs.
+  await addColumn(`ALTER TABLE meals ADD COLUMN source TEXT DEFAULT NULL`);
+  await addColumn(`ALTER TABLE meals ADD COLUMN external_id TEXT DEFAULT NULL`);
+  await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_meals_external
+             ON meals(user_id, source, external_id) WHERE external_id IS NOT NULL`);
+
   // Assign legacy meals without a user_id to the first user
   await run(`UPDATE meals SET user_id = 1 WHERE user_id IS NULL OR user_id = 0`);
 

@@ -49,6 +49,28 @@ frontend:
     resolverValid: 30s
     clusterDomain: cluster.local
 
+# Catering sync CronJob (templates/catering-cronjob.yaml, backend/catering/sync.js): imports
+# today's menu from the catering's Dietly customer panel as meals, with the provider's own
+# nutrition values instead of Gemini estimates. OFF until its Secret exists - the command to
+# create it is at the top of the template.
+catering:
+  enabled: false
+  secretName: dietetyk-catering
+  # The catering's slug in Dietly (the `company` parameter of its login link).
+  dietlyCompany: betterlifecateringdietetyczny
+  # Must be one of CATERING_SOURCES in backend/routes/catering.js.
+  source: betterlife
+  # Europe/Warsaw (set in the template). 06:30 puts the day in before breakfast; the later
+  # runs pick up dishes swapped in the panel during the day - each run replaces the day.
+  schedule: "30 6,12,18 * * *"
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 20m
+      memory: 64Mi
+
 # sqlite-web sidecar in the backend pod. OFF by default: sqlite-web has no authentication,
 # the image listens on 0.0.0.0:8080, and it mounts the database read-write - so with it on,
 # ANY pod in the cluster can reach the pod IP and read or edit every table, including the

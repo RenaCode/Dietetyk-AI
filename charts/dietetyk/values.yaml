@@ -51,10 +51,10 @@ frontend:
 
 # Catering sync CronJob (templates/catering-cronjob.yaml, backend/catering/sync.js): imports
 # today's menu from the catering's Dietly customer panel as meals, with the provider's own
-# nutrition values instead of Gemini estimates. OFF until its Secret exists - the command to
-# create it is at the top of the template.
+# nutrition values instead of Gemini estimates. Needs the Secret described at the top of the
+# template; ON since 2026-10-13, after a dry run against the live account (5 meals, 2473 kcal).
 catering:
-  enabled: false
+  enabled: true
   secretName: dietetyk-catering
   # The catering's slug in Dietly (the `company` parameter of its login link).
   dietlyCompany: betterlifecateringdietetyczny

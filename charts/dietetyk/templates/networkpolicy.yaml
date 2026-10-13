@@ -1,5 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
-# Only the frontend's nginx may open connections to the backend.
+# Only the frontend's nginx (and, when enabled, the catering sync job) may open connections
+# to the backend.
 #
 # Without this, every pod in the cluster - any other application, anything compromised in
 # it - could reach the backend on :3000 directly, skipping nginx (its body-size limit, its
@@ -32,6 +33,18 @@ spec:
       ports:
         - port: 3000
           protocol: TCP
+    {{- if .Values.catering.enabled }}
+    # The catering sync job (templates/catering-cronjob.yaml) posts the day's menu to the
+    # import endpoint directly, not through nginx - it is inside the cluster already.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "dietetyk.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: catering-sync
+      ports:
+        - port: 3000
+          protocol: TCP
+    {{- end }}
 ---
 # Only Traefik may open connections to the frontend - it is the Ingress backend for
 # dietetyk.renacode.com. Traefik proxies from its own pod address (the hostPort goes through

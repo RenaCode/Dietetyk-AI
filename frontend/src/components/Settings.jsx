@@ -21,6 +21,11 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
   const [isOuraAdvancedOpen, setIsOuraAdvancedOpen] = useState(!userProfile.has_oura);
   const [isWithingsAdvancedOpen, setIsWithingsAdvancedOpen] = useState(!userProfile.has_withings);
   const [isAppleHealthInstructionsOpen, setIsAppleHealthInstructionsOpen] = useState(false);
+  // Whole integration tiles that start collapsed: their header (icon, name, status line)
+  // stays visible, so the state of each one is readable without opening it.
+  const [isLocationOpen, setIsLocationOpen] = useState(false);
+  const [isAppleHealthOpen, setIsAppleHealthOpen] = useState(false);
+  const [isGeminiOpen, setIsGeminiOpen] = useState(false);
 
   // Stan avatara i profilu
   const [avatarMessage, setAvatarMessage] = useState({ type: '', text: '' });
@@ -262,6 +267,17 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
       setTimeout(() => setMessage({ type: '', text: '' }), 5000);
     } catch (err) {
       setMessage({ type: 'error', text: t('Nie udało się skopiować URL do schowka.') });
+    }
+  };
+
+  const handleCopySyncToken = async () => {
+    if (!syncToken) return;
+    try {
+      await navigator.clipboard.writeText(syncToken);
+      setMessage({ type: 'success', text: t('Skopiowano token synchronizacji do schowka!') });
+      setTimeout(() => setMessage({ type: '', text: '' }), 5000);
+    } catch (err) {
+      setMessage({ type: 'error', text: t('Nie udało się skopiować tokenu do schowka.') });
     }
   };
 
@@ -2134,7 +2150,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             borderRadius: '12px',
             gap: '12px'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <CollapsibleTileHeader open={isLocationOpen} onToggle={() => setIsLocationOpen(o => !o)} t={t}>
               <span style={{ fontSize: '2rem' }}>📍</span>
               <div>
                 <strong style={{ display: 'block', color: '#fff' }}>Lokalizacja (pogoda w poradach AI)</strong>
@@ -2144,8 +2160,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                     : t('Aktualnie: domyślna lokalizacja serwera')}
                 </span>
               </div>
-            </div>
+            </CollapsibleTileHeader>
 
+            {isLocationOpen && (<>
             <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
               <input
                 type="text"
@@ -2208,6 +2225,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 ))}
               </div>
             )}
+            </>)}
           </div>
 
           {/* Google Fit - the source of step, calorie and activity data, analogous to
@@ -2472,7 +2490,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             borderRadius: '12px',
             gap: '16px'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <CollapsibleTileHeader open={isAppleHealthOpen} onToggle={() => setIsAppleHealthOpen(o => !o)} t={t}>
               <span style={{ fontSize: '2rem' }}>🍏</span>
               <div>
                 <strong style={{ display: 'block', color: '#fff' }}>{t("Apple Health (Kroki, Kalorie, Minuty Aktywności)")}</strong>
@@ -2480,8 +2498,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   ✅ Webhook gotowy do skonfigurowania
                 </span>
               </div>
-            </div>
+            </CollapsibleTileHeader>
 
+            {isAppleHealthOpen && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '12px' }}>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0, lineHeight: '1.5' }}>
                 Dane aktywności z Apple Health docierają od razu (w przeciwieństwie do Oura, która finalizuje dobowe podsumowanie zwykle następnego ranka). Gdy obie integracje są aktywne, dane z Apple Health są traktowane jako bardziej wiarygodne dla kroków/kalorii/minut aktywności - Oura uzupełnia te wartości tylko wtedy, gdy Apple Health jeszcze nic nie przysłało dla danego dnia (albo przysłało same zera).
@@ -2497,6 +2516,22 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   </span>
                   <button type="button" className="btn-copy" onClick={handleCopyWebhookUrl} disabled={!appleHealthWebhookUrl}>
                     Kopiuj
+                  </button>
+                </div>
+              </div>
+
+              {/* The bare token, for integrations that take it as a separate value rather than
+                  a URL - the catering sync job's DIETETYK_SYNC_TOKEN, for one. It is the last
+                  segment of the webhook URL above; cutting it out of the URL by hand was the
+                  only way to get it before. */}
+              <div className="input-group" style={{ marginBottom: 0 }}>
+                <label className="input-label" style={{ fontSize: '0.8rem' }}>{t("Token synchronizacji (np. dla importu z cateringu)")}</label>
+                <div className="code-block">
+                  <span style={!syncToken ? { color: 'var(--text-dim)', fontStyle: 'italic' } : undefined}>
+                    {syncToken || t('Ładowanie tokenu...')}
+                  </span>
+                  <button type="button" className="btn-copy" onClick={handleCopySyncToken} disabled={!syncToken}>
+                    {t("Kopiuj")}
                   </button>
                 </div>
                 <button
@@ -2533,6 +2568,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
               </div>
               )}
             </div>
+            )}
           </div>
 
           {/* Gemini AI API Key */}
@@ -2545,7 +2581,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
             borderRadius: '12px',
             gap: '16px'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <CollapsibleTileHeader open={isGeminiOpen} onToggle={() => setIsGeminiOpen(o => !o)} t={t}>
               <span style={{ fontSize: '2rem' }}>🤖</span>
               <div>
                 <strong style={{ display: 'block', color: '#fff' }}>{t("Gemini AI (Inteligentne Analizy i Wskazówki)")}</strong>
@@ -2553,8 +2589,9 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                   {settings.gemini_api_key ? '✅ Klucz skonfigurowany' : '❌ Brak skonfigurowanego klucza'}
                 </span>
               </div>
-            </div>
+            </CollapsibleTileHeader>
 
+            {isGeminiOpen && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', borderTop: '1px solid rgba(255, 255, 255, 0.05)', paddingTop: '12px' }}>
               <div className="input-group" style={{ marginBottom: 0 }}>
                 <label className="input-label" style={{ fontSize: '0.8rem' }}>Gemini API Key</label>
@@ -2574,6 +2611,7 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
                 </span>
               </div>
             </div>
+            )}
           </div>
 
           <button type="submit" className="btn-primary" disabled={isSaving || !loadedSettings} style={{ width: '100%', padding: '12px', marginTop: '10px' }}>
@@ -2581,6 +2619,30 @@ export default function Settings({ syncToken, sessionToken, userProfile = { user
           </button>
         </form>
       </div>
+    </div>
+  );
+}
+
+// Clickable header of a collapsible integration tile - the same interaction as the
+// "Twoje Cele Dietetyczne" card: the whole row toggles, Enter/Space work, and aria-expanded
+// tells a screen reader the state. `children` is the tile's icon + name + status line, which
+// stay visible while collapsed.
+function CollapsibleTileHeader({ open, onToggle, t, children }) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-expanded={open}
+      onClick={onToggle}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(); } }}
+      style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', cursor: 'pointer' }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        {children}
+      </div>
+      <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+        {open ? t('Zwiń ▲') : t('Pokaż ▼')}
+      </span>
     </div>
   );
 }

@@ -2,9 +2,10 @@
 // sync job's decisions (catering/sync.js) and the import endpoint (routes/catering.js),
 // the last one driven over HTTP against a throwaway SQLite file.
 //
-// The Dietly fixtures follow the shape the panel's own JS reads (bundle of 2026-10-13):
-// order.deliveries[].{deliveryId,date}, details.deliveryMeals[].{deliveryMealId, mealName,
-// menuMealName, amount, mealPriority, nutrition.{calories,protein,carbohydrate,fat}}.
+// The Dietly fixtures follow the shape of a LIVE response (checked on a real account on
+// 2026-10-13): order.deliveries[].{deliveryId,date}, and the day's menu
+// deliveryMenuMeal[].{deliveryMealId, mealName, menuMealName, amount, mealPriority,
+// nutrition.{calories,protein,carbohydrate,fat,dietaryFiber,sugar,salt}}.
 // If a real response turns out different, fix the fixture AND the parser together.
 //
 // Run with: node tests/test-catering.js
@@ -62,7 +63,7 @@ function testParsing() {
   assert(today.length === 1 && today[0].deliveryId === 2, 'only the delivery for the date, even with a time part');
 
   const { meals, withoutNutrition } = mealsFromDetails({
-    deliveryMeals: [
+    deliveryMenuMeal: [
       meal(3, 'Obiad', 600),
       meal(1, 'Śniadanie', 400, { nutrition: { salt: 1.5, dietaryFiber: 6 } }),
       meal(2, 'Przekąska', 200, { meal: { amount: 0 } }),          // cancelled
@@ -82,7 +83,7 @@ function testParsing() {
 
   let threw = false;
   try { mealsFromDetails({ somethingElse: [] }); } catch { threw = true; }
-  assert(threw, 'a details payload without deliveryMeals is an error, not an empty day');
+  assert(threw, 'a menu payload without deliveryMenuMeal is an error, not an empty day');
 
   const shape = JSON.stringify(describeShape({ phone: 'secret-value-123', deliveries: [{ date: '2026-10-13' }] }));
   assert(!shape.includes('secret-value-123') && !shape.includes('2026'), 'describeShape prints keys and types, never values');
@@ -96,7 +97,7 @@ async function testCollectDay() {
     order: async () => ({ deliveries: [{ deliveryId: 2, date: DATE }] }),
     deliveryDetails: async (orderId, deliveryId) => {
       assert(orderId === 11 && deliveryId === 2, 'details are asked for the right order and delivery');
-      return { deliveryMeals: [meal(1, 'Śniadanie', 400), meal(2, 'Obiad', 650)] };
+      return { deliveryMenuMeal: [meal(1, 'Śniadanie', 400), meal(2, 'Obiad', 650)] };
     }
   };
   const day = await collectDay(fake, DATE);
@@ -109,23 +110,41 @@ async function testLoginKeepsSessionCookie() {
   const calls = [];
   const fakeFetch = async (url, opts) => {
     calls.push({ url, opts });
-    const headers = url.endsWith('/auth/login') ? { 'set-cookie': 'SESSION=abc123; Path=/; HttpOnly' } : {};
+    const headers = url.endsWith('/auth/login') ? { 'set-cookie': 'SESSION=abc123; Path=/; HttpOnly' }
+      : url.endsWith('/open/feature-flags') ? { 'set-cookie': 'XSRF-TOKEN=csrf%3D1; Path=/' } : {};
     return new Response(url.endsWith('/auth/login') ? '' : '[]', { status: 200, headers });
   };
   const client = new DietlyClient({ username: 'jan kowal+1', password: 'p&ss word', companyId: 'betterlifecateringdietetyczny', fetchImpl: fakeFetch });
   await client.login();
   await client.activeOrderIds();
-  assert(calls[0].opts.body === 'username=jan%20kowal%2B1&password=p%26ss%20word', 'login is form-encoded, special characters escaped');
-  assert(calls[1].opts.headers.Cookie === 'SESSION=abc123', 'the session cookie from login is sent on the next request');
-  assert(calls[1].opts.headers['company-id'] === 'betterlifecateringdietetyczny', 'company-id header names the catering');
+  assert(calls[1].opts.body === 'username=jan%20kowal%2B1&password=p%26ss%20word', 'login is form-encoded, special characters escaped');
+  assert(calls[2].opts.headers.Cookie === 'XSRF-TOKEN=csrf%3D1; SESSION=abc123', 'the session cookie from login is sent on the next request');
+  // Without this header the live API answered 403 to a correct password.
+  assert(calls[1].opts.headers['X-XSRF-TOKEN'] === 'csrf=1', 'login echoes the XSRF-TOKEN cookie as X-XSRF-TOKEN');
+  assert(calls[2].opts.headers['company-id'] === 'betterlifecateringdietetyczny', 'company-id header names the catering');
+  // /api/panel looked right in the JS bundle and answered 403 to everything on a live account.
+  assert(calls[1].url === 'https://panel.dietly.pl/api/auth/login', `login goes to /api/auth/login (got ${calls[1].url})`);
+  await client.deliveryDetails(11, 22);
+  assert(calls[3].url === 'https://panel.dietly.pl/api/company/general/menus/delivery/22/new',
+    `the day's menu comes from menus/delivery/<id>/new (got ${calls[3].url})`);
 
   const rejecting = new DietlyClient({
     username: 'someone', password: 'x', companyId: 'c',
-    fetchImpl: async () => new Response('', { status: 401 })
+    fetchImpl: async (url) => url.endsWith('/open/feature-flags')
+      ? new Response('{}', { status: 200, headers: { 'set-cookie': 'XSRF-TOKEN=t; Path=/' } })
+      : new Response('Bad credentials', { status: 401 })
   });
   let message = '';
   try { await rejecting.login(); } catch (e) { message = e.message; }
-  assert(/login rejected/.test(message), 'a refused login says so instead of failing later');
+  assert(/bad credentials/.test(message), 'a 401 at login is reported as bad credentials');
+
+  const noCsrf = new DietlyClient({
+    username: 'someone', password: 'x', companyId: 'c',
+    fetchImpl: async () => new Response('{}', { status: 200 })
+  });
+  message = '';
+  try { await noCsrf.login(); } catch (e) { message = e.message; }
+  assert(/XSRF-TOKEN/.test(message), 'no CSRF cookie fails before posting the password, and says why');
 }
 
 // --- import endpoint --------------------------------------------------------------------

@@ -2,16 +2,21 @@
 // - and some forty other Polish caterings - runs its customer accounts on.
 //
 // There is no public API. The endpoints below are the ones the panel's own single-page app
-// calls (read from its JS bundle on 2026-10-13): a form-encoded login that sets a session
-// cookie, then JSON endpoints under /api/panel that take the catering's slug in a
-// `company-id` header. Because none of this is a documented contract, every assumption about
+// calls: a form-encoded login that sets a session cookie, then JSON endpoints under /api that
+// take the catering's slug in a `company-id` header.
+//
+// VERIFIED AGAINST A LIVE ACCOUNT on 2026-10-13, which corrected two guesses read from the JS
+// bundle: the base is /api, not /api/panel (the bundle's default `configSlice.baseUrl`, which
+// the running panel overrides - /api/panel answered 403 to every request, a correct password
+// included), and the day's nutrition comes from `company/general/menus/delivery/<id>/new`
+// (`deliveryMenuMeal[]`), while `.../deliveries/<id>/details` answered 404 for today's delivery. Because none of this is a documented contract, every assumption about
 // the response shape is isolated in the pure functions here and pinned by
 // tests/test-catering-dietly.js - when Dietly changes something, the failure should name the
 // field that disappeared, not surface as "0 kcal today".
 
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 
-const DIETLY_BASE = 'https://panel.dietly.pl/api/panel';
+const DIETLY_BASE = 'https://panel.dietly.pl/api';
 const TIMEOUT_MS = 20000;
 
 class DietlyError extends Error {}
@@ -57,6 +62,17 @@ class DietlyClient {
   }
 
   async login() {
+    // CSRF FIRST. The API is Spring-style: a POST without an X-XSRF-TOKEN header that echoes
+    // the XSRF-TOKEN cookie is refused with 403 BEFORE the credentials are looked at. The
+    // first version skipped this, and 403 read as "wrong password" for a password that was
+    // right (2026-10-13). Any GET hands out the cookie; feature-flags is public and small.
+    const warmup = await this.fetch(`${this.base}/open/feature-flags`, { headers: this.headers() }, TIMEOUT_MS);
+    mergeCookies(this.jar, warmup);
+    await warmup.text().catch(() => '');
+    if (!this.jar.has('XSRF-TOKEN')) {
+      throw new DietlyError(`no XSRF-TOKEN cookie from the panel (HTTP ${warmup.status}) - login would be refused`);
+    }
+
     const body = `username=${encodeURIComponent(this.username)}&password=${encodeURIComponent(this.password)}`;
     const res = await this.fetch(`${this.base}/auth/login`, {
       method: 'POST',
@@ -66,13 +82,15 @@ class DietlyClient {
     }, TIMEOUT_MS);
     mergeCookies(this.jar, res);
     await res.text().catch(() => '');
-    // The status alone is not proof: some panels answer 200 to a bad password and only
-    // refuse the NEXT request. `getJson` below turns that 401/403 into the same message.
-    if (res.status === 401 || res.status === 403) {
-      throw new DietlyError(`login rejected (HTTP ${res.status}) - check DIETLY_USERNAME/DIETLY_PASSWORD`);
+    // 401 is the credentials ("Bad credentials"); 403 is the request itself (CSRF, a missing
+    // company-id). Kept apart, because the two send whoever reads the log to different places.
+    if (res.status === 401) {
+      throw new DietlyError('login rejected (HTTP 401, bad credentials) - check DIETLY_USERNAME/DIETLY_PASSWORD');
+    }
+    if (res.status === 403) {
+      throw new DietlyError('login refused (HTTP 403) before checking credentials - CSRF token or company-id not accepted');
     }
     if (res.status >= 400) throw new DietlyError(`login failed (HTTP ${res.status})`);
-    if (!this.jar.size) throw new DietlyError('login returned no session cookie');
   }
 
   async getJson(path) {
@@ -87,8 +105,11 @@ class DietlyClient {
 
   activeOrderIds() { return this.getJson('company/customer/order/active-ids'); }
   order(orderId) { return this.getJson(`company/customer/order/${encodeURIComponent(orderId)}`); }
-  deliveryDetails(orderId, deliveryId) {
-    return this.getJson(`company/customer/order/${encodeURIComponent(orderId)}/deliveries/${encodeURIComponent(deliveryId)}/details`);
+  // The day's menu with nutrition per meal - what the panel's day view renders. orderId is
+  // not part of the path; it stays in the signature so callers do not care which endpoint
+  // serves the menu.
+  deliveryDetails(_orderId, deliveryId) {
+    return this.getJson(`company/general/menus/delivery/${encodeURIComponent(deliveryId)}/new`);
   }
 }
 
@@ -131,10 +152,11 @@ function firstNumber(obj, keys) {
 // explicit value is converted; nothing is estimated.
 function mealsFromDetails(details) {
   const list = Array.isArray(details) ? details
-    : Array.isArray(details?.deliveryMeals) ? details.deliveryMeals
+    : Array.isArray(details?.deliveryMenuMeal) ? details.deliveryMenuMeal
+      : Array.isArray(details?.deliveryMeals) ? details.deliveryMeals
       : Array.isArray(details?.meals) ? details.meals
         : null;
-  if (!list) throw new DietlyError('delivery details: no `deliveryMeals` array');
+  if (!list) throw new DietlyError('delivery menu: no `deliveryMenuMeal` array');
 
   const meals = [];
   let withoutNutrition = 0;

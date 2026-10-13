@@ -116,8 +116,16 @@ function run() {
   const frontendPolicy = find('NetworkPolicy', 'dietetyk-frontend');
   assert(backendPolicy && frontendPolicy, 'both NetworkPolicies render by default (networkPolicy.enabled: true)');
   assert(/podSelector:\s*\n\s*matchLabels:[^]*?app\.kubernetes\.io\/component: backend\s*\n\s*policyTypes/.test(backendPolicy), 'the backend policy selects the backend pod');
-  assert(/from:\s*\n\s*- podSelector:\s*\n\s*matchLabels:[^]*?app\.kubernetes\.io\/component: frontend\s*\n\s*ports:/.test(backendPolicy) && !/namespaceSelector/.test(backendPolicy), 'the backend admits only the frontend pod from its own namespace');
-  assert((backendPolicy.match(/- port: \d+/g) || []).join() === '- port: 3000', 'the backend admits port 3000 only - not the sqlite-web sidecar on 8080');
+  // Peers are listed by component: the frontend always, the catering sync job when
+  // catering.enabled (it posts to the import endpoint directly). Compared as an exact set, so
+  // any third peer - or a namespaceSelector widening one - still fails here.
+  const peersOf = (policy) => [...policy.matchAll(/- from:\s*\n\s*- podSelector:\s*\n\s*matchLabels:[^]*?app\.kubernetes\.io\/component: ([\w-]+)\s*\n\s*ports:/g)].map(m => m[1]).sort().join(',');
+  const expectedPeers = find('CronJob', 'dietetyk-catering-sync') ? 'catering-sync,frontend' : 'frontend';
+  assert(peersOf(backendPolicy) === expectedPeers && !/namespaceSelector/.test(backendPolicy), `the backend admits exactly [${expectedPeers}] from its own namespace (got [${peersOf(backendPolicy)}])`);
+  const withoutCatering = render('--set', 'catering.enabled=false').split(/^---$/m)
+    .find(d => /^kind: NetworkPolicy$/m.test(d) && /^ {2}name: dietetyk-backend$/m.test(d)) || '';
+  assert(peersOf(withoutCatering) === 'frontend', 'with catering off, the frontend is the backend\'s only peer again');
+  assert((backendPolicy.match(/- port: \d+/g) || []).every(p => p === '- port: 3000'), 'the backend admits port 3000 only - not the sqlite-web sidecar on 8080');
   assert(/namespaceSelector:\s*\n\s*matchLabels:\s*\n\s*kubernetes\.io\/metadata\.name: kube-system\s*\n\s*podSelector:\s*\n\s*matchLabels:\s*\n\s*app\.kubernetes\.io\/name: traefik/.test(frontendPolicy), 'the frontend admits Traefik from kube-system (one peer: namespace AND pod)');
   assert((frontendPolicy.match(/- port: \d+/g) || []).join() === '- port: 8080', 'the frontend admits the pod port 8080 only');
   assert(![backendPolicy, frontendPolicy].some(p => /Egress|egress:/.test(p)), 'the policies restrict ingress only');

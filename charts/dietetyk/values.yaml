@@ -28,7 +28,7 @@ backend:
 frontend:
   image:
     repository: ghcr.io/renacode/dietetyk-ai-frontend
-    tag: "sha-7c8fe72"
+    tag: "sha-2aa1691"
     pullPolicy: IfNotPresent
   resources:
     limits:

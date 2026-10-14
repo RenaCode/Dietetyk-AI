@@ -4,6 +4,9 @@ const db = require('../db');
 const { isCalendarDateString } = require('../utils/dates');
 const { invalidateAiExplanationCache } = require('../utils/aiExplanationCache');
 const { sanitizeNumber, sanitizeNullableNumber, sanitizeMealText } = require('../utils/mealSanitize');
+const { rateCateringMealsForUser } = require('../utils/cateringRating');
+// Through the module object, not destructured, so tests can replace the Gemini call.
+const config = require('../config');
 
 // Import of a catering provider's daily menu as meals (the sync job in catering/sync.js).
 //
@@ -155,6 +158,16 @@ router.post('/api/integrations/catering/:syncToken', requireKnownSyncToken, asyn
 
     const total = keyed.reduce((sum, m) => sum + m.calories, 0);
     res.json({ date, source, meals: keyed.length, calories: total, changed: changes > 0 });
+
+    // Health rating and comment, AFTER the response: Gemini must not slow down or fail the
+    // import. Meals still unrated (Gemini down, no key) are retried by the next run.
+    rateCateringMealsForUser({
+      userId, source, date,
+      generateContentWithFallback: (...args) => config.generateContentWithFallback(...args)
+    }).then(
+      ({ rated, failed }) => { if (rated || failed) console.log(`[CATERING] ${date}: rated ${rated}, failed ${failed}`); },
+      (err) => console.warn(`[CATERING] Rating skipped: ${err.message}`)
+    );
   } catch (err) {
     console.error('[CATERING] Import failed:', err.message);
     res.status(500).json({ error: 'Nie udało się zapisać posiłków z cateringu.' });

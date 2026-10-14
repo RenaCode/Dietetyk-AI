@@ -564,6 +564,8 @@ const TRANSLATIONS = {
   "Nie możesz zeskanować kodu? Wpisz w aplikacji ten klucz:": "Cannot scan the code? Enter this key in the app:",
   "Zeskanuj poniższy kod QR w aplikacji Google Authenticator lub Authy, a następnie wpisz wygenerowany 6-cyfrowy kod.": "Scan the QR code below in Google Authenticator or Authy, then enter the 6-digit code it shows.",
   "Kopiuj": "Copy",
+  "Wartość z etykiety cateringu": "Value from the catering label",
+  "z etykiety": "from label",
   "Token synchronizacji (np. dla importu z cateringu)": "Sync token (e.g. for the catering import)",
   "Skopiowano token synchronizacji do schowka!": "Sync token copied to the clipboard!",
   "Nie udało się skopiować tokenu do schowka.": "Could not copy the token to the clipboard.",

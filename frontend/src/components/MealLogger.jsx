@@ -366,26 +366,34 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                     </span>
                   </div>
 
-                  {(meal.fiber != null || meal.sugar != null || meal.sodium != null) && (
+                  {(meal.fiber != null || meal.sugar != null || meal.sodium != null) && (() => {
+                    // A catering meal (meal.source set by the catering import) carries the
+                    // provider's label values - they are not estimates, so no "≈" and no
+                    // "szac. AI" marker on them. Everything else is a Gemini estimate.
+                    const fromLabel = Boolean(meal.source);
+                    const approx = fromLabel ? '' : '≈';
+                    const hint = fromLabel ? t('Wartość z etykiety cateringu') : t('Szacunek AI, nie pomiar');
+                    return (
                     <div className="meal-nutrition-chips" style={{ marginTop: '-4px' }}>
                       {meal.fiber != null && (
-                        <span className="nutrition-chip fiber" title={t('Szacunek AI, nie pomiar')}>
-                          {t('Błonnik')}: ≈{Math.round(meal.fiber * 10) / 10}g
+                        <span className="nutrition-chip fiber" title={hint}>
+                          {t('Błonnik')}: {approx}{Math.round(meal.fiber * 10) / 10}g
                         </span>
                       )}
                       {meal.sugar != null && (
-                        <span className="nutrition-chip sugar" title={t('Szacunek AI, nie pomiar')}>
-                          {t('Cukry')}: ≈{Math.round(meal.sugar * 10) / 10}g
+                        <span className="nutrition-chip sugar" title={hint}>
+                          {t('Cukry')}: {approx}{Math.round(meal.sugar * 10) / 10}g
                         </span>
                       )}
                       {meal.sodium != null && (
-                        <span className="nutrition-chip sodium" title={t('Szacunek AI, nie pomiar')}>
-                          {t('Sód')}: ≈{Math.round(meal.sodium)}mg
+                        <span className="nutrition-chip sodium" title={hint}>
+                          {t('Sód')}: {approx}{Math.round(meal.sodium)}mg
                         </span>
                       )}
-                      <span className="nutrition-chip" style={{ color: 'var(--text-dim)' }}>{t('szac. AI')}</span>
+                      <span className="nutrition-chip" style={{ color: 'var(--text-dim)' }}>{fromLabel ? t('z etykiety') : t('szac. AI')}</span>
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {meal.dietician_comment && (
                     <p className="meal-comment">

@@ -108,6 +108,19 @@ data:
             try_files $uri $uri/ /index.html;
         }
 
+        # index.html is never taken from the browser cache (2026-10-14). Without a
+        # Cache-Control header browsers kept it heuristically; with SSO on, a cached page
+        # skipped Traefik's forwardAuth, so instead of the Authelia portal the user saw the
+        # app's own login form until a manual refresh - and after a deploy, a stale bundle.
+        # `expires epoch` sends `Cache-Control: no-cache` without add_header, so the
+        # server-level security headers above are still inherited here. try_files and the
+        # index directive both end in an internal redirect to /index.html, which lands here.
+        # Hashed files under /assets/ keep normal caching.
+        location = /index.html {
+            root /usr/share/nginx/html;
+            expires epoch;
+        }
+
         location /api {
             # Webhook payloads up to 1 MB stay in memory instead of a temp file on disk (the
             # default 16k spilled almost every Apple Health sync). This saves I/O; it is not

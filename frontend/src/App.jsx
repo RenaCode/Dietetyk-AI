@@ -255,8 +255,13 @@ export default function App() {
       } else if (result.kind === 'denied') {
         localStorage.setItem(SSO_HOST_KEY, '1');
         setLoginError(result.error || t('Logowanie SSO odrzucone.'));
-      } else if (result.kind === 'lost' && localStorage.getItem(SSO_HOST_KEY) === '1' && reloadForSso()) {
-        // The Authelia session ran out: a reload goes through the portal's login and back.
+      } else if (result.kind === 'lost' && reloadForSso()) {
+        // The Authelia session ran out, or this is the first visit since SSO was switched on
+        // and the page came from the browser cache (2026-10-14: the login form showed until a
+        // manual refresh, because SSO_HOST_KEY is only set after a first SSO answer). A
+        // reload is a top-level navigation, which can follow the redirect to the portal.
+        // reloadForSso() allows one per 30 s, so a backend that is simply down reloads once
+        // and then falls through to the ordinary login screen.
         return;
       }
       setSsoChecking(false);

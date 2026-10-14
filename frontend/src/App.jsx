@@ -12,6 +12,7 @@ import { resolveTabParam } from './utils/tabParam';
 import { newMealSubmission, retryMealSubmission } from './utils/mealSubmission';
 import TotpSecretKey from './components/TotpSecretKey';
 import { NavIcon, LogoMark } from './components/NavIcons';
+import AppSwitcher from './components/AppSwitcher';
 import { requestSsoSession, reloadForSso, safeLogoutUrl, SSO_HOST_KEY, SSO_LOGOUT_URL_KEY } from './utils/sso';
 
 // Today's date in YYYY-MM-DD, in the timezone the BACKEND uses (Europe/Warsaw).
@@ -1338,6 +1339,7 @@ export default function App() {
       <div className="app-frame">
       <header className="app-header">
         <div className="logo-container">
+          <AppSwitcher />
           <LogoMark />
           <span className="logo-text">Dietetyk <span className="logo-text-ai">AI</span></span>
         </div>
@@ -1370,7 +1372,7 @@ export default function App() {
           </div>
           <button type="button" className="logout-btn" onClick={handleLogoutClick}>
             <NavIcon name="logout" size={18} />
-            <span>{t("Wyloguj")}</span>
+            <span className="logout-btn-label">{t("Wyloguj")}</span>
           </button>
         </div>
       </header>

@@ -188,6 +188,140 @@ h1, h2, h3, h4 {
   color: var(--mint);
 }
 
+/* Header app switcher (components/AppSwitcher.jsx). The panel is positioned against
+   .app-switcher, which is why it needs position: relative; nothing up the chain clips it
+   (.app-frame deliberately has no overflow or transform, see above). */
+.app-switcher {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.app-switcher-btn {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.app-switcher-btn:hover,
+.app-switcher-btn.open {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-glass);
+}
+
+/* Above the phone bottom navigation (z-index 900) so the panel is never covered by it. */
+.app-switcher-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 950;
+  width: 300px;
+  max-width: calc(100vw - 32px);
+  padding: 12px;
+  background: rgba(12, 17, 20, 0.97);
+  border: 1px solid var(--border-glass-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-glow);
+}
+
+.app-switcher-title {
+  padding: 2px 8px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.app-switcher-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-switcher-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  text-decoration: none;
+}
+
+a.app-switcher-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.app-switcher-item.current {
+  background: var(--accent-glow);
+}
+
+.app-switcher-tile {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: #fff;
+}
+
+.app-switcher-tile-trader {
+  background: linear-gradient(135deg, #2563eb 0%, #06b6d4 100%);
+}
+
+.app-switcher-tile-kidwatch {
+  background: var(--gradient-orange);
+}
+
+.app-switcher-tile-dietetyk {
+  background: var(--gradient-mint);
+  color: var(--text-on-mint);
+}
+
+.app-switcher-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-switcher-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.app-switcher-current-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border-glass-glow);
+  color: var(--mint);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.app-switcher-desc {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
 .nav-tabs {
   display: flex;
   align-items: center;
@@ -283,6 +417,7 @@ h1, h2, h3, h4 {
 }
 
 .logout-btn {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2348,6 +2483,24 @@ h1, h2, h3, h4 {
 @media (max-width: 479px) {
   .user-chip-name {
     display: none;
+  }
+
+  /* The app switcher added ~48px to .logo-container, which does not shrink, and at 360px the
+     header overflowed by ~22px and the whole page scrolled sideways. The logout button keeps
+     only its icon here; the label stays in the accessibility tree (visually hidden, the same
+     technique as .nav-tab-label), so the button keeps its name for screen readers. Hiding the
+     logo text instead was rejected: it is the only place the app's name is shown. */
+  .logout-btn {
+    padding: 7px 9px;
+  }
+
+  .logout-btn-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .calorie-ring {

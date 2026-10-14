@@ -727,6 +727,14 @@ const TRANSLATIONS = {
   "Usunąć użytkownika?": "Delete the user?",
   "Konto {username} i wszystkie jego dane zostaną usunięte. Tej operacji nie można cofnąć.": "The account {username} and all its data will be deleted. This cannot be undone.",
   "Serwer zwrócił błąd ({status}) bez szczegółów.": "The server returned an error ({status}) without details.",
+
+  // Header app switcher (components/AppSwitcher.jsx, list in utils/renacodeApps.js)
+  "Przełącz aplikację": "Switch app",
+  "Aplikacje RenaCode": "RenaCode apps",
+  "Tutaj jesteś": "You are here",
+  "Handel i ryzyko": "Trading and risk",
+  "Czas ekranowy dzieci": "Kids' screen time",
+  "Dieta i zdrowie": "Diet and health",
 };
 
 let currentLang = localStorage.getItem("language") || "pl";

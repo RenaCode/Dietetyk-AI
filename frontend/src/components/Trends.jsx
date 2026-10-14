@@ -863,6 +863,15 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
 
     const colors = { deep: '#7c3aed', rem: '#38bdf8', light: 'rgba(255,255,255,0.18)' };
 
+    // Headline: the selected night's deep + REM, and their averages over the nights that have
+    // data. Every other card in the row has a big value above its chart; without one this
+    // card's chart sat directly under the title, out of line with its neighbours.
+    const selected = dayBreakdowns[currentWeekDays.indexOf(selectedDate)] || null;
+    const nights = dayBreakdowns.filter(d => d !== null);
+    const avgOf = (k) => (nights.length ? nights.reduce((sum, d) => sum + d[k], 0) / nights.length : null);
+    const avgDeep = avgOf('deep');
+    const avgRem = avgOf('rem');
+
     return (
       <div className="premium-card" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
@@ -880,6 +889,20 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
               <span style={{ width: 8, height: 8, borderRadius: '50%', background: colors.light, display: 'inline-block' }}></span>
               Lekki
             </span>
+          </div>
+        </div>
+
+        <div style={{ marginTop: '4px' }}>
+          <span style={{ fontSize: '1.8rem', fontWeight: '800', color: '#fff' }}>
+            {selected ? formatDuration(selected.deep) : '--'}
+          </span>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginLeft: '4px' }}>{t("głęboki")}</span>
+          <span style={{ fontSize: '1.1rem', fontWeight: '700', color: '#fff', marginLeft: '12px' }}>
+            {selected ? formatDuration(selected.rem) : '--'}
+          </span>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginLeft: '4px' }}>REM</span>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+            {hasData ? `${t("Śr.")} ${formatDuration(avgDeep)} ${t("głęboki")} · ${formatDuration(avgRem)} REM` : t('Brak danych')}
           </div>
         </div>
 
@@ -1132,7 +1155,8 @@ export default function Trends({ selectedDate, sessionToken, onLogout }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
         <span className="premium-title" style={{ fontSize: '1.05rem', padding: '0 4px' }}>Sen i regeneracja</span>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
-          {renderBarChart("Czas snu", "sleep_duration", "h", [0, 4, 8], (v) => formatDuration(v))}
+          {/* No unit: formatDuration already returns "7h 48m" - passing "h" rendered "7h 48m h". */}
+          {renderBarChart("Czas snu", "sleep_duration", "", [0, 4, 8], (v) => formatDuration(v))}
           {renderSleepStagesChart()}
           {renderLineChart("Wynik snu", "sleep_score", "%", [0, 50, 100], false, (v) => Math.round(v))}
           {renderLineChart("Wskaźnik regeneracji", "readiness_score", "%", [0, 50, 100], false, (v) => Math.round(v))}

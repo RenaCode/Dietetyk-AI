@@ -651,6 +651,8 @@ const TRANSLATIONS = {
   // know" instead of substituting a zero or a default - a health app must never present an
   // unmeasured number as a measurement.
   "Brak danych": "No data",
+  "głęboki": "deep",
+  "Śr.": "Avg.",
   "Spróbuj ponownie": "Try again",
   "Nie udało się wczytać danych dnia": "Could not load this day's data",
   "Nie pokazujemy tu żadnych liczb, bo nie znamy Twoich dzisiejszych wartości — zamiast zgadywać, poczekaj i spróbuj ponownie.": "No numbers are shown here because we do not know your values for this day - rather than guess, wait a moment and try again.",

@@ -19,7 +19,7 @@ const { geocodeLocation } = require('../utils/weatherContext');
 const { sessionFingerprint, emailRevertMessage, notifyEmailChanged, EMAIL_CHANGE_REVERT_DAYS } = require('../services/emailChange');
 const { cleanUpAfterCredentialReset } = require('../services/accountCleanup');
 const { isImageDataUrl } = require('../utils/imageDataUrl');
-const { isSsoEnabled } = require('../services/ssoIdentity');
+const { isSsoEnabled, canSeeArgo } = require('../services/ssoIdentity');
 // The password re-check helpers (attempt counting, the 409 for an account without a password,
 // SSO not counting as a fresh authentication) live in services/passwordConfirmation.js, shared
 // with routes/admin.js.
@@ -288,6 +288,9 @@ router.get('/api/user/profile', async (req, res) => {
       // True on a request that came through Authelia: the address is the SSO login there, and
       // POST /api/user/profile refuses to change it (see there). Settings shows it read-only.
       email_managed_by_sso: !!req.ssoIdentity,
+      // The Argo CD entry in the header's app switcher - owner only (services/ssoIdentity.js,
+      // canSeeArgo): role admin here, or a trusted SSO identity in sso.argoGroups.
+      show_argo: canSeeArgo(user.role, req.ssoIdentity),
       // Google Fit is off unless an administrator switches it on (google_fit_enabled - see
       // isGoogleFitEnabled in services/oauthHelpers.js); Settings shows the card only then.
       // has_google_fit stays true for a stored connection while the integration is off, so

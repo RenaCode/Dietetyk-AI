@@ -160,6 +160,12 @@ sso:
     - rodzina
     - admins
     - dietetyk
+  # Authelia groups that see the Argo CD entry in the app switcher (SSO_GRUPY_ARGO) - the owner's
+  # two users. Display only (Argo CD has its own Authelia rule); an account with the admin role
+  # in the app's database sees it as well. Never put `rodzina` here.
+  argoGroups:
+    - wlasciciel
+    - admins
 
 persistence:
   size: 2Gi

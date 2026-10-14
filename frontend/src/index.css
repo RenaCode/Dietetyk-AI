@@ -294,6 +294,10 @@ a.app-switcher-item:hover {
   color: var(--text-on-mint);
 }
 
+.app-switcher-tile-argocd {
+  background: linear-gradient(135deg, #ef7b4d 0%, #e3501f 100%);
+}
+
 .app-switcher-text {
   display: flex;
   flex-direction: column;

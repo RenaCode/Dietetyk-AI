@@ -6,8 +6,11 @@ import { renacodeApps, CURRENT_APP_ID } from '../utils/renacodeApps';
 // manner of the Atlassian header. The app list itself lives in utils/renacodeApps.js.
 //
 // Semantics: a non-modal dialog opened by a button (aria-haspopup="dialog"), not role="menu".
-// A menu promises arrow-key navigation and menuitem roles; the panel holds two plain links and
-// one static entry, so Tab order is the honest model and screen readers announce links as links.
+// A menu promises arrow-key navigation and menuitem roles; the panel holds plain links and one
+// static entry, so Tab order is the honest model and screen readers announce links as links.
+//
+// `showArgo` comes from the profile (show_argo, decided on the backend) and adds the owner-only
+// Argo CD entry; see utils/renacodeApps.js.
 
 function GridIcon() {
   const dots = [];
@@ -23,14 +26,14 @@ function GridIcon() {
   );
 }
 
-export default function AppSwitcher() {
+export default function AppSwitcher({ showArgo = false }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef(null);
   const buttonRef = useRef(null);
   const panelRef = useRef(null);
   const panelId = useId();
   const titleId = useId();
-  const apps = renacodeApps(t);
+  const apps = renacodeApps(t, { showArgo });
 
   useEffect(() => {
     if (!open) return undefined;

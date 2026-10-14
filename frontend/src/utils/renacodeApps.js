@@ -11,10 +11,17 @@
 // for; under any other name the strings would drop out of the drift check.
 export const CURRENT_APP_ID = 'dietetyk';
 
-export function renacodeApps(t = (text) => text) {
-  return [
+// `adminOnly` entries are operator tools for the owner (Argo CD). Whether this user may see them
+// is decided by the backend - GET /api/user/profile -> show_argo (backend/services/ssoIdentity.js,
+// canSeeArgo: admin role, or a trusted Authelia identity in sso.argoGroups) - and passed in as
+// `showArgo`. Anything other than literal `true` hides them, so a profile that has not loaded
+// yet, or an older backend without the field, shows the family list.
+export function renacodeApps(t = (text) => text, { showArgo = false } = {}) {
+  const apps = [
     { id: 'trader', name: 'Trader', url: 'https://trader.renacode.com/', description: t('Handel i ryzyko') },
     { id: 'kidwatch', name: 'Kidwatch', url: 'https://kidwatch.renacode.com/', description: t('Czas ekranowy dzieci') },
-    { id: 'dietetyk', name: 'Dietetyk', url: 'https://dietetyk.renacode.com/', description: t('Dieta i zdrowie') }
+    { id: 'dietetyk', name: 'Dietetyk', url: 'https://dietetyk.renacode.com/', description: t('Dieta i zdrowie') },
+    { id: 'argocd', name: 'Argo CD', url: 'https://argocd.renacode.com/', description: t('Wdrożenia i klaster'), adminOnly: true }
   ];
+  return apps.filter((app) => !app.adminOnly || showArgo === true);
 }

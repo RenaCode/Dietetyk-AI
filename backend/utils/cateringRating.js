@@ -12,7 +12,6 @@
 // run (the query below selects exactly the rows that still lack one).
 
 const db = require('../db');
-const { decrypt } = require('./encryption');
 const { escapeUserInputTag } = require('./mealSanitize');
 
 function buildCateringRatingPrompt(lang, meal) {
@@ -106,6 +105,9 @@ async function rateCateringMeals({ userId, source, date, generate, language = 'p
 async function rateCateringMealsForUser({ userId, source, date, generateContentWithFallback }) {
   const user = await db.get(`SELECT role FROM users WHERE id = ?`, [userId]);
   const keyRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'gemini_api_key'", [userId]);
+  // Required here, not at the top: utils/encryption.js reads APP_PASSWORD when it is loaded,
+  // and this module is pulled in by routes/catering.js while the app is still being wired.
+  const { decrypt } = require('./encryption');
   const userApiKey = keyRow ? decrypt(keyRow.value) : null;
   const forceCustomKeyOnly = !user || user.role !== 'admin';
   const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [userId]);

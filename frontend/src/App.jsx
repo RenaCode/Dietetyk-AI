@@ -1372,7 +1372,7 @@ export default function App() {
           </div>
           <button type="button" className="logout-btn" onClick={handleLogoutClick}>
             <NavIcon name="logout" size={18} />
-            <span>{t("Wyloguj")}</span>
+            <span className="logout-btn-label">{t("Wyloguj")}</span>
           </button>
         </div>
       </header>

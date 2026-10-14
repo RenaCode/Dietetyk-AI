@@ -417,6 +417,7 @@ a.app-switcher-item:hover {
 }
 
 .logout-btn {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -2482,6 +2483,24 @@ a.app-switcher-item:hover {
 @media (max-width: 479px) {
   .user-chip-name {
     display: none;
+  }
+
+  /* The app switcher added ~48px to .logo-container, which does not shrink, and at 360px the
+     header overflowed by ~22px and the whole page scrolled sideways. The logout button keeps
+     only its icon here; the label stays in the accessibility tree (visually hidden, the same
+     technique as .nav-tab-label), so the button keeps its name for screen readers. Hiding the
+     logo text instead was rejected: it is the only place the app's name is shown. */
+  .logout-btn {
+    padding: 7px 9px;
+  }
+
+  .logout-btn-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 
   .calorie-ring {

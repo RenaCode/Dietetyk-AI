@@ -1,3 +1,9 @@
+// config FIRST: it is what loads .env (APP_PASSWORD and the rest) into process.env. Anything
+// that reads the environment at require time - utils/encryption.js throws when APP_PASSWORD
+// is missing - must come after it. #86 required utils/cateringRating.js above this line and
+// the production backend crash-looped on start (2026-10-14); CI did not see it because the
+// test jobs set APP_PASSWORD in the real environment, not through .env.
+const config = require('../config');
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
@@ -5,8 +11,6 @@ const { isCalendarDateString } = require('../utils/dates');
 const { invalidateAiExplanationCache } = require('../utils/aiExplanationCache');
 const { sanitizeNumber, sanitizeNullableNumber, sanitizeMealText } = require('../utils/mealSanitize');
 const { rateCateringMealsForUser } = require('../utils/cateringRating');
-// Through the module object, not destructured, so tests can replace the Gemini call.
-const config = require('../config');
 
 // Import of a catering provider's daily menu as meals (the sync job in catering/sync.js).
 //

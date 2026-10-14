@@ -171,6 +171,7 @@ function run() {
   assert(/- name: SSO_NAGLOWKI\n\s*value: "1"/.test(ssoBackend), 'sso.enabled sets SSO_NAGLOWKI=1 in the backend pod');
   assert(/- name: SSO_LOGOUT_URL\n\s*value: "https:\/\/auth\.renacode\.com\/logout\?rd=https%3A%2F%2Fdietetyk\.renacode\.com%2F"/.test(ssoBackend), 'and the portal logout URL returning to this host');
   assert(/- name: SSO_GRUPY\n\s*value: "wlasciciel,rodzina,admins,dietetyk"/.test(ssoBackend), 'and the admitted groups from sso.allowedGroups');
+  assert(/- name: SSO_GRUPY_ARGO\n\s*value: "wlasciciel,admins"/.test(ssoBackend), 'and the groups that see Argo CD from sso.argoGroups');
   assert(!/SSO_/.test(backendDoc(rendered.split(/^---$/m))), 'by default the backend gets no SSO variable at all');
   const frontendSso = ssoDocs.find(d => /^kind: Deployment$/m.test(d) && /^ {2}name: dietetyk-frontend$/m.test(d)) || '';
   assert(frontendSso && !/SSO_NAGLOWKI/.test(frontendSso), 'only the backend reads the flag');

@@ -44,6 +44,33 @@ function allowedGroups() {
   return configured.length ? configured : DEFAULT_ALLOWED_GROUPS;
 }
 
+// Who sees operator links (Argo CD in the header's app switcher, frontend/src/utils/
+// renacodeApps.js): the owner, in either of his Authelia users. Configurable through
+// SSO_GRUPY_ARGO (comma-separated; the chart renders it from sso.argoGroups), read on every call
+// and with the same charset and empty-means-default rule as SSO_GRUPY above. The family
+// (`rodzina`) and `dietetyk` are deliberately not in the default.
+const DEFAULT_ARGO_GROUPS = ['wlasciciel', 'admins'];
+function argoGroups() {
+  const configured = (process.env.SSO_GRUPY_ARGO || '')
+    .split(',')
+    .map(g => g.trim())
+    .filter(g => GROUP_NAME_RE.test(g));
+  return configured.length ? configured : DEFAULT_ARGO_GROUPS;
+}
+
+// Whether the current request may see the Argo CD entry: the account's role in THIS app is
+// admin, or the request's TRUSTED SSO identity is in one of argoGroups(). `identity` must be
+// what requireAuth put on req.ssoIdentity - readSsoIdentity's result, which is null whenever
+// SSO_NAGLOWKI is off, so a forged Remote-Groups without the flag decides nothing. This is a
+// display decision only: Argo CD sits behind Authelia's own rule, and the link opens nothing
+// that rule would not.
+function canSeeArgo(role, identity) {
+  if (role === 'admin') return true;
+  if (!identity || !isSsoEnabled() || !Array.isArray(identity.groups)) return false;
+  const groups = argoGroups();
+  return identity.groups.some(g => groups.includes(g));
+}
+
 // The contract's charset for Remote-User. Authelia's user names fit it; anything else means
 // the header did not come from Authelia, and guessing what was meant is how a lenient parser
 // becomes an injection.
@@ -154,5 +181,8 @@ module.exports = {
   identityMatchesEmail,
   ssoLogoutUrl,
   allowedGroups,
-  DEFAULT_ALLOWED_GROUPS
+  DEFAULT_ALLOWED_GROUPS,
+  argoGroups,
+  canSeeArgo,
+  DEFAULT_ARGO_GROUPS
 };

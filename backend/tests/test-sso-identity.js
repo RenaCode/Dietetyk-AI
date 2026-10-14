@@ -31,6 +31,7 @@ process.env.OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || 'test-oauth-s
 delete process.env.SSO_NAGLOWKI;
 delete process.env.SSO_LOGOUT_URL;
 delete process.env.SSO_GRUPY;
+delete process.env.SSO_GRUPY_ARGO;
 
 const BACKEND_DIR = path.join(__dirname, '..');
 function stubModule(relativePath, exports) {
@@ -54,7 +55,7 @@ function assert(condition, message) {
 }
 
 const flagOn = () => { process.env.SSO_NAGLOWKI = '1'; process.env.SSO_LOGOUT_URL = LOGOUT_URL; };
-const flagOff = () => { delete process.env.SSO_NAGLOWKI; delete process.env.SSO_LOGOUT_URL; delete process.env.SSO_GRUPY; };
+const flagOff = () => { delete process.env.SSO_NAGLOWKI; delete process.env.SSO_LOGOUT_URL; delete process.env.SSO_GRUPY; delete process.env.SSO_GRUPY_ARGO; };
 
 let baseUrl;
 function call(method, urlPath, { body, token, headers = {} } = {}) {
@@ -402,6 +403,59 @@ function testDotenvCannotSetTheFlag() {
   assert(fromPod.stdout === '1', `the pod's own variable is kept (got ${fromPod.stdout})`);
 }
 
+// The Argo CD entry in the app switcher (show_argo in the profile): the owner's two Authelia
+// users and the app's admin role see it; family and ordinary users never do; and without the
+// SSO flag Remote-Groups decides nothing.
+async function testShowArgo() {
+  console.log('\n--- TEST: show_argo - Argo CD in the app switcher for the owner only ---');
+  flagOn();
+  const profileFor = async (role, authUser, groups) => {
+    const account = await createUser({ role });
+    const headers = identity(authUser, account.email, groups);
+    const sso = await ssoLogin(headers);
+    assert(sso.status === 200, `SSO login as ${authUser} in ${groups} (got ${sso.status})`);
+    return call('GET', '/api/user/profile', { token: sso.body.token, headers });
+  };
+
+  const owner = await profileFor('user', 'owner', 'wlasciciel');
+  assert(owner.status === 200 && owner.body.role === 'user' && owner.body.show_argo === true, 'group wlasciciel (role user) sees Argo CD');
+  const admins = await profileFor('user', 'admin', 'admins');
+  assert(admins.body.show_argo === true, 'group admins sees Argo CD');
+  const adminRole = await profileFor('admin', 'admin', 'dietetyk');
+  assert(adminRole.body.show_argo === true, 'role admin sees Argo CD whatever the group');
+  const family = await profileFor('user', 'family1', 'rodzina');
+  assert(family.status === 200 && family.body.show_argo === false, 'group rodzina does NOT see Argo CD');
+  const plain = await profileFor('user', 'ania', 'dietetyk');
+  assert(plain.body.show_argo === false, 'an ordinary user does NOT see Argo CD');
+  const mixedFamily = await profileFor('user', 'family2', 'rodzina,dietetyk');
+  assert(mixedFamily.body.show_argo === false, 'family in several non-owner groups does NOT see it');
+
+  // Configurable through SSO_GRUPY_ARGO (sso.argoGroups in the chart).
+  process.env.SSO_GRUPY_ARGO = 'admins';
+  try {
+    const ownerNow = await profileFor('user', 'owner', 'wlasciciel');
+    assert(ownerNow.body.show_argo === false, 'a group left out of SSO_GRUPY_ARGO no longer sees it');
+    process.env.SSO_GRUPY_ARGO = ' , "x y" ';
+    const fallback = await profileFor('user', 'owner', 'wlasciciel');
+    assert(fallback.body.show_argo === true, 'a list with no valid name falls back to the default');
+  } finally {
+    delete process.env.SSO_GRUPY_ARGO;
+  }
+
+  // Flag off: the headers are not read, so a forged owner group changes nothing.
+  flagOff();
+  const user = await createUser();
+  const token = (await passwordLogin(user.username)).token;
+  for (const groups of ['wlasciciel', 'admins']) {
+    const forged = await call('GET', '/api/user/profile', { token, headers: identity('owner', user.email, groups) });
+    assert(forged.status === 200 && forged.body.show_argo === false, `without SSO_NAGLOWKI a forged Remote-Groups: ${groups} shows nothing`);
+  }
+  const admin = await createUser({ role: 'admin' });
+  const adminToken = (await passwordLogin(admin.username)).token;
+  const adminProfile = await call('GET', '/api/user/profile', { token: adminToken });
+  assert(adminProfile.body.show_argo === true, 'without SSO the admin role still sees Argo CD');
+}
+
 async function run() {
   await db.initDb();
   const server = await new Promise((resolve) => {
@@ -416,6 +470,7 @@ async function run() {
     await testLogout();
     await testEmailIsTheLogin();
     await testSensitiveActionsNeedThePassword();
+    await testShowArgo();
     testDotenvCannotSetTheFlag();
   } finally {
     flagOff();

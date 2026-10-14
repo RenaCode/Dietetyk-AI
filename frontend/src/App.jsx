@@ -1344,7 +1344,7 @@ export default function App() {
       <div className="app-frame">
       <header className="app-header">
         <div className="logo-container">
-          <AppSwitcher />
+          <AppSwitcher showArgo={userProfile.show_argo === true} />
           <LogoMark />
           <span className="logo-text">Dietetyk <span className="logo-text-ai">AI</span></span>
         </div>

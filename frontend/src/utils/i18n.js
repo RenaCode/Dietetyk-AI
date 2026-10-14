@@ -735,6 +735,7 @@ const TRANSLATIONS = {
   "Handel i ryzyko": "Trading and risk",
   "Czas ekranowy dzieci": "Kids' screen time",
   "Dieta i zdrowie": "Diet and health",
+  "Wdrożenia i klaster": "Deployments and cluster",
 };
 
 let currentLang = localStorage.getItem("language") || "pl";

@@ -1985,18 +1985,19 @@ a.app-switcher-item:hover {
     opacity: 0;
     transform: translateY(8px);
   }
-  /* "none", nie translateY(0): z animation-fill-mode: forwards wartość końcowa
-     zostaje na elemencie na stałe, a każdy transform inny niż none tworzy containing
-     block dla position: fixed - szuflada czatu z agentem przypinała się wtedy do
-     zakładki zamiast do okna. */
   to {
     opacity: 1;
     transform: none;
   }
 }
 
+/* Bez animation-fill-mode: forwards. Animacja transform, która wypełnia stan końcowy, zostaje
+   na elemencie na zawsze i - nawet gdy kończy się na transform: none - Safari i Chrome traktują
+   zakładkę jak element z transformacją, czyli containing block dla position: fixed. Szuflada
+   czatu z agentem przypinała się wtedy do zakładki zamiast do ekranu i na telefonie uciekała
+   razem z przewijaną stroną. Stan końcowy i tak jest domyślnym stylem elementu. */
 .premium-tab-content {
-  animation: fadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: fadeInUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .shimmer-placeholder {

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { getTemperatureStatus } from '../utils/health';
 import { formatHoursMins } from '../utils/format';
 import { t } from '../utils/i18n';
@@ -1157,7 +1158,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   ]);
   const [isSendingChat, setIsSendingChat] = useState(false);
   
-  const messagesEndRef = useRef(null);
+  const messagesListRef = useRef(null);
+  const viewportHeight = window.CSS?.supports?.('height', '100dvh') ? '100dvh' : '100vh';
 
   useEffect(() => {
     setChatMessages(prev => {
@@ -1174,8 +1176,11 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   useEffect(() => {
     if (isChatOpen) {
       document.body.style.overflow = 'hidden';
-      if (messagesEndRef.current) {
-        messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      // Scroll only the message list. scrollIntoView also scrolls every scrollable ancestor,
+      // the page included - on a phone the dashboard slid away under the open chat.
+      const list = messagesListRef.current;
+      if (list) {
+        list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' });
       }
     } else {
       document.body.style.overflow = '';
@@ -4651,7 +4656,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
 
 
       {/* CZAT Z DIETETYKIEM AI (Boczna szuflada / overlay) */}
-      {isChatOpen && (
+      {/* Rendered into <body> so position: fixed is always relative to the screen, whatever
+          the tab wrappers around the dashboard do (a transform or filter on any of them would
+          pin the drawer to the tab instead). */}
+      {isChatOpen && createPortal(
         <div style={{
           position: 'fixed',
           top: 0,
@@ -4671,8 +4679,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
           <div style={{
             width: '100%',
             maxWidth: '460px',
-            maxHeight: 'calc(100vh - 40px)',
-            height: 'min(720px, calc(100vh - 40px))',
+            // dvh: on iOS Safari 100vh is the height with the toolbars hidden, so the drawer
+            // ran under the address bar. vh stays for Safari before 15.4, which has no dvh.
+            maxHeight: `calc(${viewportHeight} - 40px)`,
+            height: `min(720px, calc(${viewportHeight} - 40px))`,
             background: 'rgba(13, 14, 14, 0.96)',
             backdropFilter: 'blur(20px)',
             WebkitBackdropFilter: 'blur(20px)',
@@ -4720,10 +4730,12 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </div>
 
             {/* Message history */}
-            <div style={{
+            <div ref={messagesListRef} style={{
               flexGrow: 1,
+              minHeight: 0,
               padding: '20px',
               overflowY: 'auto',
+              overscrollBehavior: 'contain',
               display: 'flex',
               flexDirection: 'column',
               gap: '16px'
@@ -4764,7 +4776,6 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                   <span>{t("Dietetyk AI myśli...")}</span>
                 </div>
               )}
-              <div ref={messagesEndRef} />
             </div>
 
             {/* Quick-question chips (round 8) - shown only at the start of a conversation
@@ -4836,7 +4847,8 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             </form>
 
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Style animacji szuflady czatu */}

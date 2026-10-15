@@ -592,6 +592,13 @@ export default function App() {
           // The first attempt had been saved after all - say so, rather than "saved" again.
           setSuccessMessage(t('Ten posiłek był już zapisany - nie dodano go drugi raz.'));
           setTimeout(() => setSuccessMessage(''), 6000);
+        } else if (data.analysisPending) {
+          // Saved, but the AI was unavailable: the macros are placeholders until the backend's
+          // retry fills them in (backend/services/mealAnalysis.js). Not an error - resending
+          // would only add a second copy.
+          const reason = data.analysisPendingReason ? ` ${data.analysisPendingReason}` : '';
+          setSuccessMessage(t('Posiłek zapisany, ale analiza AI jest chwilowo niedostępna. Kalorie i makroskładniki uzupełnią się automatycznie.') + reason);
+          setTimeout(() => setSuccessMessage(''), 10000);
         }
 // The meal was added successfully - reload the dashboard
         await fetchDashboardData();

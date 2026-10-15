@@ -470,6 +470,15 @@ const initDb = async () => {
   await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_meals_external
              ON meals(user_id, source, external_id) WHERE external_id IS NOT NULL`);
 
+  // Migration: meals saved while the AI was unavailable (services/mealAnalysis.js).
+  // analysis_status is NULL for an analysed meal, 'pending' while the retry loop still owes it
+  // an analysis (macros are zero until then), 'failed' once the retry gave up.
+  await addColumn(`ALTER TABLE meals ADD COLUMN analysis_status TEXT DEFAULT NULL`);
+  await addColumn(`ALTER TABLE meals ADD COLUMN analysis_attempts INTEGER DEFAULT 0`);
+  await addColumn(`ALTER TABLE meals ADD COLUMN analysis_attempted_at TEXT DEFAULT NULL`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_meals_analysis_pending
+             ON meals(analysis_status) WHERE analysis_status IS NOT NULL`);
+
   // Assign legacy meals without a user_id to the first user
   await run(`UPDATE meals SET user_id = 1 WHERE user_id IS NULL OR user_id = 0`);
 

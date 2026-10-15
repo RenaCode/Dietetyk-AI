@@ -119,16 +119,22 @@ async function run() {
     assert(await mealCount() === 2, 'one meal for this submission, not two');
     assert(gemini.calls === 2, 'and no second analysis was started');
 
-    console.log('\n--- TEST: a failed analysis frees the key for a real retry ---');
+    console.log('\n--- TEST: a failed analysis saves the meal as pending, and a retry does not duplicate it ---');
+    // Since 15.10.2026 (services/mealAnalysis.js) an AI failure no longer discards the meal:
+    // it is saved with analysis_status = 'pending', so the submission is complete and a retry
+    // with the same key must be answered from it rather than analysed again.
     const key3 = newKey();
     gemini.failNext = true;
     const failed = await post(baseUrl, { rawText: 'zupa pomidorowa', idempotencyKey: key3 });
-    assert(failed.status === 500, `the failed analysis answers 500 (got ${failed.status})`);
-    assert(!/stubbed Gemini failure/.test(failed.body.error || ''), 'without the internal error text (N2)');
+    assert(failed.status === 201 && failed.body.analysisPending === true, `the meal is saved as pending (got ${failed.status})`);
+    assert(!/stubbed Gemini failure/.test(JSON.stringify(failed.body)), 'without the internal error text (N2)');
+    assert(await mealCount() === 3, 'one meal row exists for it');
     advanceClock(60 * 1000);
+    const callsBeforeRetry = gemini.calls;
     const again = await post(baseUrl, { rawText: 'zupa pomidorowa', idempotencyKey: key3 });
-    assert(again.status === 201, `the retry with the same key runs the analysis (got ${again.status})`);
-    assert(await mealCount() === 3, 'and saves the meal once');
+    assert(again.status === 200 && again.body.replayed === true, `the retry with the same key is answered from the saved meal (got ${again.status})`);
+    assert(again.body.meals[0].analysis_pending === true, 'and says it is still pending');
+    assert(await mealCount() === 3 && gemini.calls === callsBeforeRetry, 'without a second row or a second analysis');
 
     console.log('\n--- TEST: a new submission (new key) is a new meal ---');
     advanceClock(60 * 1000);

@@ -5,6 +5,7 @@ const logger = require('./services/logger');
 const { installProcessErrorHandlers } = require('./services/processErrors');
 const { runHourlySyncIfDue, runBackupThenCleanup } = require('./scheduler');
 const { nextWarsawTimeMillis } = require('./utils/dates');
+const { retryPendingMeals, RETRY_TICK_MS } = require('./services/mealAnalysis');
 
 // Daily backup at a fixed Warsaw time (audit 04.10.2026, D-12). It used to be setInterval(24 h)
 // from process start, so the copy was taken whenever the pod last restarted (09:32 for weeks),
@@ -63,6 +64,7 @@ async function start(deps = {}) {
     runHourlySyncIfDue: hourlySync = runHourlySyncIfDue,
     runBackupThenCleanup: backupThenCleanup = runBackupThenCleanup,
     port = PORT,
+    retryMeals = retryPendingMeals,
     schedule = setInterval,
     scheduleBackup = scheduleDailyBackup
   } = deps;
@@ -125,6 +127,15 @@ async function start(deps = {}) {
     }
   });
   schedule(hourlySync, 5 * 60 * 1000);
+  // Meals saved while the AI was down (services/mealAnalysis.js). Not limited to the sync
+  // window: the user is waiting for these numbers whatever the hour.
+  schedule(async () => {
+    try {
+      await retryMeals();
+    } catch (err) {
+      logger.error(`Pending meal retry failed: ${err.message}`, 'SYSTEM', err);
+    }
+  }, RETRY_TICK_MS);
 
   return { background };
 }

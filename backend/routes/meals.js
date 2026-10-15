@@ -2,19 +2,21 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { getLocalDateString, isCalendarDateString } = require('../utils/dates');
-const { generateContentWithFallback } = require('../config');
 const { getCalorieBaseline, detectMealAnomalies } = require('../utils/mealAnomaly');
 const { invalidateAiExplanationCache } = require('../utils/aiExplanationCache');
-const { decrypt } = require('../utils/encryption');
 const { aiRateLimiter } = require('../middleware/rateLimit');
 const {
-  sanitizeNumber,
-  sanitizeNullableNumber,
   sanitizeMealText,
   ALLOWED_MEAL_IMAGE_MIME_TYPES,
   MAX_MEAL_IMAGE_BASE64_CHARS
 } = require('../utils/mealSanitize');
-const { buildMealPrompt } = require('../utils/mealPrompts');
+const {
+  analyzeMeal,
+  sanitizeAnalysedMeal,
+  pendingAnalysisJson,
+  pendingFlags,
+  PHOTO_MEAL_FALLBACK_NAME
+} = require('../services/mealAnalysis');
 
 // Meal anomaly detection - the logic (both signals: macro/calorie inconsistency and a
 // statistical outlier versus the user's own history) lives in utils/mealAnomaly.js, because
@@ -169,7 +171,7 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
     
     // Rebuild the full response using the image sent in this request, so it is not held in the RAM cache
     const restoredResponse = {
-      count: lastRequest.response.count,
+      ...lastRequest.response,
       meals: lastRequest.response.meals.map(m => {
         const copy = { ...m };
         if (copy.image_base64 === '__HAS_IMAGE__') {
@@ -194,11 +196,12 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
     if (claim.state === 'done') {
       const placeholders = claim.mealIds.map(() => '?').join(',') || 'NULL';
       const rows = await db.all(
-        `SELECT id, date, raw_text, calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND id IN (${placeholders})`,
+        `SELECT id, date, raw_text, calories, protein, carbs, fat, fiber, sugar, sodium, analysis_status FROM meals WHERE user_id = ? AND id IN (${placeholders})`,
         [userId, ...claim.mealIds]
       );
       console.log(`[API LOG] Meal submission retried for user ${userId}: returning the ${rows.length} meal(s) already saved.`);
-      return res.status(200).json({ count: rows.length, meals: rows, replayed: true });
+      const meals = rows.map(({ analysis_status, ...r }) => ({ ...r, ...pendingFlags(analysis_status) }));
+      return res.status(200).json({ count: meals.length, meals, replayed: true });
     }
     if (claim.state === 'pending') {
       return res.status(409).json({
@@ -245,92 +248,61 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
       }
     }
 
-    const apiKeyRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'gemini_api_key'", [req.user.id]);
-    const userApiKey = apiKeyRow ? decrypt(apiKeyRow.value) : null;
-    const forceCustomKeyOnly = req.user.role !== 'admin';
-    const langRow = await db.get("SELECT value FROM settings WHERE user_id = ? AND key = 'language'", [req.user.id]);
-    const language = langRow ? langRow.value : 'pl';
-
-    // The prompt is built in utils/mealPrompts.js - see the comment in that module about the
-    // user description taking precedence over what the model reads from the photo. The four
-    // template variants (photo/text x pl/en) used to sit here as ~150 lines of literals, which
-    // made them impossible to check except through a real, billable Gemini call.
-    const prompt = buildMealPrompt({
-      hasImage: Boolean(imagePart),
-      userText: safeRawText,
-      language
-    });
-
-    const responseText = await generateContentWithFallback(prompt, true, imagePart, userApiKey, forceCustomKeyOnly);
-    let analysis;
+    // A failed analysis no longer loses the meal (production 15.10.2026, see
+    // services/mealAnalysis.js): it is saved as 'pending' with zero macros, and the retry
+    // loop fills it in once the AI answers again. Only the AI step falls back this way - a
+    // database error below is still a 500, because then nothing was saved.
+    let mealsToInsert = null;
+    let analysisError = null;
     try {
-      analysis = JSON.parse(responseText);
+      mealsToInsert = await analyzeMeal({ userId, role: req.user.role, userText: safeRawText, imagePart });
     } catch (err) {
-      console.error('[API ERROR] Failed to parse the AI response:', responseText);
-      throw new Error('AI nie zwróciło poprawnego formatu JSON.', { cause: err });
-    }
-
-    // With a photo the AI may return several separate meals (analysis.meals - see the prompt
-    // above, e.g. a screenshot from a calorie tracking app split into breakfast/lunch/dinner).
-    // Each detected meal is stored as its OWN row in the meals table, with its own macros and
-    // its own name (raw_text) taken from the AI detection rather than from the text the user
-    // typed.
-    let mealsToInsert;
-    if (imagePart) {
-      if (analysis && Array.isArray(analysis.meals) && analysis.meals.length > 0) {
-        mealsToInsert = analysis.meals;
-      } else {
-        // Fallback: the AI returned a flat object despite the prompt (an older format) - we
-        // treat it as a single meal rather than failing the whole request.
-        mealsToInsert = [{ ...analysis, name: analysis?.name || safeRawText || 'Posiłek ze zdjęcia' }];
-      }
-    } else {
-      // No photo - a meal entered as text only, with no multi-section detection; behaviour is
-      // identical to before (one row, name = the user's text), except that the name is now the
-      // capped and escaped text rather than the raw request body.
-      mealsToInsert = [{ ...analysis, name: safeRawText }];
+      analysisError = err;
+      console.error('[API ERROR] AI meal analysis failed - saving the meal as pending:', err);
     }
 
     // The calorie baseline is computed ONCE per request rather than per meal - with a photo
-    // split into several sections (breakfast/lunch/dinner) all of them are compared
-    // do tej samej, historycznej linii bazowej z dni PRZED targetDate.
+    // split into several sections (breakfast/lunch/dinner) all of them are compared with the
+    // same historical baseline from the days BEFORE targetDate.
     const calorieBaseline = await getCalorieBaseline(req.user.id, targetDate);
 
     const insertedMeals = [];
-    for (const m of mealsToInsert) {
-      // `m.name` comes from the Gemini response, but it is derived from the user's own
-      // description (see the precedence rule in utils/mealPrompts.js), so it is user-
-      // controlled text that merely took a detour through the model - it gets exactly the
-      // same treatment as the typed text, including the length cap.
-      const mealDescription = sanitizeMealText(m.name) || safeRawText || (imagePart ? 'Posiłek ze zdjęcia' : '');
+    if (analysisError) {
+      const rawTextToStore = safeRawText || PHOTO_MEAL_FALLBACK_NAME;
+      const result = await db.run(`
+        INSERT INTO meals (user_id, date, raw_text, calories, protein, carbs, fat, analysis_json, image_base64, analysis_status)
+        VALUES (?, ?, ?, 0, 0, 0, 0, ?, ?, 'pending')
+      `, [req.user.id, targetDate, rawTextToStore, pendingAnalysisJson(safeRawText), image || null]);
+      insertedMeals.push({
+        id: result.id,
+        date: targetDate,
+        raw_text: rawTextToStore,
+        image_base64: image || null,
+        food_items: [],
+        calories: 0, protein: 0, carbs: 0, fat: 0, fiber: null, sugar: null, sodium: null,
+        analysis_pending: true,
+        anomalies: []
+      });
+    }
 
-      // Clamp the values from the AI response to a sensible range before writing to the
-      // database (see the comment on sanitizeNumber above).
-      const safeCalories = sanitizeNumber(m.calories, 0, 5000, 0);
-      const safeProtein = sanitizeNumber(m.protein, 0, 500, 0);
-      const safeCarbs = sanitizeNumber(m.carbs, 0, 500, 0);
-      const safeFat = sanitizeNumber(m.fat, 0, 500, 0);
-      const safeFiber = sanitizeNullableNumber(m.fiber, 0, 100);
-      const safeSugar = sanitizeNullableNumber(m.sugar, 0, 300);
-      const safeSodium = sanitizeNullableNumber(m.sodium, 0, 15000);
+    for (const m of mealsToInsert || []) {
+      // Clamped and capped values (see sanitizeAnalysedMeal), the same ones the retry writes.
+      const v = sanitizeAnalysedMeal(m, { userText: safeRawText, hasImage: Boolean(imagePart) });
 
-      // Store the meal (fiber/sugar/sodium as NULL when the AI did not estimate them - no
-      // fabricated zeros, following the project's established rule - but when the AI DID give a
-      // value, we clamp it to a sensible range like the other macros)
       const result = await db.run(`
         INSERT INTO meals (user_id, date, raw_text, calories, protein, carbs, fat, fiber, sugar, sodium, analysis_json, image_base64)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
         req.user.id,
         targetDate,
-        mealDescription,
-        safeCalories,
-        safeProtein,
-        safeCarbs,
-        safeFat,
-        safeFiber,
-        safeSugar,
-        safeSodium,
+        v.rawText,
+        v.calories,
+        v.protein,
+        v.carbs,
+        v.fat,
+        v.fiber,
+        v.sugar,
+        v.sodium,
         JSON.stringify(m),
         image || null
       ]);
@@ -341,17 +313,17 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
       insertedMeals.push({
         id: result.id,
         date: targetDate,
-        raw_text: mealDescription,
+        raw_text: v.rawText,
         image_base64: image || null,
         ...m,
-        calories: safeCalories,
-        protein: safeProtein,
-        carbs: safeCarbs,
-        fat: safeFat,
-        fiber: safeFiber,
-        sugar: safeSugar,
-        sodium: safeSodium,
-        anomalies: detectMealAnomalies({ calories: safeCalories, protein: safeProtein, carbs: safeCarbs, fat: safeFat }, calorieBaseline)
+        calories: v.calories,
+        protein: v.protein,
+        carbs: v.carbs,
+        fat: v.fat,
+        fiber: v.fiber,
+        sugar: v.sugar,
+        sodium: v.sodium,
+        anomalies: detectMealAnomalies({ calories: v.calories, protein: v.protein, carbs: v.carbs, fat: v.fat }, calorieBaseline)
       });
     }
 
@@ -367,10 +339,22 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
       count: insertedMeals.length,
       meals: insertedMeals
     };
+    if (analysisError) {
+      // 201, not an error: the meal IS saved, and a retry from the client would only add a
+      // second pending copy. The flag lets the client say why the macros are still empty.
+      responsePayload.analysisPending = true;
+      // Only the application's own, user-actionable messages reach the client (audit
+      // 2026-10-09, N2) - a missing API key is something the user can fix in Settings, and
+      // until they do the retry loop cannot succeed either. SDK internals stay in the log.
+      const message = analysisError.message || '';
+      if (/^(Usługa AI jest obecnie niedostępna|AI nie zwróciło)/.test(message)) {
+        responsePayload.analysisPendingReason = message;
+      }
+    }
 
     // We cache a copy without the large base64 image (round 6) to prevent a memory leak
     const cachedResponse = {
-      count: responsePayload.count,
+      ...responsePayload,
       meals: responsePayload.meals.map(m => {
         const copy = { ...m };
         if (copy.image_base64) {
@@ -396,15 +380,13 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
     res.status(201).json(responsePayload);
 
   } catch (err) {
-    console.error('[API ERROR] AI meal analysis failed:', err);
-    // Only the application's own, user-actionable messages reach the client (audit
-    // 2026-10-09, N2): err.message used to be appended whatever it was, so SQLite and Gemini
-    // SDK internals ended up on the user's screen.
-    const userFacing = /^(Usługa AI jest obecnie niedostępna|AI nie zwróciło)/.test(err && err.message ? err.message : '');
-    res.status(500).json({ error: 'Wystąpił błąd podczas analizowania posiłku przez AI' + (userFacing ? ': ' + err.message : '. Spróbuj ponownie za chwilę.') });
+    // AI failures no longer land here (they save a pending meal above) - this is the database
+    // or something unexpected, and the client gets no internals (audit 2026-10-09, N2).
+    console.error('[API ERROR] Saving the meal failed:', err);
+    res.status(500).json({ error: 'Wystąpił błąd podczas zapisywania posiłku. Spróbuj ponownie za chwilę.' });
   } finally {
-    // Nothing was saved (validation refusal, AI error): the key is free again, so the user's
-    // retry runs a fresh analysis rather than waiting on a submission that will never finish.
+    // Nothing was saved (validation refusal, database error): the key is free again, so the
+    // user's retry runs afresh rather than waiting on a submission that will never finish.
     if (ownsSubmission && !submissionCompleted) {
       await releaseMealSubmission(userId, idempotencyKey).catch((e) => console.error('[API ERROR] Failed to release a meal submission:', e.message));
     }
@@ -447,7 +429,9 @@ router.get('/api/meals', async (req, res) => {
         protein: r.protein,
         carbs: r.carbs,
         fat: r.fat,
-        anomalies: detectMealAnomalies({ calories: r.calories, protein: r.protein, carbs: r.carbs, fat: r.fat }, calorieBaseline)
+        ...pendingFlags(r.analysis_status),
+        // A pending meal's zeros are a placeholder, not a meal to compare with the baseline.
+        anomalies: r.analysis_status ? [] : detectMealAnomalies({ calories: r.calories, protein: r.protein, carbs: r.carbs, fat: r.fat }, calorieBaseline)
       };
     });
 
@@ -500,6 +484,7 @@ router.get('/api/meals/frequent', async (req, res) => {
         AVG(fat) AS avg_fat
       FROM meals
       WHERE user_id = ? AND raw_text IS NOT NULL AND TRIM(raw_text) != ''
+        AND analysis_status IS NULL
       GROUP BY LOWER(TRIM(raw_text))
       HAVING COUNT(*) >= 2
       ORDER BY count DESC, last_date DESC
@@ -543,6 +528,11 @@ router.post('/api/meals/repeat', async (req, res) => {
     const original = await db.get(`SELECT * FROM meals WHERE id = ? AND user_id = ?`, [mealId, req.user.id]);
     if (!original) {
       return res.status(404).json({ error: 'Nie znaleziono oryginalnego posiłku do powtórzenia.' });
+    }
+    // Repeating copies the macros - for a meal still waiting for its analysis those are the
+    // placeholder zeros, and the copy would never be filled in (it carries no pending status).
+    if (original.analysis_status) {
+      return res.status(409).json({ error: 'Ten posiłek nie ma jeszcze analizy AI - nie można go powtórzyć.' });
     }
 
     const calorieBaseline = await getCalorieBaseline(req.user.id, targetDate);

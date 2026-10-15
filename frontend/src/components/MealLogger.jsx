@@ -353,6 +353,17 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                     </button>
                   </div>
 
+                  {/* Saved while the AI was unavailable: the zeros are placeholders, so show
+                      the state instead of "0 kcal" (backend/services/mealAnalysis.js). */}
+                  {(meal.analysis_pending || meal.analysis_failed) ? (
+                  <div className="meal-nutrition-chips">
+                    <span className="nutrition-chip" style={{ color: meal.analysis_failed ? 'var(--warning)' : 'var(--text-dim)' }}>
+                      {meal.analysis_failed
+                        ? t('⚠️ Analiza AI nie powiodła się - usuń posiłek i dodaj go ponownie')
+                        : t('⏳ Czeka na analizę AI - kalorie uzupełnią się automatycznie')}
+                    </span>
+                  </div>
+                  ) : (
                   <div className="meal-nutrition-chips">
                     <span className="nutrition-chip calories">{meal.calories != null ? Math.round(meal.calories) : '-'} kcal</span>
                     <span className="nutrition-chip protein">B: {meal.protein != null ? Math.round(meal.protein) : '-'}g</span>
@@ -365,6 +376,7 @@ export default function MealLogger({ meals, onAddMeal, onDeleteMeal, isAnalyzing
                       {meal.health_rating != null ? `Ocena: ${meal.health_rating}/10` : 'Brak oceny'}
                     </span>
                   </div>
+                  )}
 
                   {(meal.fiber != null || meal.sugar != null || meal.sodium != null) && (() => {
                     // A catering meal (meal.source set by the catering import) carries the

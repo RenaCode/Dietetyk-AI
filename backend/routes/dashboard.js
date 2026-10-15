@@ -7,6 +7,7 @@ const { requireAuth } = require('../middleware/auth');
 const { getLocalDateString, getWarsawWallClock, shiftDate, isCalendarDateString, resolveQueryDate: resolveDateValue } = require('../utils/dates');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
 const { getCalorieBaseline, detectMealAnomalies } = require('../utils/mealAnomaly');
+const { pendingFlags } = require('../services/mealAnalysis');
 const { DEFAULT_TARGET_WATER_ML, getTargetCalories, getBmr, getTargetWaterMl, userGoal, goalText } = require('../utils/defaultSettings');
 const { genAI, generateContentWithFallback } = require('../config');
 const { buildGoalPaceAnalysis } = require('../services/summaries');
@@ -355,7 +356,9 @@ router.get('/api/dashboard', async (req, res) => {
       return {
         id: r.id, raw_text: r.raw_text, timestamp: r.timestamp, image_base64: r.image_base64, ...analysis,
         calories: r.calories, protein: r.protein, carbs: r.carbs, fat: r.fat,
-        anomalies: detectMealAnomalies({ calories: r.calories, protein: r.protein, carbs: r.carbs, fat: r.fat }, calorieBaseline)
+        ...pendingFlags(r.analysis_status),
+        // A meal still waiting for its AI analysis has placeholder zeros (services/mealAnalysis.js).
+        anomalies: r.analysis_status ? [] : detectMealAnomalies({ calories: r.calories, protein: r.protein, carbs: r.carbs, fat: r.fat }, calorieBaseline)
       };
     });
 

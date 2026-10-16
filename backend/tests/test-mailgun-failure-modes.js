@@ -131,7 +131,7 @@ async function run() {
   assert(requestCount === before, 'and it throws BEFORE any request is made, so "no config" cannot be confused with "sent"');
 
   // KNOWN-BAD 5: the one that ties this file to the APP_PASSWORD rotation runbook
-  // (docs/secret-rotation.md). The Mailgun key is stored encrypted under a key derived from
+  // (renacode-infra: docs/projekty/dietetyk/secret-rotation.md). The Mailgun key is stored encrypted under a key derived from
   // APP_PASSWORD. Rotate APP_PASSWORD without re-encrypting and this row stops decrypting -
   // AES-GCM authentication fails - which takes the VPS alerting channel down with it. The
   // failure must be a throw, not an empty key silently posted to Mailgun.

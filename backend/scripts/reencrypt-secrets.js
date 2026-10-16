@@ -18,7 +18,7 @@
 //      run before a single write happens,
 //   4. the writes go in one transaction, so the database is either fully on the old key or
 //      fully on the new one - never half.
-// The full runbook is in backend/docs/secret-rotation.md.
+// The full runbook is in renacode-infra: docs/projekty/dietetyk/secret-rotation.md.
 //
 // Usage (locally, from backend/, with nothing else touching the database):
 //   APP_PASSWORD_OLD='<previous value>' APP_PASSWORD='<new value>' \
@@ -27,7 +27,7 @@
 // In production this runs as a one-off Kubernetes Job that mounts the same PVC
 // (dietetyk-data-pvc) and the same Secret as the backend, with the Deployment scaled to 0 so no
 // other process holds the SQLite file. The ready-made Job manifest and the surrounding steps are
-// in backend/docs/secret-rotation.md - do not improvise it, the ORDER is what makes it safe.
+// in renacode-infra: docs/projekty/dietetyk/secret-rotation.md - do not improvise it, the ORDER is what makes it safe.
 //
 // No secret value - plaintext or ciphertext - is ever logged; the output only counts rows.
 

@@ -28,7 +28,7 @@
 // Two structural limits that no change in this file can remove, both reported in the audit of
 // 2026-09-12: the alert cannot go out when no backend pod is Ready - which is precisely the
 // outage most worth reporting - and it cannot go out while the Deployment is scaled to 0, as
-// Runbook B in docs/secret-rotation.md requires.
+// Runbook B in renacode-infra: docs/projekty/dietetyk/secret-rotation.md requires.
 const db = require('../db');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const { decrypt } = require('../utils/encryption');

@@ -9,6 +9,8 @@ A native iOS client (SwiftUI, in development and not deployed yet) lives in [Ren
 
 Production runs on k3s, deployed by Argo CD from the Helm chart in `charts/dietetyk` — see [Deployment](#️-deployment-k3s--argo-cd).
 
+Operational documentation (runbooks such as secret rotation) is kept in the owner's private infrastructure repository.
+
 ---
 
 ## 🚀 Main Features
@@ -171,7 +173,7 @@ OAUTH_STATE_SECRET=<a second, different openssl rand -hex 32>
 > [!NOTE]
 > `GEMINI_MODEL` is optional — omit it and the backend uses `gemini-2.5-flash`. Earlier revisions of this README recommended `gemini-1.5-flash`, which returns 404 in the current SDK; `config.js` substitutes the working model and logs a warning at startup.
 >
-> `APP_PASSWORD` is the key material for encrypting integration secrets at rest (`utils/encryption.js`) — **not** a login password. Changing it makes stored Oura/Withings/Gemini credentials undecryptable, so it is rotated together with a re-encryption pass: see [`backend/docs/secret-rotation.md`](backend/docs/secret-rotation.md).
+> `APP_PASSWORD` is the key material for encrypting integration secrets at rest (`utils/encryption.js`) — **not** a login password. Changing it makes stored Oura/Withings/Gemini credentials undecryptable, so it is rotated together with a re-encryption pass: see the secret-rotation runbook (`renacode-infra: docs/projekty/dietetyk/secret-rotation.md`).
 >
 > `OAUTH_STATE_SECRET` signs the `state` parameter of the OAuth flows and is **required** — the backend refuses to start without it. Keep it different from `APP_PASSWORD`.
 

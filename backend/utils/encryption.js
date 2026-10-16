@@ -20,7 +20,7 @@ const crypto = require('crypto');
 // scrypt over a published string reproduces ENCRYPTION_KEY byte for byte, so a stolen .db file
 // (a copy from backend/backups/, the Docker volume, or the db-viewer container) decrypts with no
 // secret knowledge at all. Rotating APP_PASSWORD is therefore a real operation, not a formality -
-// and it must be done in the order described in backend/docs/secret-rotation.md, because a new
+// and it must be done in the order described in renacode-infra: docs/projekty/dietetyk/secret-rotation.md, because a new
 // APP_PASSWORD means a new ENCRYPTION_KEY, and every value already stored under the old key
 // becomes unreadable until scripts/reencrypt-secrets.js has rewritten it.
 const APP_SECRET = process.env.APP_PASSWORD;

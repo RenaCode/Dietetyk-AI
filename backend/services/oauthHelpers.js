@@ -29,7 +29,7 @@ if (!OAUTH_STATE_SECRET) {
     'OAUTH_STATE_SECRET is missing from the environment. It signs the `state` parameter of the ' +
     'OAuth flow (Oura/Withings/Google Fit) and must be a dedicated random value - NOT APP_PASSWORD ' +
     'and not any other secret reused elsewhere. Generate one with `openssl rand -hex 32` and add ' +
-    'OAUTH_STATE_SECRET=<value> to backend/.env (see backend/docs/secret-rotation.md).'
+    'OAUTH_STATE_SECRET=<value> to backend/.env (see renacode-infra: docs/projekty/dietetyk/secret-rotation.md).'
   );
 }
 

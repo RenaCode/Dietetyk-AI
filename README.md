@@ -7,7 +7,7 @@ A self-hosted web application for keeping a diet journal with **Gemini AI**: you
 
 A native iOS client (SwiftUI, in development and not deployed yet) lives in [RenaCode/Dietetyk-IOS](https://github.com/RenaCode/Dietetyk-IOS); it talks to the same API and can send HealthKit data to the same Apple Health endpoint as the webhook described below.
 
-Production runs on k3s, deployed by Argo CD from the Helm chart in `charts/dietetyk` — see [Deployment](#️-deployment-k3s--argo-cd).
+Deployment details and operational documentation (runbooks such as secret rotation) are kept in the owner's private infrastructure repository.
 
 ---
 
@@ -131,117 +131,9 @@ About 140 dictionary entries match no string in the code. They are pre-written t
 
 ---
 
-## ☸️ Deployment (k3s + Argo CD)
-
-Production runs on a single-node **k3s** cluster on the RenaCode VPS, deployed by **Argo CD** from the Helm chart in [`charts/dietetyk`](charts/dietetyk). Nothing is built or edited on the server: the code reaches production only through `main`.
-
-### Pipeline: push → images → tag bump → Argo CD
-
-1.  **CI** (`.github/workflows/docker-publish.yml`) runs on every push to `main` and on pull requests to `main` (pull requests only run the tests; they never build, publish or deploy):
-    *   `test-backend` — `npm audit` of production dependencies (high/critical blocks the run, no exceptions are whitelisted) and `npm test`;
-    *   `test-frontend` — `npm audit` of the frontend, unit tests, `check-i18n` and lint;
-    *   `test-e2e` — Playwright against a throwaway database.
-2.  **Images**: `build-backend` / `build-frontend` start only when their own tests **and** E2E passed, and only for the service whose files changed (`dorny/paths-filter`; `workflow_dispatch` builds both). They push `ghcr.io/renacode/dietetyk-ai-{backend,frontend}` tagged `latest` and `sha-<commit>`. Base images are pinned by digest (Node 24 LTS on Debian trixie for the backend — see the comment in `docker/backend.Dockerfile` on why not bookworm).
-3.  **Tag bump**: `update-git` writes `sha-<commit>` into `charts/dietetyk/values.yaml` and pushes `chore: update image tags to sha-… [skip ci]` to `main` with the `DEPLOY_PAT` secret (`main` is protected; the PAT is the bypass).
-4.  **Argo CD** (Application `dietetyk` in the `renacode-infra` repo: `path: charts/dietetyk`, namespace `default`, automated sync with prune + self-heal) sees the new tag and rolls the pods.
-
-A red E2E therefore stops the release before anything reaches the registry or `values.yaml`.
-
-### What the chart deploys
-
-| Object | Notes |
-|---|---|
-| backend `Deployment` | Node API on :3000, runs as uid 1000, liveness/readiness on `GET /api/healthz`. Data on a PVC (`persistence`, `local-path`) mounted at `/app/data`. |
-| frontend `Deployment` | nginx serving the built SPA and proxying `/api` to the backend; its config is the ConfigMap in `templates/nginx-configmap.yaml`, **not** `docker/nginx.conf`. The backend is an `upstream` re-resolved at run time through `frontend.nginx.resolver` (kube-dns' IP), so nginx starts even before cluster DNS answers and keeps the last address while DNS is down; `scripts/check-nginx-chart.sh` (CI job `test-chart`) runs `nginx -t` on the rendered config with no network. |
-| `Ingress` | Traefik, host `dietetyk.renacode.com`, TLS from cert-manager (`letsencrypt-prod`). |
-| `NetworkPolicy` | On by default (`networkPolicy.enabled`): the backend accepts only the frontend pod on :3000, the frontend only Traefik on :80. Egress (`networkPolicy.egress`) blocks the private networks listed in `networkPolicy.egress.siecDomowa`, which is empty in this public repository and set by the cluster operator in the Argo CD Application's `valuesObject`; everything else outbound is open. Rollback: `enabled: false` (or `egress.enabled: false` for egress alone) and let Argo CD sync. Covered by `backend/tests/test-chart.js`. |
-| sqlite-web sidecar | Opt-in (`dbImage.enabled`, off): it has no authentication. Enable only for a debugging session and reach it with `kubectl port-forward`. |
-
-### Backend configuration (secrets)
-
-The backend `.env` is the `dotenv` key of the Kubernetes Secret `dietetyk-backend-secret`, mounted at `/app/.env`. It is created by hand on the cluster, never committed:
-
-```env
-GEMINI_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-2.5-flash
-APP_PASSWORD=<openssl rand -hex 32>
-OAUTH_STATE_SECRET=<a second, different openssl rand -hex 32>
-```
-
-> [!NOTE]
-> `GEMINI_MODEL` is optional — omit it and the backend uses `gemini-2.5-flash`. Earlier revisions of this README recommended `gemini-1.5-flash`, which returns 404 in the current SDK; `config.js` substitutes the working model and logs a warning at startup.
->
-> `APP_PASSWORD` is the key material for encrypting integration secrets at rest (`utils/encryption.js`) — **not** a login password. Changing it makes stored Oura/Withings/Gemini credentials undecryptable, so it is rotated together with a re-encryption pass: see [`backend/docs/secret-rotation.md`](backend/docs/secret-rotation.md).
->
-> `OAUTH_STATE_SECRET` signs the `state` parameter of the OAuth flows and is **required** — the backend refuses to start without it. Keep it different from `APP_PASSWORD`.
-
-### Images must stay pullable
-
-The cluster has **no** `imagePullSecrets` (`values.yaml`: `imagePullSecrets: []`): it relies on the `ghcr.io/renacode/dietetyk-ai-*` packages being **public**. If they turn private, new pods sit in `ImagePullBackOff` while the old ones keep serving — a failed deploy that does not look like an outage. To check:
-
-```bash
-curl -s "https://ghcr.io/token?scope=repository:renacode/dietetyk-ai-backend:pull&service=ghcr.io"
-```
-
-A `token` in the answer means the package is public and the problem is elsewhere (e.g. the tag); `UNAUTHORIZED` means it is private. Either make it public again, or create a pull secret (`scripts/create-ghcr-secret.sh`) and list it in `imagePullSecrets`.
-
-### Verifying a deploy
-
-```bash
-kubectl -n default get pods -l app.kubernetes.io/instance=dietetyk -w
-kubectl -n default describe pod <pod> | grep -A5 Events   # the real pull/probe error
-kubectl -n default logs deploy/dietetyk-backend --tail=50
-curl -s https://dietetyk.renacode.com/api/healthz
-```
-
-Argo CD shows the synced revision; it should match the last `chore: update image tags` commit on `main`.
-
-### Database backups
-
-The backend backs up its SQLite database every day at 04:30 Europe/Warsaw (`BACKUP_HOUR_LOCAL`, `HH:MM`) — before the host's off-site copy job picks up the newest file — and at startup when the newest copy is older than 24 hours. Copies go to `/app/data/backups` on the PVC with mode `0600`, keeping the newest copy of each of the last 14 days — see `backupDatabase` in `backend/db.js` and `scheduleDailyBackup` in `backend/server.js`.
-
-**Every backup is verified before it counts.** Right after `VACUUM INTO` writes the copy, the backend reopens it read-only and runs `PRAGMA quick_check` plus a row-count sanity check. A copy that fails is deleted immediately and rotation is skipped, so a run of bad backups can never evict the last good ones.
-
-Those copies sit on the same disk as the database. The **off-site** copy is the daily `renacode-kopia.timer` on the VPS (`backup/kopia.sh` in `renacode-infra`): it takes the newest verified backup out of the pod, encrypts it with `age` and pushes it to the private `RenaCode/renacode-backup` repository. Restoring is described in that repository's README; `scripts/verify_backup.sh <file>` checks that a copy opens, passes an integrity check and has non-empty core tables.
-
-### Local Docker Compose (not production)
-
-`docker-compose.yml` and `docker/nginx.conf` are the old single-VPS setup (certbot certificates, sqlite-web on :8081). Production no longer uses them, and neither does CI; they are kept only as a way to run the published images on one machine. The same goes for `scripts/setup-deploy-user.sh`, `deploy_pull.sh`, `deploy_sync.sh` and `vps_backup_db.sh`.
-
----
-
 ## 🔐 GUI Login and Admin Access
 
 User accounts and default credentials are defined locally (saved in the database). On first run, the backend generates a random admin password and prints it once to the container log (see `[DB INIT]` in `db.js`) — you will be asked to change it on first login.
-
-> [!WARNING]
-> Do **not** keep credentials in a plaintext file inside the project directory. Older revisions of this README pointed to a `passwords.txt` in the project root — it held the VPS root password and the Oura/Withings client secrets alongside app logins. That file has been deleted; the credentials belong in a password manager.
->
-> Being git-ignored was never enough protection: a plaintext file still lands in every directory backup, every `rsync`, every editor/IDE workspace index, and any `tar` of the project. Integration secrets belong in the **Settings** tab, where they are encrypted at rest (see `utils/encryption.js`); server credentials belong in a password manager and nowhere else.
-
-There is no "Sign in with Google" any more (removed on 2026-10-11, as the instance moves behind the shared SSO). Accounts log in with a password and optional 2FA.
-
-**An account that has no password of its own.** Google sign-in used to create accounts with a random password nobody knows (`password_set = 0`) and let them set one after re-authenticating with Google. That path is gone, and nothing replaces it inside the app on purpose — a session alone must never be enough to set a password. An administrator issues a one-time password instead, from a shell in the backend container:
-
-```bash
-kubectl exec -it deploy/dietetyk-backend -n default -c backend -- node scripts/reset-password.js <username or e-mail>
-```
-
-It revokes every session of the account and forces a password change at the next login; the forced change (after the 2FA code, if the account has 2FA) sets the user's own password, sets `password_set = 1` and runs the same cleanup as any password change. The reset is recorded in `app_logs` for the weekly security report. The same command works for any account that has lost its password.
-
-### Single sign-on (Authelia)
-
-With `sso.enabled: true` in the chart, the whole host sits behind Authelia (password + TOTP or passkey) and the app signs users in from the identity headers Traefik adds — no second login. The identity contract lives in renacode-infra (`docs/sso-tozsamosc.md`); the code is `backend/services/ssoIdentity.js`, `POST /api/auth/sso` in `routes/auth.js` and `frontend/src/utils/sso.js`.
-
-- **One switch.** `sso.enabled` attaches the header-stripping middleware and forwardAuth *and* sets `SSO_NAGLOWKI=1` in the backend pod. The app reads `Remote-*` headers only with that variable; `config.js` ignores a copy in the Secret's `.env`. With it unset a forged `Remote-User` changes nothing.
-- **Mapping.** `Remote-Email` is matched to an **existing, active** account by e-mail, case-insensitively. No account is created on the fly (403 with the address in the message); a user outside the allowed Authelia groups is refused (403). The list is `sso.allowedGroups` in the chart (env `SSO_GRUPY`), default `wlasciciel` (the owner's private account), `rodzina` (family members' own accounts), `admins` (the app's admin account), `dietetyk` (everyone else); a repeated or malformed identity header is 400. The admin role comes from the database only — membership of `admins` in Authelia does not make anyone an admin here.
-- **Argo CD in the app switcher** is shown only to the owner: `GET /api/user/profile` returns `show_argo: true` when the account's role is `admin`, or when the request's trusted SSO identity (only with `SSO_NAGLOWKI=1`) is in `sso.argoGroups` (env `SSO_GRUPY_ARGO`, default `wlasciciel`, `admins`). Family (`rodzina`) and ordinary users never see it. Display only — Argo CD has its own Authelia rule.
-- **Before switching it on**, check in the Admin Panel that every account has the same address as its user in Authelia's `users.yml` — and that no account carries the address of a *different* Authelia user. Until SSO is on, users set their own address without proving they own it; an account holding someone else's Authelia address would receive that person's SSO sign-ins. The owner has two Authelia users and needs two accounts here: the everyday user (`wlasciciel`) → the private account that keeps the history, `admin` (`admins`) → the account with `role = 'admin'`, created by invitation. At start the app only guarantees that *some* active admin exists (`db.js`): id 1 is promoted to admin only when none is left, so id 1 can be an ordinary user once another admin account is active. Usernames can be tidied afterwards with `node scripts/rename-user.js <old> <new>` (dry run unless `--apply`). New person = an Authelia account *and* an invitation to the same address here.
-- **Sessions.** An SSO session (`sessions.auth_method = 'sso'`) asks for no password and no app TOTP (Authelia enforced 2FA), and is accepted only on requests that still carry the matching identity — a copied token is useless through `kubectl port-forward` or after the flag goes off. A session of a different account than the one Authelia names is refused and the frontend signs in again as the right one. Each SSO sign-in and refusal is written to `app_logs` (`AUTH_SSO_LOGIN`, `AUTH_SSO_DENIED`).
-- **Logout** ends the app session and sends the browser to `https://auth.renacode.com/logout?rd=https://<host>/`, which ends the Authelia session for every renacode.com app at once. "Log out other devices" cannot cut off devices with a live Authelia session — they sign in again by themselves; the response says so.
-- **The e-mail address is the SSO login.** Changing it on a request that came through Authelia is refused (409). To change it: an administrator edits `users.yml`, then changes it here from a break-glass session. That change is not recorded as undoable, so a later "log out other devices" cannot put the old address back. A change made in the 30 days *before* the switch is still undoable that way — check `email_changed_at` before turning SSO on.
-- **Password-confirmed actions** (password change, enabling 2FA, deleting the account, sending a summary to another address) still ask for the local password from an SSO session: the SSO session is not a fresh authentication.
-- **Break-glass.** With Authelia down, `kubectl port-forward` to the frontend Service reaches the app without identity headers; the ordinary login (password + the app's own TOTP) works there as before. The machine paths (Apple Health webhook, shared-report links) never go through Authelia and are unchanged.
 
 Once logged in as an administrator (`admin`), you can navigate to the **Settings** or **Admin Panel** (available in the navigation menu for accounts with the `admin` role) to manage the global configuration of the application. Developer credentials for Oura Ring and Withings (needed for integration) are configured by each user individually in their own **Settings** tab.
 

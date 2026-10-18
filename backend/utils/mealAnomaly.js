@@ -24,11 +24,13 @@ const MACRO_MISMATCH_MIN_RATIO = 0.35;
 
 // Baseline distribution of calories per meal from the user's history, computed over ALL
 // days BEFORE `beforeDate` (exclusive) - so the meals of the day being checked never
-// influence their own point of reference.
+// influence their own point of reference. Per meal, so only the meals without real calories
+// drop out (analysis_status set, utils/mealCalories.js): their placeholder zeros pulled the
+// mean down and widened the spread, hiding genuinely oversized meals.
 async function getCalorieBaseline(userId, beforeDate) {
   const startDate = shiftDate(beforeDate, -ANOMALY_LOOKBACK_DAYS);
   const rows = await db.all(
-    `SELECT calories FROM meals WHERE user_id = ? AND date >= ? AND date < ?`,
+    `SELECT calories FROM meals WHERE user_id = ? AND date >= ? AND date < ? AND analysis_status IS NULL`,
     [userId, startDate, beforeDate]
   );
   const n = rows.length;

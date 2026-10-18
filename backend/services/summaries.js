@@ -15,6 +15,8 @@ const { getWeatherAndTimeContext, getUserLocationOverride } = require('../utils/
 const { escapeUserInputTag } = require('../utils/mealSanitize');
 const { escapeHtml } = require('../utils/html');
 const { formatEstimateForPrompt } = require('../utils/estimatedNutrients');
+const { COMPLETE_MEAL_DAY_SQL } = require('../utils/mealCalories');
+const { maskEmails } = require('../utils/maskEmail');
 const { userGoal, goalText } = require('../utils/defaultSettings');
 
 // ===== Shared helpers (extracted from duplication across the three functions below) =====
@@ -484,7 +486,7 @@ async function sendWeeklySummaryForUser(userId, customEmail = null) {
     // weekly prompt was the whole week's sum (14000 kcal instead of 2000). The aggregator
     // now throws on rows without a date rather than reporting that number again.
   const meals = await db.all(`
-    SELECT date, calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ?
+    SELECT date, calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ? AND ${COMPLETE_MEAL_DAY_SQL}
   `, [userId, sevenDaysAgo]);
 
   // ORDER BY is not cosmetic here: aggregateNutritionAndHealth derives weightChange /
@@ -681,7 +683,7 @@ Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek 
     aiHtml: markdownToHtml(aiSummary)
   });
 
-  console.log(`[MAILGUN] Sending the weekly summary to ${emailToUse}`);
+  console.log(`[MAILGUN] Sending the weekly summary to ${maskEmails(emailToUse)}`);
   await sendMailgunEmail({
     to: emailToUse,
     subject: `Dietetyk AI: Twoje Tygodniowe Podsumowanie (${user.username})`,
@@ -853,7 +855,7 @@ Sformatuj odpowiedź w strukturze Markdown: jedno krótkie zdanie wstępu, nagł
     aiHtml: markdownToHtml(aiAdvice)
   });
 
-  console.log(`[MAILGUN] Sending the daily summary to ${emailToUse}`);
+  console.log(`[MAILGUN] Sending the daily summary to ${maskEmails(emailToUse)}`);
   await sendMailgunEmail({
     to: emailToUse,
     subject: `Dietetyk AI: Twoje Codzienne Podsumowanie (${user.username})`,
@@ -874,7 +876,7 @@ async function sendMonthlySummaryForUser(userId, customEmail = null) {
     // meal photos even less than the weekly one). `date` stays: it is what the aggregator
     // divides by, and dropping it turned the monthly average into a ~60000 kcal "daily" figure.
   const meals = await db.all(`
-    SELECT date, calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ?
+    SELECT date, calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ? AND ${COMPLETE_MEAL_DAY_SQL}
   `, [userId, thirtyDaysAgo]);
 
   // ORDER BY is not cosmetic here: aggregateNutritionAndHealth derives weightChange /
@@ -1013,7 +1015,7 @@ Sformatuj odpowiedź w strukturze Markdown: krótkie zdanie wstępu, nagłówek 
     aiHtml: markdownToHtml(aiSummary)
   });
 
-  console.log(`[MAILGUN] Sending the monthly summary to ${emailToUse}`);
+  console.log(`[MAILGUN] Sending the monthly summary to ${maskEmails(emailToUse)}`);
   await sendMailgunEmail({
     to: emailToUse,
     subject: `Dietetyk AI: Twoje Miesięczne Podsumowanie (${user.username})`,

@@ -1,5 +1,7 @@
 const express = require('express');
 const { completeDaySumSql, sumIfComplete, formatEstimateForPrompt } = require('../utils/estimatedNutrients');
+const { COMPLETE_MEAL_DAY_SQL } = require('../utils/mealCalories');
+const { evaluateCalorieGap } = require('../utils/calorieSuggestion');
 const crypto = require('crypto');
 const router = express.Router();
 const db = require('../db');
@@ -234,7 +236,7 @@ async function aggregateNutrition(userId, startDate, endDate) {
   const rows = await db.all(
     `SELECT date, SUM(calories) AS calories, SUM(protein) AS protein, SUM(carbs) AS carbs, SUM(fat) AS fat,
             ${completeDaySumSql('fiber')}, ${completeDaySumSql('sugar')}, ${completeDaySumSql('sodium')}
-     FROM meals WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date`,
+     FROM meals WHERE user_id = ? AND date >= ? AND date <= ? AND ${COMPLETE_MEAL_DAY_SQL} GROUP BY date`,
     [userId, startDate, endDate]
   );
   const daysLogged = rows.length;
@@ -275,9 +277,12 @@ async function aggregateNutrition(userId, startDate, endDate) {
 // Bilans kaloryczny narastająco dla zakresu dat (punkt 11 z analizy dashboardu).
 // Liczony tylko po dniach z zapisanymi posiłkami - dni bez logów nie psują
 // bilansu zerami.
+// Days holding a meal without real calories (pending/failed analysis) are left out too: their
+// placeholder zeros used to read as a deficit of a whole meal, and this balance feeds the
+// calorie target suggestion (audit 2026-10-10, N7; utils/mealCalories.js).
 async function aggregateCalorieBalance(userId, startDate, endDate, targetCalories, bmr) {
   const mealRows = await db.all(
-    `SELECT date, SUM(calories) AS calories FROM meals WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date`,
+    `SELECT date, SUM(calories) AS calories FROM meals WHERE user_id = ? AND date >= ? AND date <= ? AND ${COMPLETE_MEAL_DAY_SQL} GROUP BY date`,
     [userId, startDate, endDate]
   );
   const healthRows = await db.all(
@@ -557,7 +562,7 @@ router.get('/api/dashboard', async (req, res) => {
     };
 
     const calorieRows = await db.all(
-      `SELECT date, SUM(calories) AS total_calories FROM meals WHERE user_id = ? GROUP BY date ORDER BY date DESC LIMIT 90`,
+      `SELECT date, SUM(calories) AS total_calories FROM meals WHERE user_id = ? AND ${COMPLETE_MEAL_DAY_SQL} GROUP BY date ORDER BY date DESC LIMIT 90`,
       [req.user.id]
     );
     const calorieMap = new Map(calorieRows.map(r => [r.date, r.total_calories]));
@@ -1153,7 +1158,7 @@ router.get('/api/dashboard/sleep-insight', async (req, res) => {
     // own date.
     const mealRows = await db.all(
       `SELECT date, SUM(calories) AS calories, ${completeDaySumSql('sugar')}
-       FROM meals WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date`,
+       FROM meals WHERE user_id = ? AND date >= ? AND date <= ? AND ${COMPLETE_MEAL_DAY_SQL} GROUP BY date`,
       [req.user.id, startDate, today]
     );
     // sugar stays null for a day without a complete estimate (utils/estimatedNutrients.js):
@@ -1628,8 +1633,10 @@ router.get('/api/dashboard/supplements-sleep-insight', async (req, res) => {
 // Wymagamy solidnej próbki w obu wymiarach (dni z posiłkami i pomiary wagi
 // rozciągnięte na sensowny okres) - inaczej szum pomiarowy (np. wahania wody)
 // dałby fałszywą sugestię.
+// The regression, the 7700 kcal/kg factor and the noise test live in
+// utils/calorieSuggestion.js - the sample minimums below alone did not stop a suggestion that
+// was smaller than its own uncertainty (audit 2026-10-10, U5).
 const CALORIE_RECAL_LOOKBACK_DAYS = 21;
-const KCAL_PER_KG = 7700; // szacunkowa wartość energetyczna 1 kg tkanki - powszechnie używane przybliżenie
 const MIN_LOGGED_DAYS = 10;
 const MIN_WEIGHT_MEASUREMENTS = 4;
 const MIN_WEIGHT_SPAN_DAYS = 10;
@@ -1666,30 +1673,33 @@ router.get('/api/dashboard/calorie-target-suggestion', async (req, res) => {
     if (spanDays < MIN_WEIGHT_SPAN_DAYS) {
       return res.json({ hasEnoughData: false, reason: 'weight_span_too_short', spanDays: Math.round(spanDays), minSpanDaysRequired: MIN_WEIGHT_SPAN_DAYS });
     }
-    const n = points.length;
-    const sumX = points.reduce((s, p) => s + p.x, 0);
-    const sumY = points.reduce((s, p) => s + p.y, 0);
-    const sumXY = points.reduce((s, p) => s + p.x * p.y, 0);
-    const sumXX = points.reduce((s, p) => s + p.x * p.x, 0);
-    const denom = n * sumXX - sumX * sumX;
-    if (denom === 0) {
+    // The gap is only proposed as a new target when it is larger than the noise of the weight
+    // trend; the range of plausible targets travels with it so the UI can show it before
+    // saving (utils/calorieSuggestion.js, audit 2026-10-10 U5).
+    const evaluation = evaluateCalorieGap({
+      loggedDailyBalance,
+      points,
+      currentTargetCalories,
+      minMeaningfulGap: MIN_MEANINGFUL_GAP_KCAL
+    });
+    if (!evaluation) {
       return res.json({ hasEnoughData: false, reason: 'flat_weight_data' });
     }
-    const slope = (n * sumXY - sumX * sumY) / denom; // kg/dzień
-    const actualDailyBalance = slope * KCAL_PER_KG;
-    const gap = actualDailyBalance - loggedDailyBalance;
+    const { actualDailyBalance, gap, gapUncertainty } = evaluation;
 
-    if (Math.abs(gap) < MIN_MEANINGFUL_GAP_KCAL) {
+    if (!evaluation.suggestionNeeded) {
       return res.json({
         hasEnoughData: true,
         suggestionNeeded: false,
+        // true = the gap is big enough to matter but the weigh-ins are too noisy to trust it;
+        // the card must not then claim the balance is "under control".
+        withinNoise: evaluation.withinNoise,
         loggedDailyBalance: Math.round(loggedDailyBalance),
         actualDailyBalance: Math.round(actualDailyBalance),
-        gap: Math.round(gap)
+        gap: Math.round(gap),
+        gapUncertainty: Math.round(gapUncertainty)
       });
     }
-
-    const suggestedTargetCalories = Math.round(currentTargetCalories - gap);
 
     res.json({
       hasEnoughData: true,
@@ -1699,8 +1709,13 @@ router.get('/api/dashboard/calorie-target-suggestion', async (req, res) => {
       loggedDailyBalance: Math.round(loggedDailyBalance),
       actualDailyBalance: Math.round(actualDailyBalance),
       gap: Math.round(gap),
+      gapUncertainty: Math.round(gapUncertainty),
       currentTargetCalories,
-      suggestedTargetCalories
+      suggestedTargetCalories: Math.round(evaluation.suggestedTargetCalories),
+      suggestedTargetRange: {
+        min: Math.round(evaluation.suggestedTargetRange.min),
+        max: Math.round(evaluation.suggestedTargetRange.max)
+      }
     });
   } catch (err) {
     console.error(err);
@@ -2292,7 +2307,7 @@ router.get('/api/dashboard/meal-frequency-adherence-insight', async (req, res) =
 
     const rows = await db.all(
       `SELECT date, COUNT(*) AS meal_count, SUM(calories) AS total_calories
-       FROM meals WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date`,
+       FROM meals WHERE user_id = ? AND date >= ? AND date <= ? AND ${COMPLETE_MEAL_DAY_SQL} GROUP BY date`,
       [req.user.id, startDate, today]
     );
 
@@ -2364,7 +2379,7 @@ router.get('/api/dashboard/streak-drift-insight', async (req, res) => {
 
     const calorieRows = await db.all(
       `SELECT date, SUM(calories) AS total_calories FROM meals
-       WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date ORDER BY date ASC`,
+       WHERE user_id = ? AND date >= ? AND date <= ? AND ${COMPLETE_MEAL_DAY_SQL} GROUP BY date ORDER BY date ASC`,
       [req.user.id, startDate, today]
     );
     const metricsRows = await db.all(
@@ -2842,7 +2857,7 @@ router.get('/api/dashboard/weekend-effect-insight', async (req, res) => {
     const startDate = shiftDate(today, -(WEEKEND_EFFECT_LOOKBACK_DAYS - 1));
 
     const mealRows = await db.all(
-      `SELECT date, SUM(calories) AS calories FROM meals WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date`,
+      `SELECT date, SUM(calories) AS calories FROM meals WHERE user_id = ? AND date >= ? AND date <= ? AND ${COMPLETE_MEAL_DAY_SQL} GROUP BY date`,
       [req.user.id, startDate, today]
     );
     const healthRows = await db.all(
@@ -3061,6 +3076,7 @@ router.get('/api/dashboard/favorite-meal-drift-insight', async (req, res) => {
       `SELECT LOWER(TRIM(raw_text)) AS meal_key, raw_text, date, calories
        FROM meals
        WHERE user_id = ? AND date >= ? AND date <= ? AND raw_text IS NOT NULL AND TRIM(raw_text) != '' AND calories IS NOT NULL
+         AND analysis_status IS NULL
        ORDER BY date ASC`,
       [req.user.id, startDate, today]
     );
@@ -4333,7 +4349,7 @@ router.get('/api/dashboard/muscle-protein-insight', async (req, res) => {
       [req.user.id, startDate, today]
     );
     const proteinRows = await db.all(
-      `SELECT date, SUM(protein) AS protein FROM meals WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date HAVING protein > 0`,
+      `SELECT date, SUM(protein) AS protein FROM meals WHERE user_id = ? AND date >= ? AND date <= ? AND ${COMPLETE_MEAL_DAY_SQL} GROUP BY date HAVING protein > 0`,
       [req.user.id, startDate, today]
     );
     const weightRow = await db.get(
@@ -4568,7 +4584,7 @@ router.get('/api/dashboard/activity-appetite-insight', async (req, res) => {
       [req.user.id, startDate, today]
     );
     const mealRows = await db.all(
-      `SELECT date, SUM(calories) AS calories FROM meals WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date HAVING calories > 0`,
+      `SELECT date, SUM(calories) AS calories FROM meals WHERE user_id = ? AND date >= ? AND date <= ? AND ${COMPLETE_MEAL_DAY_SQL} GROUP BY date HAVING calories > 0`,
       [req.user.id, startDate, today]
     );
     const caloriesByDate = new Map(mealRows.map(r => [r.date, r.calories]));
@@ -4730,7 +4746,7 @@ router.get('/api/dashboard/streak-weight-effect-insight', async (req, res) => {
 
     const calorieRows = await db.all(
       `SELECT date, SUM(calories) AS total_calories FROM meals
-       WHERE user_id = ? AND date >= ? AND date <= ? GROUP BY date ORDER BY date ASC`,
+       WHERE user_id = ? AND date >= ? AND date <= ? AND ${COMPLETE_MEAL_DAY_SQL} GROUP BY date ORDER BY date ASC`,
       [req.user.id, startDate, today]
     );
     const weightRows = await db.all(

@@ -4,6 +4,7 @@ const { syncAllOura, syncAllWithings, syncAllGoogleFit } = require('./services/s
 const { sendWeeklySummaryForUser, sendDailySummaryForUser, sendMonthlySummaryForUser } = require('./services/summaries');
 const { sendWeeklyAdminReport } = require('./services/adminReport');
 const logger = require('./services/logger');
+const { maskEmails } = require('./utils/maskEmail');
 
 // Retry budget for a scheduled summary that failed to send.
 //
@@ -97,7 +98,7 @@ async function checkAndSendAutomatedSummaries() {
         if (warsawNow.getUTCDate() === effectiveMonthlyDay) {
           if (currentTimeStr >= monthlyScheduledTime) {
             if (lastMonthlySent !== currentYearMonthStr) {
-              console.log(`[SCHEDULER] Sending the monthly summary to ${user.username} (${user.email || 'no email'})`);
+              console.log(`[SCHEDULER] Sending the monthly summary to ${user.username} (${user.email ? maskEmails(user.email) : 'no email'})`);
               if (user.email && !(await claimSummaryAttempt(user.id, 'monthly', currentYearMonthStr))) {
                 console.warn(`[SCHEDULER] Skipping the monthly summary for ${user.username} - retry budget for this period used up or backing off after a failure.`);
               } else if (user.email) {
@@ -125,7 +126,7 @@ async function checkAndSendAutomatedSummaries() {
         // --- 1. Podsumowanie Codzienne ---
         if (currentTimeStr >= scheduledTime) {
           if (lastDailySent !== todayStr) {
-            console.log(`[SCHEDULER] Sending the daily summary to ${user.username} (${user.email || 'no email'})`);
+            console.log(`[SCHEDULER] Sending the daily summary to ${user.username} (${user.email ? maskEmails(user.email) : 'no email'})`);
             if (user.email && !(await claimSummaryAttempt(user.id, 'daily', todayStr))) {
               console.warn(`[SCHEDULER] Skipping the daily summary for ${user.username} - retry budget for this period used up or backing off after a failure.`);
             } else if (user.email) {
@@ -151,7 +152,7 @@ async function checkAndSendAutomatedSummaries() {
         if (currentDay === scheduledDay) {
           if (currentTimeStr >= scheduledTime) {
             if (lastWeeklySent !== todayStr) {
-              console.log(`[SCHEDULER] Sending the weekly summary to ${user.username} (${user.email || 'no email'})`);
+              console.log(`[SCHEDULER] Sending the weekly summary to ${user.username} (${user.email ? maskEmails(user.email) : 'no email'})`);
               if (user.email && !(await claimSummaryAttempt(user.id, 'weekly', todayStr))) {
                 console.warn(`[SCHEDULER] Skipping the weekly summary for ${user.username} - retry budget for this period used up or backing off after a failure.`);
               } else if (user.email) {

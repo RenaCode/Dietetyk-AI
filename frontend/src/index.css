@@ -1952,6 +1952,11 @@ a.app-switcher-item:hover {
   color: #fbbf24;
 }
 
+/* No reading - neither the green check nor a warning (utils/vitals.js). */
+.trend-health-footer.neutral {
+  color: var(--text-dim);
+}
+
 /* Responsywność na telefonach */
 @media (max-width: 767px) {
   /* Settings.jsx: siatka "Profil | 4 karty" zakłada min. 320px na kolumnę,

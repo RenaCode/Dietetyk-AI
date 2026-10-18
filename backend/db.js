@@ -8,6 +8,9 @@ const crypto = require('crypto');
 // activitySources.js is a pure string/constant module - it does not require this one, so
 // there is no cycle.
 const { ACTIVITY_METRIC_COLUMNS } = require('./utils/activitySources');
+// Pure helpers with no requires of their own (no config, no secrets) - safe to load here.
+const { hasCalorieValue } = require('./utils/mealCalories');
+const { maskEmails } = require('./utils/maskEmail');
 
 // Database directory and file path (data persistence under Docker)
 const dbDir = process.env.DATABASE_DIR || __dirname;
@@ -405,7 +408,7 @@ const initDb = async () => {
         // Any other error is a real database problem and propagates, which stops the start
         // (see start() in server.js).
         if (!UNIQUE_CONSTRAINT_ERROR.test(err && err.message ? err.message : '')) throw err;
-        const message = `[DB MIGRATE] ADMIN_EMAIL (${adminEmail}) is already used by another account - the admin account keeps its current address.`;
+        const message = `[DB MIGRATE] ADMIN_EMAIL (${maskEmails(adminEmail)}) is already used by another account - the admin account keeps its current address.`;
         console.error(message);
         pendingMigrationAlerts.push({ message, detail: err.message });
       }
@@ -478,6 +481,36 @@ const initDb = async () => {
   await addColumn(`ALTER TABLE meals ADD COLUMN analysis_attempted_at TEXT DEFAULT NULL`);
   await run(`CREATE INDEX IF NOT EXISTS idx_meals_analysis_pending
              ON meals(analysis_status) WHERE analysis_status IS NOT NULL`);
+
+  // Audit 2026-10-10, N7: until this release an AI answer without a calorie figure was stored
+  // as an ANALYSED meal with calories = 0 (sanitizeNumber's fallback), indistinguishable in
+  // the column from a real 0 kcal entry. The raw answer is still in analysis_json, so the two
+  // can be told apart exactly: a row whose saved AI response carries no usable `calories` is
+  // re-labelled 'failed' - the UI then asks for it to be entered again and the aggregates
+  // leave its day out (utils/mealCalories.js) instead of counting the meal as zero energy.
+  // Rows with unparseable JSON are left alone (nothing proves the 0 was invented), catering
+  // imports never had the problem (routes/catering.js rejects a meal without calories) and a
+  // genuine 0 from the AI (water, black coffee) has a numeric field and stays analysed. Safe to
+  // run on every start: once flagged a row no longer matches, and the column values are not
+  // touched, so `UPDATE meals SET analysis_status = NULL WHERE id IN (...)` undoes it.
+  const zeroCalorieRows = await all(
+    `SELECT id, analysis_json FROM meals WHERE analysis_status IS NULL AND calories = 0 AND source IS NULL`
+  );
+  const withoutCalories = zeroCalorieRows.filter(r => {
+    let parsed;
+    try {
+      parsed = JSON.parse(r.analysis_json);
+    } catch (e) {
+      return false;
+    }
+    return parsed !== null && typeof parsed === 'object' && !hasCalorieValue(parsed.calories);
+  }).map(r => r.id);
+  for (const id of withoutCalories) {
+    await run(`UPDATE meals SET analysis_status = 'failed' WHERE id = ? AND analysis_status IS NULL`, [id]);
+  }
+  if (withoutCalories.length > 0) {
+    console.log(`[DB MIGRATE] ${withoutCalories.length} meal(s) stored as 0 kcal without a calorie value from the AI marked as failed.`);
+  }
 
   // Assign legacy meals without a user_id to the first user
   await run(`UPDATE meals SET user_id = 1 WHERE user_id IS NULL OR user_id = 0`);
@@ -1229,10 +1262,30 @@ const cleanupOldLogs = async () => {
     } else {
       console.log('[CLEANUP] No old logs to remove.');
     }
+    await maskEmailsInStoredLogs();
   } catch (err) {
     console.error('[CLEANUP ERROR] Failed to clean up old logs:', err);
   }
 };
+
+// Audit 2026-10-10, N6: services/logger.js masks addresses before writing, but rows written
+// before that release - and rows inserted here directly, such as the migration alerts at the
+// end of initDb - can still hold one in clear text for up to 30 days. Re-masking is idempotent
+// (a masked address masks to itself), so only rows that actually change are rewritten.
+async function maskEmailsInStoredLogs() {
+  const rows = await all(`SELECT id, message, details FROM app_logs WHERE message LIKE '%@%' OR details LIKE '%@%'`);
+  let changed = 0;
+  for (const r of rows) {
+    const message = maskEmails(r.message);
+    const details = maskEmails(r.details);
+    if (message !== r.message || details !== r.details) {
+      await run(`UPDATE app_logs SET message = ?, details = ? WHERE id = ?`, [message, details, r.id]);
+      changed++;
+    }
+  }
+  if (changed > 0) console.log(`[CLEANUP] Masked e-mail addresses in ${changed} stored log entr${changed === 1 ? 'y' : 'ies'}.`);
+  return changed;
+}
 
   // Automatic SQLite backups, rotated - one per day for the last 14 days (see below).
   // The database file lives on a Docker volume (./data), which is not itself a backup: a
@@ -1403,6 +1456,7 @@ module.exports = {
   cleanupExpiredSessions,
   cleanupOldImages,
   cleanupOldLogs,
+  maskEmailsInStoredLogs,
   cleanupOldAppleHealthHours,
   backupDatabase,
   tightenBackupPermissions,

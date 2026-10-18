@@ -2,6 +2,7 @@ const db = require('../db');
 const { sendMailgunEmail } = require('./mailgun');
 const logger = require('./logger');
 const { escapeHtml } = require('../utils/html');
+const { maskEmails } = require('../utils/maskEmail');
 
 // Prosta walidacja formatu adresu e-mail (Runda 17, naprawa z audytu) - przed
 // sending, we filter out addresses that do not even look like an email (a typo saved earlier
@@ -113,7 +114,7 @@ async function sendWeeklyAdminReport() {
           html: html
         });
         sentCount += 1;
-        console.log(`[ADMIN REPORT] Report delivered to: ${email}`);
+        console.log(`[ADMIN REPORT] Report delivered to: ${maskEmails(email)}`);
       } catch (sendErr) {
         // logger.error, not console.error: a console line lives only in the container's
         // stdout, which nobody reads and which no later report can quote. Written through the

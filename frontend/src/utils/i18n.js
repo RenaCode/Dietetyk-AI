@@ -739,6 +739,12 @@ const TRANSLATIONS = {
   "Czas ekranowy dzieci": "Kids' screen time",
   "Dieta i zdrowie": "Diet and health",
   "Wdrożenia i klaster": "Deployments and cluster",
+
+  // Calorie target suggestion - uncertainty (audit 2026-10-10, U5)
+  "Zakres (95% pewności)": "Range (95% confidence)",
+  "Za mało pewności, żeby zmieniać cel": "Not certain enough to change the goal",
+  "Rozjazd bilansu ({gap} kcal/dzień) mieści się w szumie pomiarów wagi (±{uncertainty} kcal/dzień). Waż się regularnie, a analiza zaproponuje korektę, gdy dane będą jednoznaczne.": "The balance gap ({gap} kcal/day) is within the noise of your weigh-ins (±{uncertainty} kcal/day). Keep weighing in regularly and the analysis will suggest a correction once the data is clear.",
+  "Zmienić cel z {current} na {target} kcal?\n\nTo szacunek z wahań wagi z ostatnich tygodni - z 95% pewnością właściwy cel leży między {min} a {max} kcal (niepewność ±{uncertainty} kcal/dzień). Możesz go później zmienić w Aktywności.": "Change the goal from {current} to {target} kcal?\n\nThis is an estimate from your weight changes over the last few weeks - with 95% confidence the right goal lies between {min} and {max} kcal (uncertainty ±{uncertainty} kcal/day). You can change it later in Activity.",
 };
 
 let currentLang = localStorage.getItem("language") || "pl";

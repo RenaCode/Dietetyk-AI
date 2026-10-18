@@ -1,22 +1,14 @@
 const db = require('../db');
+const { maskEmails } = require('../utils/maskEmail');
 
 /**
  * Writes a log event to the console and, asynchronously, to the database.
  */
 async function logEvent({ level, category, message, ip = null, userId = null, details = null }) {
   try {
-    const consoleMsg = `[${level}][${category}] ${message}${ip ? ` (IP: ${ip})` : ''}${userId ? ` (UID: ${userId})` : ''}`;
-    
-    // Log to standard output (for Docker/PM2)
-    if (level === 'ERROR') {
-      console.error(consoleMsg, details || '');
-    } else if (level === 'WARN' || level === 'SECURITY') {
-      console.warn(consoleMsg, details || '');
-    } else {
-      console.log(consoleMsg, details || '');
-    }
-
-    // Konwersja detali do stringu
+    // Details are serialised first so that the console line and the database row carry the
+    // same, masked text (utils/maskEmail.js, audit 2026-10-10 N6): the failed-login entries
+    // pass the typed login - often an e-mail address - both in the message and in details.
     let detailsStr = '';
     if (details) {
       if (details instanceof Error) {
@@ -30,6 +22,19 @@ async function logEvent({ level, category, message, ip = null, userId = null, de
       } else {
         detailsStr = String(details);
       }
+    }
+    message = maskEmails(String(message));
+    detailsStr = maskEmails(detailsStr);
+
+    const consoleMsg = `[${level}][${category}] ${message}${ip ? ` (IP: ${ip})` : ''}${userId ? ` (UID: ${userId})` : ''}`;
+
+    // Log to standard output (for Docker/PM2)
+    if (level === 'ERROR') {
+      console.error(consoleMsg, detailsStr);
+    } else if (level === 'WARN' || level === 'SECURITY') {
+      console.warn(consoleMsg, detailsStr);
+    } else {
+      console.log(consoleMsg, detailsStr);
     }
 
     // Write to SQLite in the background, without blocking the main thread.

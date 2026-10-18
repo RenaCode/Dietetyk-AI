@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getTemperatureStatus } from '../utils/health';
+import { getHrvCardState, getRhrCardState, trendStatusIcon } from '../utils/vitals';
+import { canApplyCalorieSuggestion, calorieSuggestionConfirmText } from '../utils/calorieSuggestion';
 import { formatHoursMins } from '../utils/format';
 import { t } from '../utils/i18n';
 import { useInsights } from '../utils/useInsights';
@@ -226,7 +228,7 @@ const TrendCard = ({ title, valueText, unitText, activeSegment, color, footerTex
       <TrendRangeBar activeSegment={activeSegment} color={color} />
       <div className={`trend-health-footer ${status}`}>
         <span style={{ fontSize: '0.85rem', marginRight: '4px' }}>
-          {status === 'success' ? '✓' : '⚠️'}
+          {trendStatusIcon(status)}
         </span> 
         {footerText}
       </div>
@@ -745,7 +747,10 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
   }, [sessionToken, selectedDate, caloriesTrigger]);
 
   const handleApplyCalorieSuggestion = async () => {
-    if (!calorieSuggestion || !calorieSuggestion.suggestedTargetCalories || isApplyingCalorieSuggestion) return;
+    if (!canApplyCalorieSuggestion(calorieSuggestion) || isApplyingCalorieSuggestion) return;
+    // Never a one-click write: the suggestion is an estimate from noisy weigh-ins, so the
+    // range it could plausibly be anywhere in is shown before the goal changes (U5).
+    if (!window.confirm(calorieSuggestionConfirmText(calorieSuggestion, t))) return;
     setIsApplyingCalorieSuggestion(true);
     try {
       const res = await fetch('/api/settings', {
@@ -3742,7 +3747,14 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                       <span style={{ color: 'rgba(255,255,255,0.6)' }}>Sugerowany cel</span>
                       <span style={{ fontWeight: '700', color: 'var(--success-light)' }}>{calorieSuggestion.suggestedTargetCalories} kcal</span>
                     </div>
+                    {calorieSuggestion.suggestedTargetRange && (
+                      <div data-testid="calorie-suggestion-range" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem' }}>
+                        <span style={{ color: 'rgba(255,255,255,0.6)' }}>{t('Zakres (95% pewności)')}</span>
+                        <span style={{ color: '#fff' }}>{calorieSuggestion.suggestedTargetRange.min}–{calorieSuggestion.suggestedTargetRange.max} kcal</span>
+                      </div>
+                    )}
                   </div>
+                  {canApplyCalorieSuggestion(calorieSuggestion) && (
                   <button
                     type="button"
                     className="btn-primary"
@@ -3752,10 +3764,22 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
                   >
                     {isApplyingCalorieSuggestion ? t('Zapisywanie...') : `Zastosuj cel ${calorieSuggestion.suggestedTargetCalories} kcal`}
                   </button>
+                  )}
                   <p style={{ fontSize: '0.68rem', color: 'var(--text-dim)', marginTop: '10px', marginBottom: 0 }}>
                     Sugestia oparta na Twoich danych z ostatnich tygodni, nie porada medyczna. Zawsze możesz ustawić cel ręcznie w Aktywności.
                   </p>
                 </>
+              ) : calorieSuggestion.withinNoise ? (
+                // A gap that would matter, but smaller than the noise of the weigh-ins: nothing
+                // to apply, and no claim that the balance is "under control" either (U5).
+                <div data-testid="calorie-suggestion-noise" style={{ textAlign: 'center', padding: '8px 0' }}>
+                  <p style={{ fontSize: '0.85rem', color: 'rgba(255,255,255,0.85)', fontWeight: '700', marginBottom: '6px' }}>
+                    {t('Za mało pewności, żeby zmieniać cel')}
+                  </p>
+                  <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)', marginBottom: 0 }}>
+                    {t('Rozjazd bilansu ({gap} kcal/dzień) mieści się w szumie pomiarów wagi (±{uncertainty} kcal/dzień). Waż się regularnie, a analiza zaproponuje korektę, gdy dane będą jednoznaczne.', { gap: calorieSuggestion.gap > 0 ? `+${calorieSuggestion.gap}` : calorieSuggestion.gap, uncertainty: calorieSuggestion.gapUncertainty })}
+                  </p>
+                </div>
               ) : (
                 <div style={{ textAlign: 'center', padding: '8px 0' }}>
                   <p style={{ fontSize: '0.85rem', color: 'var(--success-light)', fontWeight: '700', marginBottom: '6px' }}>
@@ -4413,23 +4437,21 @@ export default function Dashboard({ summary, aiAdvice, sessionToken, selectedDat
             {/* hrv/rhr can be null (no Oura measurement for that day) - the cards then show
                 '--' and a neutral state rather than a fake "0 ms"/"0 bpm" and wrong comparisons
                 (null >= 48 or null < 61 would give illogical results). */}
+            {/* Status from the value (utils/vitals.js): both cards used to pass a fixed
+                "success", which put a green check next to low HRV and high resting HR (U6). */}
             <TrendCard
               title={t("Zmienność rytmu zatokowego")}
               valueText={hrv != null ? String(hrv) : '--'}
               unitText="ms"
-              activeSegment={hrv != null && hrv >= 48 ? "right" : "middle"}
               color="blue"
-              footerText={hrv == null ? "Brak danych" : hrv >= 48 ? "Wysoki > 48" : "Niski < 48"}
-              status="success"
+              {...getHrvCardState(hrv)}
             />
             <TrendCard
               title={t("Spoczynkowe tętno")}
               valueText={rhr != null ? String(rhr) : '--'}
               unitText="bpm"
-              activeSegment={rhr != null && rhr < 61 ? "left" : "middle"}
               color="blue"
-              footerText={rhr == null ? "Brak danych" : rhr < 61 ? "Niski < 61" : "Wysoki > 61"}
-              status="success"
+              {...getRhrCardState(rhr)}
             />
             {/* The "Sluch" card stays removed at the user's request - Oura has no microphone,
                 and Apple Watch/AirPods are not supported yet. The 4 cards below appear only

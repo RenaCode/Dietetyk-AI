@@ -10,6 +10,7 @@ const { APP_SECRET_CONFIG_KEYS, maskSecretValue, isMaskedSecretWrite } = require
 const { encrypt } = require('../utils/encryption');
 const { confirmCurrentPassword } = require('../services/passwordConfirmation');
 const logger = require('../services/logger');
+const { maskEmails } = require('../utils/maskEmail');
 
 // Every administrative action that changes accounts or the app's configuration needs the
 // admin's own LOCAL password in the request (`currentPassword`), on top of the session (audit
@@ -279,7 +280,7 @@ router.post('/api/admin/invite', requireAdmin, requireAdminPassword('invite'), a
       </div>
     `;
 
-    console.log(`[MAILGUN] Wysyłanie zaproszenia do ${email}...`);
+    console.log(`[MAILGUN] Sending an invitation to ${maskEmails(email)}...`);
     await sendMailgunEmail({
       to: email,
       subject: 'Dietetyk AI - Zaproszenie do rejestracji',

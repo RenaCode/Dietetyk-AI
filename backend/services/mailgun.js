@@ -32,6 +32,7 @@
 const db = require('../db');
 const { fetchWithTimeout } = require('../utils/fetchWithTimeout');
 const { decrypt } = require('../utils/encryption');
+const { maskEmails } = require('../utils/maskEmail');
 
 async function sendMailgunEmail({ to, subject, html }) {
   // We select only the columns actually needed here (round 17, a fix
@@ -72,7 +73,7 @@ async function sendMailgunEmail({ to, subject, html }) {
 
   const authHeader = `Basic ${Buffer.from(`api:${apiKey}`).toString('base64')}`;
 
-  console.log(`[MAILGUN] Sending email to ${to} via domain ${domain}...`);
+  console.log(`[MAILGUN] Sending email to ${maskEmails(to)} via domain ${domain}...`);
 
   const response = await fetchWithTimeout(url, {
     method: 'POST',
@@ -85,7 +86,9 @@ async function sendMailgunEmail({ to, subject, html }) {
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Mailgun API error: ${response.status} - ${errorText}`);
+    // Mailgun's error body can quote the recipient back ("'to' parameter is not a valid
+    // address"), and callers log this message - through the logger and plain console alike.
+    throw new Error(`Mailgun API error: ${response.status} - ${maskEmails(errorText)}`);
   }
 
   const result = await response.json();

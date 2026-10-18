@@ -8,10 +8,11 @@
 //
 // Now a meal whose analysis fails is saved anyway, with analysis_status = 'pending' and zero
 // macros, and retryPendingMeals() (scheduled in server.js) re-runs the analysis until the AI
-// answers. Zeros rather than NULL: calories/protein/carbs/fat are NOT NULL in the schema and
-// every aggregation sums them, so a pending meal briefly under-counts the day - that is the
-// accepted trade-off against losing the meal. fiber/sugar/sodium stay NULL, which already
-// marks the day's estimate as incomplete (utils/estimatedNutrients.js).
+// answers. Zeros rather than NULL: calories/protein/carbs/fat are NOT NULL in the schema. The
+// zeros are placeholders only - API responses report them as null (pendingFlags) and multi-day
+// aggregates leave such a day out (utils/mealCalories.js, audit 2026-10-10 N7); they used to
+// be summed as real zeros. fiber/sugar/sodium stay NULL, which already marks the day's
+// estimate as incomplete (utils/estimatedNutrients.js).
 
 const db = require('../db');
 const { generateContentWithFallback } = require('../config');
@@ -23,8 +24,15 @@ const {
   sanitizeMealText
 } = require('../utils/mealSanitize');
 const { invalidateAiExplanationCache } = require('../utils/aiExplanationCache');
+const { hasCalorieValue } = require('../utils/mealCalories');
 
 const PHOTO_MEAL_FALLBACK_NAME = 'Posiłek ze zdjęcia';
+
+// Error code of an AI answer that parsed fine but carries no calories (N7). Unlike an outage it
+// is a property of the input, so it is retried ONCE (the model is not deterministic) and then
+// given up on - not RETRY_INTERVAL_MS x MAX_RETRY_ATTEMPTS paid Gemini calls over two days for
+// a meal the model keeps answering the same way.
+const AI_NO_CALORIES = 'AI_NO_CALORIES';
 
 // A retry per pending meal every RETRY_INTERVAL_MS, at most MAX_RETRY_ATTEMPTS times (~2 days).
 // Judgement calls, not derived: an outage like the 402 above lasts until someone tops up the
@@ -70,16 +78,30 @@ async function analyzeMeal({ userId, role, userText, imagePart }) {
   // from a calorie tracking app split into breakfast/lunch/dinner). Each detected meal is
   // stored as its OWN row, with its own macros and its own name taken from the AI detection
   // rather than from the text the user typed.
+  let meals;
   if (imagePart) {
     if (analysis && Array.isArray(analysis.meals) && analysis.meals.length > 0) {
-      return analysis.meals;
+      meals = analysis.meals;
+    } else {
+      // Fallback: the AI returned a flat object despite the prompt (an older format) - we
+      // treat it as a single meal rather than failing the whole request.
+      meals = [{ ...analysis, name: analysis?.name || userText || PHOTO_MEAL_FALLBACK_NAME }];
     }
-    // Fallback: the AI returned a flat object despite the prompt (an older format) - we
-    // treat it as a single meal rather than failing the whole request.
-    return [{ ...analysis, name: analysis?.name || userText || PHOTO_MEAL_FALLBACK_NAME }];
+  } else {
+    // No photo - one row, name = the user's (capped and escaped) text.
+    meals = [{ ...analysis, name: userText }];
   }
-  // No photo - one row, name = the user's (capped and escaped) text.
-  return [{ ...analysis, name: userText }];
+
+  // An answer without a calorie figure is a failed analysis, not a 0 kcal meal (audit
+  // 2026-10-10, N7): sanitizeNumber() would turn the missing field into a stored, "analysed"
+  // 0 that every aggregate then counts. Throwing routes the meal into the pending path, so it
+  // is kept, shown as waiting for analysis and retried (see utils/mealCalories.js).
+  if (meals.some(m => !m || !hasCalorieValue(m.calories))) {
+    const err = new Error('The AI response has no calorie value for at least one meal.');
+    err.code = AI_NO_CALORIES;
+    throw err;
+  }
+  return meals;
 }
 
 // The values written to the database for one analysed meal. `m.name` comes from the Gemini
@@ -110,9 +132,13 @@ function pendingAnalysisJson(userText) {
 // The fields a meal response carries about a missing analysis - used by every route that
 // returns meal rows (routes/meals.js, and the day view in routes/dashboard.js, which is what
 // the frontend's meal list actually renders).
+// The macros of such a meal are placeholder zeros in the database (utils/mealCalories.js), so
+// the response says null - "unknown" - and every caller spreads these flags AFTER the column
+// values, which makes the override apply everywhere a meal row is returned.
+const UNKNOWN_MACROS = { calories: null, protein: null, carbs: null, fat: null };
 function pendingFlags(analysisStatus) {
-  if (analysisStatus === 'pending') return { analysis_pending: true };
-  if (analysisStatus === 'failed') return { analysis_failed: true };
+  if (analysisStatus === 'pending') return { analysis_pending: true, ...UNKNOWN_MACROS };
+  if (analysisStatus === 'failed') return { analysis_failed: true, ...UNKNOWN_MACROS };
   return {};
 }
 
@@ -142,7 +168,7 @@ async function retryPendingMeal(row) {
     analysed = await analyzeMeal({ userId: row.user_id, role: row.role, userText, imagePart });
   } catch (err) {
     const attempts = (row.analysis_attempts || 0) + 1;
-    if (attempts >= MAX_RETRY_ATTEMPTS) {
+    if (attempts >= MAX_RETRY_ATTEMPTS || err.code === AI_NO_CALORIES) {
       await db.run(`UPDATE meals SET analysis_status = 'failed' WHERE id = ? AND analysis_status = 'pending'`, [row.id]);
       console.error(`[MEAL RETRY] Meal ${row.id}: giving up after ${attempts} attempts: ${err.message}`);
     } else {
@@ -229,6 +255,7 @@ module.exports = {
   imagePartFromDataUrl,
   retryPendingMeals,
   PHOTO_MEAL_FALLBACK_NAME,
+  AI_NO_CALORIES,
   RETRY_INTERVAL_MS,
   MAX_RETRY_ATTEMPTS,
   RETRY_TICK_MS

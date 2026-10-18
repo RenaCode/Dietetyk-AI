@@ -5,6 +5,7 @@ const { requireAuth } = require('../middleware/auth');
 const { aiRateLimiter } = require('../middleware/rateLimit');
 const { shiftDate, resolveQueryDate } = require('../utils/dates');
 const { escapeUserInputTag } = require('../utils/mealSanitize');
+const { COMPLETE_MEAL_DAY_SQL } = require('../utils/mealCalories');
 const { getDefaultHealthMetrics } = require('../utils/defaultHealthMetrics');
 const { buildAppleHealthPromptContext, buildAppleHealthPeriodContext } = require('../utils/appleHealthPrompt');
 const { generateContentWithFallback } = require('../config');
@@ -138,10 +139,13 @@ router.post('/api/chat', requireAuth, aiRateLimiter, async (req, res) => {
       ORDER BY date ASC
     `, [req.user.id, pastDateStr, queryDate]);
 
+    // Days with a meal still waiting for (or past) its AI analysis are left out, as in the
+    // dashboard aggregates: its placeholder 0 kcal would reach the model as a day the user
+    // under-ate by a whole meal (audit 2026-10-10, N7; utils/mealCalories.js).
     const historyMeals = await db.all(`
       SELECT date, raw_text, calories, protein, carbs, fat
       FROM meals
-      WHERE user_id = ? AND date >= ? AND date < ?
+      WHERE user_id = ? AND date >= ? AND date < ? AND ${COMPLETE_MEAL_DAY_SQL}
       ORDER BY date ASC
     `, [req.user.id, pastDateStr, queryDate]);
 

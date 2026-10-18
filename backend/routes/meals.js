@@ -279,7 +279,8 @@ router.post('/api/meals', aiRateLimiter, async (req, res) => {
         raw_text: rawTextToStore,
         image_base64: image || null,
         food_items: [],
-        calories: 0, protein: 0, carbs: 0, fat: 0, fiber: null, sugar: null, sodium: null,
+        // Unknown, not zero - the same shape pendingFlags() gives a pending row read back later.
+        calories: null, protein: null, carbs: null, fat: null, fiber: null, sugar: null, sodium: null,
         analysis_pending: true,
         anomalies: []
       });

@@ -4,6 +4,7 @@ const path = require('path');
 const { getUserSettings, aggregateNutritionAndHealth } = require('./summaries');
 const { getLocalDateString, shiftDate } = require('../utils/dates');
 const { goalText } = require('../utils/defaultSettings');
+const { COMPLETE_MEAL_DAY_SQL } = require('../utils/mealCalories');
 
 // PDF export for a doctor or dietician - a document the user downloads themselves and shows
 // to a professional. Deliberately WITHOUT any Gemini-generated text (unlike the summary
@@ -72,7 +73,7 @@ async function buildHealthReportPdf(userId, requestedDays, { endDate } = {}) {
     // same result (tests/test-summary-aggregation.js); summaries.js now rejects rows without
     // it rather than averaging them, and tests/test-pdf-report.js pins the figure here.
     db.all(
-      `SELECT date, calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ? AND date <= ?`,
+      `SELECT date, calories, protein, carbs, fat, fiber, sugar, sodium FROM meals WHERE user_id = ? AND date >= ? AND date <= ? AND ${COMPLETE_MEAL_DAY_SQL}`,
       [userId, startDate, today]
     ),
     db.all(`SELECT * FROM health_metrics WHERE user_id = ? AND date >= ? AND date <= ? ORDER BY date ASC`, [userId, startDate, today]),

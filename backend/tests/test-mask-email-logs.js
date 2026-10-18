@@ -47,9 +47,14 @@ async function run() {
 
   console.log('\n--- TEST: the mask ---');
   assert(maskEmails(`to ${ADDRESS} now`) === 'to s***@e***.org now', `an address is masked to first letters + TLD (got "${maskEmails(`to ${ADDRESS} now`)}")`);
-  assert(maskEmails('a@b.example.co.uk, c@d.com') === 'a***@b***.uk, c***@d***.com', 'several addresses and subdomains are masked');
+  assert(maskEmails('a@mail.example.com, c@example.net') === 'a***@m***.com, c***@e***.net', 'several addresses and subdomains are masked');
   assert(maskEmails(maskEmails(ADDRESS)) === maskEmails(ADDRESS), 'masking is idempotent');
-  assert(maskEmails('user 42 logged in from 10.0.0.1') === 'user 42 logged in from 10.0.0.1', 'text without an address is unchanged');
+  assert(maskEmails('user 42 logged in from 192.0.2.1') === 'user 42 logged in from 192.0.2.1', 'text without an address is unchanged');
+  // Stack traces are full of scoped npm paths; the first version of the pattern turned this
+  // one into "/***@g***.js", and the stored-log scrub would have rewritten it for good.
+  const stack = 'at Object.<anonymous> (/app/node_modules/@google/generative-ai/dist/index.js:401:15)';
+  assert(maskEmails(stack) === stack, 'a stack trace with a scoped npm path is left intact');
+  assert(maskEmails('installed @scope/pkg@1.2.3') === 'installed @scope/pkg@1.2.3', 'a scoped package with a version is not an address');
   assert(maskEmails(null) === null && maskEmails(undefined) === undefined, 'non-strings pass through');
 
   console.log('\n--- TEST: the logger masks the console line and the stored row ---');
@@ -66,9 +71,13 @@ async function run() {
   console.log('\n--- TEST: rows written before the fix are masked by the daily cleanup ---');
   await db.run(`INSERT INTO app_logs (level, category, message, details) VALUES ('INFO', 'LEGACY', ?, ?)`,
     [`Sending the daily summary to ${ADDRESS}`, JSON.stringify({ to: ADDRESS })]);
+  await db.run(`INSERT INTO app_logs (level, category, message, details) VALUES ('ERROR', 'LEGACY_STACK', 'Gemini call failed', ?)`,
+    [`Error: 503\n    ${stack}`]);
   await captureConsole(() => db.cleanupOldLogs());
   const legacy = await db.get(`SELECT message, details FROM app_logs WHERE category = 'LEGACY'`);
   assert(!legacy.message.includes(ADDRESS) && !legacy.details.includes(ADDRESS), 'the stored legacy row is masked');
+  const legacyStack = await db.get(`SELECT details FROM app_logs WHERE category = 'LEGACY_STACK'`);
+  assert(legacyStack.details === `Error: 503\n    ${stack}`, 'a stored stack trace is not rewritten');
   assert(await captureConsole(() => db.maskEmailsInStoredLogs()) === '', 'a second pass finds nothing to change');
 
   console.log('\n--- TEST: no console call interpolates an address unmasked ---');

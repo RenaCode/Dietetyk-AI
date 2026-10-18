@@ -28,6 +28,12 @@ const { hasCalorieValue } = require('../utils/mealCalories');
 
 const PHOTO_MEAL_FALLBACK_NAME = 'Posiłek ze zdjęcia';
 
+// Error code of an AI answer that parsed fine but carries no calories (N7). Unlike an outage it
+// is a property of the input, so it is retried ONCE (the model is not deterministic) and then
+// given up on - not RETRY_INTERVAL_MS x MAX_RETRY_ATTEMPTS paid Gemini calls over two days for
+// a meal the model keeps answering the same way.
+const AI_NO_CALORIES = 'AI_NO_CALORIES';
+
 // A retry per pending meal every RETRY_INTERVAL_MS, at most MAX_RETRY_ATTEMPTS times (~2 days).
 // Judgement calls, not derived: an outage like the 402 above lasts until someone tops up the
 // account, which can take a day; a failed call on a dead key costs nothing, but a meal whose
@@ -91,7 +97,9 @@ async function analyzeMeal({ userId, role, userText, imagePart }) {
   // 0 that every aggregate then counts. Throwing routes the meal into the pending path, so it
   // is kept, shown as waiting for analysis and retried (see utils/mealCalories.js).
   if (meals.some(m => !m || !hasCalorieValue(m.calories))) {
-    throw new Error('The AI response has no calorie value for at least one meal.');
+    const err = new Error('The AI response has no calorie value for at least one meal.');
+    err.code = AI_NO_CALORIES;
+    throw err;
   }
   return meals;
 }
@@ -160,7 +168,7 @@ async function retryPendingMeal(row) {
     analysed = await analyzeMeal({ userId: row.user_id, role: row.role, userText, imagePart });
   } catch (err) {
     const attempts = (row.analysis_attempts || 0) + 1;
-    if (attempts >= MAX_RETRY_ATTEMPTS) {
+    if (attempts >= MAX_RETRY_ATTEMPTS || err.code === AI_NO_CALORIES) {
       await db.run(`UPDATE meals SET analysis_status = 'failed' WHERE id = ? AND analysis_status = 'pending'`, [row.id]);
       console.error(`[MEAL RETRY] Meal ${row.id}: giving up after ${attempts} attempts: ${err.message}`);
     } else {
@@ -247,6 +255,7 @@ module.exports = {
   imagePartFromDataUrl,
   retryPendingMeals,
   PHOTO_MEAL_FALLBACK_NAME,
+  AI_NO_CALORIES,
   RETRY_INTERVAL_MS,
   MAX_RETRY_ATTEMPTS,
   RETRY_TICK_MS

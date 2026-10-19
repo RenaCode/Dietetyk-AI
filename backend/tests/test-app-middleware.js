@@ -172,6 +172,36 @@ async function testSpaFallbackDoesNotLog(baseUrl) {
   assert(after === before, 'the SPA fallback writes no WARN/ERROR row to app_logs');
 }
 
+// Express 5 (2026-10-19, replaces Dependabot #99). Two behaviours changed under the app:
+//  - body-parser 2 leaves req.body undefined for a request with no body or a non-JSON
+//    Content-Type (Express 4 always gave {}), and the handlers destructure req.body directly;
+//    app.js restores {} before the parsers, otherwise these were 500s from a TypeError;
+//  - the SPA fallback's bare `*` is invalid in path-to-regexp 8 - the app did not even load;
+//    it is `/{*splat}` now, which must still cover `/` itself.
+async function testExpress5Contracts(baseUrl) {
+  console.log('\n--- TEST: Express 5 contracts ---');
+  const bodiless = await fetch(`${baseUrl}/api/login`, { method: 'POST' });
+  assert(bodiless.status === 400, `a bodiless POST /api/login gets the route's 400, not a 500 (got ${bodiless.status})`);
+
+  const textPlain = await fetch(`${baseUrl}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: 'username=a&password=b'
+  });
+  assert(textPlain.status === 400, `a text/plain POST /api/login gets 400, not a 500 (got ${textPlain.status})`);
+
+  const malformed = await fetch(`${baseUrl}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{"username":'
+  });
+  assert(malformed.status === 400, `malformed JSON keeps body-parser's 400 through the error handler (got ${malformed.status})`);
+
+  const root = await fetch(`${baseUrl}/`);
+  const hasBuild = fs.existsSync(path.join(__dirname, '..', 'public', 'index.html'));
+  assert(root.status === (hasBuild ? 200 : 404), `GET / reaches the SPA fallback (${root.status})`);
+}
+
 // D-10 (audit 2026-10-04): API responses carried `X-Powered-By: Express`.
 async function testNoPoweredByHeader(baseUrl) {
   console.log('\n--- TEST: no X-Powered-By header ---');
@@ -186,6 +216,7 @@ async function run() {
     testMorganRedaction();
     await testSharedReportHeadersAndLimit(baseUrl);
     await testBodyLimits(baseUrl);
+    await testExpress5Contracts(baseUrl);
     await testHealthzOutsideLimiter(baseUrl);
     await testSpaFallbackDoesNotLog(baseUrl);
     await testNoPoweredByHeader(baseUrl);

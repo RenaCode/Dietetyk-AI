@@ -118,7 +118,8 @@ function mutatingRoutes(routerOrApp) {
       }
     }
   };
-  walk(routerOrApp.stack || routerOrApp._router.stack);
+  // Express 5: the app's router is the public `app.router` (Express 4 had the private `_router`).
+  walk(routerOrApp.stack || routerOrApp.router.stack);
   return out;
 }
 

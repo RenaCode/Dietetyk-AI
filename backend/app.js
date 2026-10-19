@@ -131,6 +131,16 @@ app.use(require('./routes/healthcheck'));
 // global bucket.
 app.use('/api', apiRateLimiter);
 
+// Express 5 (body-parser 2) leaves req.body UNDEFINED when a request has no body or a
+// Content-Type other than JSON; Express 4 always set it to {}. The handlers destructure
+// req.body directly (`const { date } = req.body`), so a bodiless POST would now throw a
+// TypeError and come back as 500 instead of the route's own 400. Restore the old contract
+// once, before any parser: a parser that actually reads a body replaces this object.
+app.use((req, res, next) => {
+  if (req.body === undefined) req.body = {};
+  next();
+});
+
 // Request bodies. The global parser used to be `express.json({ limit: '20mb' })`, mounted
 // before the limiter and before requireAuth, so ANY anonymous POST to ANY /api path had up to
 // 20 MB of JSON parsed in full. Measured: ~150 MB of RSS per 19.5 MB body, against a 512Mi
@@ -213,7 +223,9 @@ app.use(require('./routes/chat'));
 // was taken out, say - used to come back as 200 with the SPA's HTML, which a caller or a test
 // reads as "the route still exists".
 const SPA_INDEX = path.join(__dirname, 'public', 'index.html');
-app.get('*', (req, res) => {
+// Express 5 (path-to-regexp 8): a bare `*` is no longer a valid path - the wildcard must be
+// named. `/{*splat}` matches every path INCLUDING `/` itself (`/*splat` would skip `/`).
+app.get('/{*splat}', (req, res) => {
   if (req.path.startsWith('/api/') || !fs.existsSync(SPA_INDEX)) {
     return res.status(404).json({ error: 'Nie znaleziono.' });
   }
@@ -227,7 +239,11 @@ app.get('*', (req, res) => {
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   
-  const status = err.status || err.statusCode || 500;
+  // Express 5's res.status() throws on anything that is not an integer 100-999, and a throw
+  // inside the error handler would end in Express's default HTML page. Only a real 4xx/5xx
+  // from the error is passed through; anything else is a 500.
+  const rawStatus = Number(err.status || err.statusCode);
+  const status = Number.isInteger(rawStatus) && rawStatus >= 400 && rawStatus <= 599 ? rawStatus : 500;
   const level = status >= 500 ? 'ERROR' : 'WARN';
 
   // A body express.json() could not parse is NOT logged: body-parser keeps the raw text in

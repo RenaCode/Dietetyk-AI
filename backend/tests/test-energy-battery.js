@@ -293,6 +293,31 @@ async function testBatchIsolatesUnknownIds() {
   console.log('✅ The bad entry is isolated; the rest is returned normally.');
 }
 
+// Express 5 (2026-10-19): req.query became a getter on the request prototype with no setter,
+// and the batch's `scopedReq.query = { date }` was silently dropped - every insight then read
+// the batch's raw query string: `ids`, a date the batch itself had rejected, and `refresh=1`,
+// which makes the AI insight skip its cache and call Gemini. The fake request below has the
+// same getter-only `query` as Express 5's.
+async function testBatchPassesOnlyValidatedDate() {
+  console.log('\n--- TEST 7b: the batch hands insights only the validated date ---');
+  const { _runInsightHandler } = require('../routes/dashboard');
+  const proto = {};
+  Object.defineProperty(proto, 'query', { get: () => ({ ids: 'x', date: 'raw', refresh: '1' }) });
+  const req = Object.create(proto);
+  req.user = { id: TEST_USER_ID };
+  const echo = (r, res) => res.json({ query: r.query, user: r.user });
+
+  const dated = await _runInsightHandler(echo, req, '2026-10-19');
+  assert.deepStrictEqual(dated.data.query, { date: '2026-10-19' },
+    `Insight dostał ${JSON.stringify(dated.data.query)} zamiast samej zweryfikowanej daty.`);
+  assert.deepStrictEqual(dated.data.user, { id: TEST_USER_ID }, 'Insight stracił req.user.');
+
+  const undated = await _runInsightHandler(echo, req, null);
+  assert.deepStrictEqual(undated.data.query, {},
+    `Bez poprawnej daty insight dostał ${JSON.stringify(undated.data.query)} zamiast {}.`);
+  console.log('✅ Insights see only the validated date, never the batch\'s own query string.');
+}
+
 async function testBatchRejectsEmptyAndOversizedRequests() {
   console.log('\n--- TEST 8: walidacja parametru ids ---');
   const empty = await getJson('/api/dashboard/insights');
@@ -378,6 +403,7 @@ async function main() {
     await testMalformedDateFallsBackToToday();
     await testBatchReturnsSameAsIndividual();
     await testBatchIsolatesUnknownIds();
+    await testBatchPassesOnlyValidatedDate();
     await testBatchRejectsEmptyAndOversizedRequests();
     await testLabelAndRecommendationAgree();
     await testRegistryCoversAllInsightRoutes();

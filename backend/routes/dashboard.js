@@ -149,7 +149,16 @@ function runInsightHandler(handler, req, dateParam) {
     // req.ip i nagłówki, a my podmieniamy wyłącznie query.date. Kopiowanie tylko
     // wybranych pól groziłoby cichym rozjazdem, gdyby handler sięgnął po coś jeszcze.
     const scopedReq = Object.create(req);
-    scopedReq.query = dateParam ? { date: dateParam } : {};
+    // Express 5: req.query is a getter on the request prototype with no setter, so a plain
+    // `scopedReq.query = ...` is silently ignored (sloppy mode) and every insight would read
+    // the batch's own query string - including a date isCalendarDateString rejected. An own
+    // property shadows the getter.
+    Object.defineProperty(scopedReq, 'query', {
+      value: dateParam ? { date: dateParam } : {},
+      enumerable: true,
+      writable: true,
+      configurable: true
+    });
 
     let statusCode = 200;
     const scopedRes = {
@@ -5884,3 +5893,5 @@ router.get('/api/dashboard/workout-rest-performance-insight', requireAuth, async
 });
 
 module.exports = router;
+// For tests/test-energy-battery.js only: the batch's request scoping, without a server.
+module.exports._runInsightHandler = runInsightHandler;

@@ -60,9 +60,10 @@ catering:
   dietlyCompany: betterlifecateringdietetyczny
   # Must be one of CATERING_SOURCES in backend/routes/catering.js.
   source: betterlife
-  # Europe/Warsaw (set in the template). 06:30 puts the day in before breakfast; the later
-  # runs pick up dishes swapped in the panel during the day - each run replaces the day.
-  schedule: "30 6,12,18 * * *"
+  # Europe/Warsaw (set in the template). 06:30 puts the day in before breakfast. A day is
+  # imported once (routes/catering.js) so meals deleted by the user do not come back; the
+  # 09:30 run only matters when 06:30 failed (Dietly down) - otherwise it is a no-op.
+  schedule: "30 6,9 * * *"
   resources:
     limits:
       cpu: 200m

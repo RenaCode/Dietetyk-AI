@@ -19,11 +19,12 @@ const { rateCateringMealsForUser } = require('../utils/cateringRating');
 // `sync_token` in the URL. This router is therefore mounted in app.js BEFORE requireAuth,
 // AFTER the rate limiter, and the token is redacted from the access log there.
 //
-// THE DAY IS REPLACED, NOT APPENDED. The payload is the provider's full menu for one date.
-// Re-sending it is an update: meals are matched on (user, source, external_id) through the
-// partial unique index idx_meals_external, and rows of that source and date that are no
-// longer in the payload are deleted. Without the delete, a dish swapped in the provider's
-// panel between two runs would leave the old dish behind and count the day twice.
+// A DAY IS IMPORTED ONCE. The payload is the provider's full menu for one date; the first
+// accepted import stores it and records the day in `catering_imports`. Every later run for
+// that day (a retry, a manual --date run) is a no-op: from then on the meals are the user's,
+// and a meal they deleted because they did not eat it must stay deleted. A dish swapped in
+// the provider's panel after the import is therefore NOT picked up - the job runs in the
+// morning, before the day's meals, which is when the menu is final.
 //
 // NO GEMINI CALL. The values are the provider's own nutrition table - closer to a label than
 // to anything the model estimates from a description - so they are stored as given (clamped
@@ -111,44 +112,37 @@ router.post('/api/integrations/catering/:syncToken', requireKnownSyncToken, asyn
     }
 
     const userId = req.syncUserId;
-    let changes = 0;
+    const total = keyed.reduce((sum, m) => sum + m.calories, 0);
 
-    // Delete first: meals of this source and day that the provider no longer lists.
-    const existing = await db.all(
-      `SELECT id, external_id FROM meals WHERE user_id = ? AND source = ? AND date = ?`,
+    const alreadyImported = Boolean(await db.get(
+      `SELECT 1 FROM catering_imports WHERE user_id = ? AND source = ? AND date = ?`,
       [userId, source, date]
-    );
-    const incomingKeys = new Set(keyed.map(m => m.key));
-    for (const row of existing) {
-      if (!incomingKeys.has(row.external_id)) {
-        changes += (await db.run(`DELETE FROM meals WHERE id = ?`, [row.id])).changes;
-      }
-    }
+    ));
 
-    for (const m of keyed) {
-      const analysis = JSON.stringify({
-        name: m.name, calories: m.calories, protein: m.protein, carbs: m.carbs, fat: m.fat,
-        fiber: m.fiber, sugar: m.sugar, sodium: m.sodium, source
-      });
-      // The UPDATE only fires when a value actually differs, so `changes` counts real edits
-      // and an unchanged re-run does not invalidate the day's AI explanation every few hours.
-      const result = await db.run(`
-        INSERT INTO meals (user_id, date, raw_text, calories, protein, carbs, fat, fiber, sugar, sodium,
-                           analysis_json, source, external_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(user_id, source, external_id) WHERE external_id IS NOT NULL DO UPDATE SET
-          date = excluded.date, raw_text = excluded.raw_text, calories = excluded.calories,
-          protein = excluded.protein, carbs = excluded.carbs, fat = excluded.fat,
-          fiber = excluded.fiber, sugar = excluded.sugar, sodium = excluded.sodium,
-          analysis_json = excluded.analysis_json
-        WHERE meals.raw_text IS NOT excluded.raw_text OR meals.calories IS NOT excluded.calories
-           OR meals.protein IS NOT excluded.protein OR meals.carbs IS NOT excluded.carbs
-           OR meals.fat IS NOT excluded.fat OR meals.fiber IS NOT excluded.fiber
-           OR meals.sugar IS NOT excluded.sugar OR meals.sodium IS NOT excluded.sodium
-           OR meals.date IS NOT excluded.date
-      `, [userId, date, m.name, m.calories, m.protein, m.carbs, m.fat, m.fiber, m.sugar, m.sodium,
-        analysis, source, m.key]);
-      changes += result.changes;
+    let changes = 0;
+    if (!alreadyImported) {
+      for (const m of keyed) {
+        const analysis = JSON.stringify({
+          name: m.name, calories: m.calories, protein: m.protein, carbs: m.carbs, fat: m.fat,
+          fiber: m.fiber, sugar: m.sugar, sodium: m.sodium, source
+        });
+        // DO NOTHING on a conflict: a row with this key can only come from a concurrent run of
+        // the same day, and the first one's row is as good as ours.
+        const result = await db.run(`
+          INSERT INTO meals (user_id, date, raw_text, calories, protein, carbs, fat, fiber, sugar, sodium,
+                             analysis_json, source, external_id)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(user_id, source, external_id) WHERE external_id IS NOT NULL DO NOTHING
+        `, [userId, date, m.name, m.calories, m.protein, m.carbs, m.fat, m.fiber, m.sugar, m.sodium,
+          analysis, source, m.key]);
+        changes += result.changes;
+      }
+      // The marker goes in AFTER the meals: a crash between the two leaves the day unmarked and
+      // the next run fills in what is missing, instead of a marked day with no meals.
+      await db.run(
+        `INSERT OR IGNORE INTO catering_imports (user_id, source, date) VALUES (?, ?, ?)`,
+        [userId, source, date]
+      );
     }
 
     if (changes > 0) {
@@ -160,11 +154,11 @@ router.post('/api/integrations/catering/:syncToken', requireKnownSyncToken, asyn
       `, [userId, date, new Date().toISOString()]);
     }
 
-    const total = keyed.reduce((sum, m) => sum + m.calories, 0);
-    res.json({ date, source, meals: keyed.length, calories: total, changed: changes > 0 });
+    res.json({ date, source, meals: keyed.length, calories: total, changed: changes > 0, alreadyImported });
 
     // Health rating and comment, AFTER the response: Gemini must not slow down or fail the
-    // import. Meals still unrated (Gemini down, no key) are retried by the next run.
+    // import. Meals still unrated (Gemini down, no key) are retried by the next run - also on
+    // an already imported day, which is why that case does not return early.
     rateCateringMealsForUser({
       userId, source, date,
       generateContentWithFallback: (...args) => config.generateContentWithFallback(...args)

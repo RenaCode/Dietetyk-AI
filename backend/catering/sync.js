@@ -96,8 +96,8 @@ async function main(argv = process.argv.slice(2), env = process.env) {
   }
   if (day.deliveriesFound === 0) {
     // Not an error (a weekend without delivery, a paused order) - and deliberately NOT an
-    // empty import: an empty list would delete the day's catering meals, and a change in
-    // the panel's date format would then wipe days instead of failing.
+    // empty import: it would mark the day as imported, so a change in the panel's date
+    // format would silently close days instead of failing.
     console.log(`[catering] ${date}: ${day.orderIds.length} active order(s), no delivery for this day`);
     return 0;
   }
@@ -128,8 +128,13 @@ async function main(argv = process.argv.slice(2), env = process.env) {
     date,
     meals: day.meals
   });
-  console.log(`[catering] imported: ${result.meals} meal(s), ${result.calories} kcal` +
-    (result.changed ? '' : ' (no change since the last run)'));
+  if (result.alreadyImported) {
+    // Not an error: the day was imported by an earlier run and is the user's now - meals they
+    // deleted stay deleted (routes/catering.js).
+    console.log(`[catering] ${date}: already imported earlier - left as it is`);
+  } else {
+    console.log(`[catering] imported: ${result.meals} meal(s), ${result.calories} kcal`);
+  }
   return 0;
 }
 

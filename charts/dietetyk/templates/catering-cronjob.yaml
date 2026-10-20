@@ -23,8 +23,8 @@ spec:
   # Without timeZone the schedule is read in the node's local time, which on this cluster is
   # not UTC and not obviously Warsaw either - an explicit zone removes the guesswork.
   timeZone: Europe/Warsaw
-  # Each run replaces the whole day, so two overlapping runs gain nothing and a slow one
-  # must not pile up behind itself.
+  # A day is imported once, so two overlapping runs gain nothing and a slow one must not
+  # pile up behind itself.
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3

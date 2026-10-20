@@ -466,12 +466,33 @@ const initDb = async () => {
   // nutrition table, not from a model guess, so they must stay distinguishable from
   // estimates (see the sodium/fiber insights, whose input is otherwise model output).
   // `external_id` is the provider's id for that meal on that day; the partial unique index
-  // makes re-running the import an update instead of a duplicate - the sync job runs several
-  // times a day and the user can swap a dish in the provider's panel between runs.
+  // keeps a repeated or concurrent import from storing the same dish twice.
   await addColumn(`ALTER TABLE meals ADD COLUMN source TEXT DEFAULT NULL`);
   await addColumn(`ALTER TABLE meals ADD COLUMN external_id TEXT DEFAULT NULL`);
   await run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_meals_external
              ON meals(user_id, source, external_id) WHERE external_id IS NOT NULL`);
+
+  // Migration: days already imported from a catering provider (routes/catering.js). A day is
+  // imported ONCE: after that the meals belong to the user, and a meal they deleted (not
+  // eaten) must not come back with the next run. The marker, not the meal rows, is what
+  // says "done" - with every catering meal of a day deleted there are no rows left to tell.
+  await run(`
+    CREATE TABLE IF NOT EXISTS catering_imports (
+      user_id INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      date TEXT NOT NULL,
+      imported_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY(user_id, source, date),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+  // Days imported before the marker existed count as imported, or the first run after the
+  // deploy would treat today as new. A day whose catering meals were ALL deleted left no
+  // trace and cannot be backfilled; a run only ever touches today, so that is at most one day.
+  await run(`
+    INSERT OR IGNORE INTO catering_imports (user_id, source, date)
+    SELECT DISTINCT user_id, source, date FROM meals WHERE source IS NOT NULL AND external_id IS NOT NULL
+  `);
 
   // Migration: meals saved while the AI was unavailable (services/mealAnalysis.js).
   // analysis_status is NULL for an analysed meal, 'pending' while the retry loop still owes it

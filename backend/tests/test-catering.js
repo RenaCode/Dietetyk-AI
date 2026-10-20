@@ -191,20 +191,57 @@ async function testImportEndpoint(baseUrl, token) {
     meals: [imported(1, 'Śniadanie', 400), imported(2, 'Obiad', 650)]
   });
   rows = await readDay();
-  assert(rows.length === 3 && res.body.changed === false, 're-running the same day neither duplicates nor reports a change');
+  assert(rows.length === 3 && res.body.changed === false && res.body.alreadyImported === true,
+    're-running the same day neither duplicates nor reports a change');
 
-  // The customer swapped lunch in the panel: meal 2 is gone, meal 3 is new.
+  // The user did not eat lunch and deleted it. The next run must not bring it back.
+  await db.run(`DELETE FROM meals WHERE user_id = ? AND date = ? AND raw_text = 'Obiad'`, [USER_ID, DATE]);
+  res = await post(baseUrl, token, {
+    source: 'betterlife', date: DATE,
+    meals: [imported(1, 'Śniadanie', 400), imported(2, 'Obiad', 650)]
+  });
+  rows = await readDay();
+  assert(res.status === 200 && res.body.alreadyImported === true && res.body.changed === false,
+    'a later run of an imported day is accepted as a no-op');
+  assert(!rows.some(r => r.raw_text === 'Obiad'), 'a meal the user deleted stays deleted');
+
+  // A dish swapped in the panel after the import is not applied either - the day is the user's.
   res = await post(baseUrl, token, {
     source: 'betterlife', date: DATE,
     meals: [imported(1, 'Śniadanie', 420), imported(3, 'Obiad wege', 580)]
   });
-  assert(res.body.changed === true && res.body.calories === 1000, 'the swap is reported as a change (1000 kcal)');
   rows = await readDay();
   const catering = rows.filter(r => r.source === 'betterlife');
-  assert(catering.length === 2, `a swapped dish replaces the old one (${catering.length} catering rows)`);
-  assert(!catering.some(r => r.raw_text === 'Obiad'), 'the dish no longer in the menu is deleted');
-  assert(catering.find(r => r.raw_text === 'Śniadanie').calories === 420, 'a changed value is updated in place');
+  assert(res.body.alreadyImported === true && catering.length === 1 && catering[0].calories === 400,
+    'an imported day is never rewritten by a later run');
   assert(rows.some(r => r.raw_text === 'Kawa z mlekiem'), 'the hand-logged meal survives every import');
+
+  // Every catering meal of a day deleted: no rows left, the marker still closes the day.
+  await db.run(`DELETE FROM meals WHERE user_id = ? AND date = ? AND source = 'betterlife'`, [USER_ID, DATE]);
+  res = await post(baseUrl, token, { source: 'betterlife', date: DATE, meals: [imported(1, 'Śniadanie', 400)] });
+  assert(res.body.alreadyImported === true && (await readDay()).length === 1,
+    'a day with all catering meals deleted is not imported again');
+
+  // A crash between the meals and the marker: the next run fills in what is missing.
+  const OTHER = '2026-10-14';
+  await db.run(`INSERT INTO meals (user_id, date, raw_text, calories, protein, carbs, fat, analysis_json, source, external_id)
+                VALUES (?, ?, 'Śniadanie', 400, 20, 40, 10, '{}', 'betterlife', ?)`, [USER_ID, OTHER, `${OTHER}:1`]);
+  res = await post(baseUrl, token, {
+    source: 'betterlife', date: OTHER,
+    meals: [imported(1, 'Śniadanie', 400), imported(2, 'Obiad', 650)]
+  });
+  const other = await db.all(`SELECT external_id FROM meals WHERE user_id = ? AND date = ? ORDER BY external_id`, [USER_ID, OTHER]);
+  assert(res.body.alreadyImported === false && other.map(r => r.external_id).join(',') === `${OTHER}:1,${OTHER}:2`,
+    'an unmarked day with a partial import gets the missing meal, without a duplicate');
+  await db.run(`DELETE FROM meals WHERE user_id = ? AND date = ?`, [USER_ID, OTHER]);
+
+  // Put the day back for the rating tests below (they expect two catering meals).
+  await db.run(`DELETE FROM catering_imports WHERE user_id = ? AND date = ?`, [USER_ID, DATE]);
+  res = await post(baseUrl, token, {
+    source: 'betterlife', date: DATE,
+    meals: [imported(1, 'Śniadanie', 420), imported(3, 'Obiad wege', 580)]
+  });
+  assert(res.body.changed === true && res.body.calories === 1000, 'an unmarked day is imported (1000 kcal)');
 
   res = await post(baseUrl, token, { source: 'not-a-caterer', date: DATE, meals: [] });
   assert(res.status === 400, 'an unknown source is rejected');
